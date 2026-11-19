@@ -264,22 +264,13 @@ class InquireRequest(Request):
         return self
 
 
-class HelperRequest(_Submission):
-    """A complete authorized helper task packet."""
-
-
 class ContinueRequest(Request):
     """Answer a boundary or continue from an exact artifact or turn."""
     runId: RunId
-    targetRunId: RunId | None = None
     requestId: RunId | None = None
     artifactId: RunId | None = None
     turnId: RunId | None = None
     input: Text | None = None
-    decision: Literal["approve", "decline"] | None = None
-    helpers: Annotated[list[HelperRequest], Field(min_length=1, max_length=8)] | None = None
-    autoContinue: bool | None = None
-    helperPolicy: Literal["keep", "cancel"] | None = None
     buddy: BuddyName | None = Field(default=None, description=BUDDY_NAME_DESCRIPTION)
     access: Access | None = None
     writeScope: Paths | None = None
@@ -290,11 +281,9 @@ class ContinueRequest(Request):
     note: Note | None = None
     rules: ClassVar[tuple[str, ...]] = (
         "exactly one of requestId, artifactId or turnId identifies the answered fact",
-        "artifactId/turnId continuation requires input; requestId may answer a boundary or resolve a workspace site",
-        "helpers are only for an approved boundary and require autoContinue; decline forbids both",
+        "artifactId/turnId continuation requires input; requestId requires input, resolution, or both",
         "resolution requires requestId and observedFingerprint; adopt/abandon require note and forbid paths",
         "access or writeScope changes require input; access read forbids writeScope; access full requires accessNote",
-        "helperPolicy is required only while live helpers exist; the service checks that current fact",
     )
 
     @model_validator(mode="after")
@@ -304,28 +293,17 @@ class ContinueRequest(Request):
             raise ValueError("exactly one of requestId, artifactId or turnId is required")
         if ("artifactId" in supplied or "turnId" in supplied) and self.input is None:
             raise ValueError("input is required to continue an artifact or turn")
-        if "requestId" in supplied and self.decision is None and self.resolution is None and self.input is None:
-            raise ValueError("requestId continuation requires a decision, resolution or input")
-        if self.decision is not None and "requestId" not in supplied:
-            raise ValueError("decision requires requestId")
-        if self.decision is not None and any(key in supplied for key in (
-                "input", "helperPolicy", "buddy", "access", "writeScope", "accessNote", "resolution")):
-            raise ValueError("a boundary decision takes only note and applicable helpers/autoContinue")
-        if self.decision == "decline" and any(key in supplied for key in ("helpers", "autoContinue")):
-            raise ValueError("decline forbids helpers and autoContinue")
-        if "helpers" in supplied and (self.decision != "approve" or "autoContinue" not in supplied):
-            raise ValueError("helpers require decision approve and explicit autoContinue")
-        if "autoContinue" in supplied and "helpers" not in supplied:
-            raise ValueError("autoContinue applies only to approved helpers")
+        if "requestId" in supplied and self.resolution is None and self.input is None:
+            raise ValueError("requestId continuation requires resolution or input")
         if self.resolution is not None:
-            if "requestId" not in supplied or self.decision is not None or self.observedFingerprint is None:
-                raise ValueError("resolution requires requestId and observedFingerprint, without decision")
+            if "requestId" not in supplied or self.observedFingerprint is None:
+                raise ValueError("resolution requires requestId and observedFingerprint")
             if self.resolution in ("adopt", "abandon") and (self.note is None or "paths" in supplied):
                 raise ValueError("adopt/abandon require note and forbid paths")
         elif any(key in supplied for key in ("observedFingerprint", "paths")):
             raise ValueError("observedFingerprint and paths require resolution")
-        if self.input is None and any(key in supplied for key in ("buddy", "helperPolicy")):
-            raise ValueError("buddy and helperPolicy require continuation input")
+        if self.input is None and "buddy" in supplied:
+            raise ValueError("buddy requires continuation input")
         if any(key in supplied for key in ("access", "writeScope", "accessNote")) and self.input is None:
             raise ValueError("access or writeScope changes require input")
         if self.access == "read" and "writeScope" in supplied:
@@ -348,7 +326,6 @@ class IntegrationTarget(Request):
 class AcceptRequest(Request):
     """Accept an exact delivered artifact against one explicit integration decision."""
     runId: RunId
-    targetRunId: RunId | None = None
     artifactId: RunId
     note: Note
     target: IntegrationTarget | None = None
@@ -381,7 +358,6 @@ class _ConcludeRequest(Request):
         "if shutdown remains unconfirmed, cancellation is recorded but no conclusion is recorded; call conclude again to retry",
     )
     runId: RunId
-    targetRunId: RunId | None = None
     artifactId: RunId | None = None
     note: Note
 
@@ -401,7 +377,6 @@ class ConcludeWireRequest(_ConcludeRequest):
 class CancelRequest(Request):
     """Stop a micro task and its owned children for another buddy to take over."""
     runId: RunId
-    targetRunId: RunId | None = None
     note: Note | None = None
 
 

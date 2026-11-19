@@ -82,13 +82,13 @@ def send_usage(case: str, thread_id: str, turn_id: str, turn_index: int) -> None
 def outcome(case):
     request = None
     disposition = "completed"
-    if case == "assistance":
-        disposition = "assistance"
-        request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
-                   "expectedArtifacts": [], "acceptance": "Dependency verified", "suggestedBuddyId": None}
+    if case == "attention":
+        disposition = "attention"
+        request = {"summary": "Need help", "attempted": "Inspected source", "neededWork": "Check dependency",
+                   "expectedArtifacts": [], "acceptance": "Dependency verified"}
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
-                   "expectedArtifacts": [], "acceptance": "Already complete", "suggestedBuddyId": None}
+                   "expectedArtifacts": [], "acceptance": "Already complete"}
     summary = "fixture work completed"
     if case == "wrap-up":
         summary = "Stopped partial work summary"
@@ -379,7 +379,7 @@ def main():
                           "item": protocol_item}})
             if case in ("schema-failure", "long-schema-failure"):
                 turn = {"id": turn_id, "status": "failed", "items": [], "error": {
-                    "message": "Invalid schema: required is missing suggestedBuddyId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
+                    "message": "Invalid schema: required is missing request" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
                     "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 400}},
                     "additionalDetails": "invalid_request_error / invalid_json_schema",
                     "unrelated": "do not retain this field"}}

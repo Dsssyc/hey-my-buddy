@@ -159,7 +159,7 @@ class ReceivedReceiptTests(BoardTestCase):
         board, _claim, reference = self.claimed()
         board.call("execution_result", reference)
         board.store._message_post(self.run_id, "pending", "status?")
-        with patch.object(board.store.workflow, "child_settled", side_effect=RuntimeError("import interrupted")):
+        with patch.object(board.store.workflow, "settle_turn", side_effect=RuntimeError("import interrupted")):
             self.assertEqual(self.recover(board), [])
         self.assert_settlement(board, pending=True)
         self.assertEqual(board.client().get_message("pending", runId=self.run_id)["state"], "queued")

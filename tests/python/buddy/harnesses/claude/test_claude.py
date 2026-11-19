@@ -225,12 +225,12 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.result["turn"]["provenance"]["modelUsage"],
                          ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
 
-    def test_assistance_outcome_is_imported(self):
-        outcome = self.execute(self.context("assistance"))
+    def test_attention_outcome_is_imported(self):
+        outcome = self.execute(self.context("attention"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "attention")
 
-    def test_completed_result_cannot_also_request_assistance(self):
+    def test_completed_result_cannot_also_request_attention(self):
         outcome = self.execute(self.context("completed-request"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "invalid-result")

@@ -812,7 +812,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_review_failed_turn_retains_native_error_in_public_evidence(self):
         result = self.review_run("schema-failure")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertIn("suggestedBuddyId", result.native_error.value["error"]["message"])
+        self.assertIn("required is missing request", result.native_error.value["error"]["message"])
         self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
     def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
         self.set_case("readonly-repair")
@@ -1396,7 +1396,7 @@ class WorkerSeamTests(CodexSeamCase):
         failure = result.native_error.value
         self.assertEqual(failure["nativeThreadId"], result.native_identity.session_id)
         self.assertEqual(failure["nativeTurnId"], result.native_identity.turn_id)
-        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing suggestedBuddyId")
+        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing request")
         self.assertEqual(failure["error"]["codexErrorInfo"], {"httpConnectionFailed": {"httpStatusCode": 400}})
         self.assertNotIn("unrelated", failure["error"])
         self.assertEqual(_worker_facts(result)["nativeFailure"], failure)
@@ -1528,17 +1528,6 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIsNone(result.end.reason_code)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIs(result.continuation.resumable, False)
-
-    def test_codex_schema_accepts_a_nullable_buddy_suggestion(self):
-        from hey_my_buddy.buddy.roles.turn_io import validate_outcome
-        request = OUTCOME_SCHEMA["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertIn("suggestedBuddyId", request["properties"])
-        for suggestion in (None, "helper-buddy"):
-            outcome = {"disposition": "assistance", "summary": "Needs help", "decisions": [],
-                       "remaining": [], "artifacts": [], "request": {
-                           "summary": "Help", "attempted": "Inspected", "neededWork": "Verify",
-                           "acceptance": "Verified", "expectedArtifacts": [], "suggestedBuddyId": suggestion}}
-            self.assertIsNone(validate_outcome(outcome))
 
     def test_worker_native_usage_is_retained_without_quota_snapshot(self):
         result = self.worker_run("usage")

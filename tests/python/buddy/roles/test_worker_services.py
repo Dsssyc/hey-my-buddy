@@ -22,6 +22,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles import session_mcp, turn_io, worker_services
 from hey_my_buddy.install.runtime import resource_path
@@ -234,7 +235,10 @@ class RoleBoundaryTests(unittest.TestCase):
         schema = tools["hey_my_buddy_finish_turn"]["inputSchema"]
         self.assertEqual(schema["required"], ["disposition", "summary", "remaining", "decisions",
                                               "artifacts", "request"])
-        self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "assistance", "attention"])
+        self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "attention"])
+        request = schema["properties"]["request"]["anyOf"][1]
+        self.assertEqual(set(request["required"]), set(request["properties"]))
+        self.assertNotIn("suggestedBuddyId", request["properties"])
         self.assertIn("does not dispatch other tasks", tools["hey_my_buddy_finish_turn"]["description"])
         self.assertIn("A completed outcome is refused while a Host inquiry is still unanswered.",
                       tools["hey_my_buddy_finish_turn"]["description"])
@@ -265,7 +269,7 @@ class FinishBoundaryTests(WorkerServicesCase):
 
     def test_an_accepted_finish_mints_a_receipt_bound_to_this_attempt_and_input(self):
         receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
-        self.assertEqual(receipt["version"], 1)
+        self.assertEqual(receipt["version"], 2)
         self.assertEqual(receipt["identity"], IDENTITY)
         self.assertEqual(receipt["inputSha256"], "a" * 64)
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
@@ -294,7 +298,7 @@ class FinishBoundaryTests(WorkerServicesCase):
         envelope = self.envelope(self.call("hey_my_buddy_finish_turn", {"disposition": "completed"}), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "invalid-arguments")
         self.assertIn("the outcome must contain exactly the current outcome fields", envelope["detail"])
-        self.assertEqual(turn_io.validate_outcome(self.outcome("completed")), None)
+        self.assertEqual(validate_outcome(self.outcome("completed")), None)
 
     def test_an_outstanding_native_request_blocks_completed_and_waiting(self):
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
@@ -304,10 +308,8 @@ class FinishBoundaryTests(WorkerServicesCase):
                 envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)), "hey_my_buddy_finish_turn")
                 self.assertEqual(envelope["reason"], "attention-outstanding")
                 self.assertIn("attention", envelope["detail"])
-        for disposition in ("assistance", "attention"):
-            with self.subTest(disposition=disposition):
-                receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))
-                self.assertEqual(receipt["outcome"]["disposition"], disposition)
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("attention")))
+        self.assertEqual(receipt["outcome"]["disposition"], "attention")
 
     def test_a_pending_inquiry_blocks_completed_and_waiting_and_names_the_question(self):
         self.queue()
@@ -318,8 +320,8 @@ class FinishBoundaryTests(WorkerServicesCase):
                 self.assertEqual(envelope["reason"], "inquiry-pending")
                 self.assertIn("[q-1] what is the deployment word?", envelope["detail"])
                 self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
-        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("assistance")))
-        self.assertEqual(receipt["outcome"]["disposition"], "assistance")
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("attention")))
+        self.assertEqual(receipt["outcome"]["disposition"], "attention")
 
     def test_attention_is_named_before_a_pending_inquiry_for_a_completed_outcome(self):
         # Both Host conditions outstanding: the boundary order names the native

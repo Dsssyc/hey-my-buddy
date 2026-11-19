@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ...paths import is_absolute_path, native_path, resolved_path
+from ...private_dirs import session_record_path
 from ...protocol import activity as activity_module
-from ..tasks import micro_task
+from ..tasks import macro_tasks, micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view, is_input_too_large, normalize_input_failure
@@ -40,7 +41,7 @@ from .work import autonomous_tasks
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "cancelling", "cancelled", "reconciliation-needed"}),
     # ``running -> queued`` is the micro-task yield: a turn returned a structured
-    # assistance/attention outcome, the attempt stopped with confirmed shutdown and
+    # attention outcome, the attempt stopped with confirmed shutdown and
     # the same logical task waits for the Host instead of pretending to be complete.
     "running": frozenset(
         {"running", "queued", "cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}
@@ -1651,11 +1652,13 @@ class BoardStore:
                 attempt_id = chosen_attempt_id
                 now = self.now()
                 from ..evaluation.models import current_model
+                session_group_id = (macro_tasks.group_for_task(connection, chosen["task_id"])
+                                    if chosen["adapter"] != "command" else None)
                 connection.execute(
                     "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
                     " execution_state, ownership, adapter, model_harness, model_provider, model_model, model_id,"
-                    " started_at, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " session_group_id, started_at, created_at, updated_at, revision)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         attempt_id,
                         chosen["task_id"],
@@ -1669,6 +1672,7 @@ class BoardStore:
                         # attempts cannot change which model service slot they occupy.
                         *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
                         current_model(connection, *chosen_model_service) if chosen_model_service is not None else None,
+                        session_group_id,
                         now,
                         now,
                         now,
@@ -1709,6 +1713,8 @@ class BoardStore:
                     "claim": {
                         "attempt": self._attempt_view(attempt_row, include_result=False),
                         "task": claim_task,
+                        "sessionRecordPath": (str(session_record_path(self.directory, session_group_id, attempt_id))
+                                              if session_group_id is not None else None),
                     },
                     "reason": None,
                 }
@@ -2483,9 +2489,8 @@ class BoardStore:
                 if decision.get("preflightFallback"):
                     task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
                     response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
-            # Micro-task import and helper fan-in commit with the result: the validated
-            # turn outcome, the assistance request and the workspace seal are one
-            # durable fact with the attempt that produced them.
+            # The turn outcome, boundary request and workspace seal commit with
+            # the attempt that produced them.
             settlement_payload = payload
             if shutdown_evidence is not None:
                 stop_output = {key: shutdown_evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError")
@@ -2507,15 +2512,6 @@ class BoardStore:
             if micro_task is not None and micro_task.get("autoContinued"):
                 task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
                 response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
-            else:
-                self.workflow.child_settled(
-                    connection,
-                    task=task_row,
-                    attempt=attempt_row,
-                    payload=settlement_payload,
-                    task_state=task_state,
-                    now=now,
-                )
             if shutdown_confirmed:
                 connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
                                    (attempt_id_param,))

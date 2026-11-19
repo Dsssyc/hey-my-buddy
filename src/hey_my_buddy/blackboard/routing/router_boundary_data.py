@@ -15,6 +15,7 @@ from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason_from_json
 from .router_boundary import build_boundary
 from .candidate import candidate_bound
+from ..tasks.micro_task import ROUTING_TASKS_SQL
 from ..tasks.workspace_bindings import effective_manifest
 
 _CHANGED_CODES = frozenset({
@@ -204,68 +205,53 @@ def router_trials(connection, row, *, now):
     return trials
 
 
-def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
-    """Read existing permission/lineage/stop/workspace gates; grant no authority."""
+def _continuation_context(connection, route, run_id, state_dir):
+    """Read the same stop and workspace facts a continuation needs."""
     if run_id is None:
-        return False, None, None, None
+        return False, None
     run = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
     if run is None:
-        return False, "micro-task-not-found", None, None
+        return False, "micro-task-not-found"
     own_stopped = _stopped(connection, run_id)
-    owner_id = owner_run_id or run_id
-    owned = connection.execute(
-        "WITH RECURSIVE owned(id) AS (SELECT ? UNION SELECT c.child_task_id FROM workflow_children c JOIN owned o ON c.parent_run_id=o.id) SELECT id FROM owned",
-        (owner_id,)).fetchall()
-    if run_id not in {item[0] for item in owned}:
-        return own_stopped, "micro-task-not-owned", None, run
-    route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
-    if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id):
-        return own_stopped, "workflow-routing-fenced", None, run
-    ancestors = connection.execute(
-        "WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.id) SELECT w.* FROM workflow_runs w JOIN ancestors a ON w.run_id=a.id",
-        (run_id,)).fetchall()
-    if any(item["state"] in ("accepted", "concluded", "cancelled") for item in ancestors):
-        return own_stopped, "ANCESTOR_TERMINAL", None, run
+    if route is None or route["decision_id"] != run["current_routing_id"] or route["run_id"] != run_id:
+        return own_stopped, "workflow-routing-fenced"
+    terminal = connection.execute(
+        "WITH RECURSIVE ancestors(run_id) AS ("
+        " SELECT ? UNION SELECT lead.lead_run_id FROM workflow_lead_tasks lead"
+        " JOIN ancestors ON ancestors.run_id=lead.owned_run_id)"
+        " SELECT 1 FROM workflow_runs run JOIN ancestors USING(run_id)"
+        " WHERE run.state IN ('accepted','concluded','cancelled') LIMIT 1",
+        (run_id,)).fetchone()
+    if terminal:
+        return own_stopped, "ANCESTOR_TERMINAL"
     if connection.execute("SELECT 1 FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied')", (run_id,)).fetchone():
-        return own_stopped, "workspace-cleanup-started", None, run
+        return own_stopped, "workspace-cleanup-started"
     if not own_stopped:
-        return False, None, None, run
-    descendants = connection.execute(
-        "WITH RECURSIVE owned(id) AS (SELECT ? UNION SELECT c.child_task_id FROM workflow_children c JOIN owned o ON c.parent_run_id=o.id) SELECT c.* FROM workflow_children c JOIN owned o ON c.child_task_id=o.id",
-        (run_id,)).fetchall()
-    helper_policy = "keep" if any(item["state"] in ("active", "attention") or not _stopped(
-        connection, item["child_task_id"]) for item in descendants) else None
-    for child in descendants:
-        attempts = connection.execute("SELECT * FROM attempts WHERE task_id=?", (child["child_task_id"],)).fetchall()
-        if any(item["execution_state"] == "uncertain" or (item["execution_state"] == "finished" and item["shutdown_confirmed"] != 1) for item in attempts):
-            return False, None, helper_policy, run
-    ids = [run_id, *(item["child_task_id"] for item in descendants)]
-    markers = ','.join('?' for _ in ids)
+        return False, None
     routing_tasks = connection.execute(
-        f"SELECT r.task_id FROM decision_requests r JOIN workflow_routes w ON w.decision_id=r.decision_id WHERE w.run_id IN ({markers}) AND r.task_id IS NOT NULL", ids)
+        f"SELECT task_id FROM ({ROUTING_TASKS_SQL}) WHERE run_id=?", (run_id,))
     if any(not _stopped(connection, item[0]) for item in routing_tasks):
-        return False, None, helper_policy, run
+        return False, None
+    if run["checkout"] == "none":
+        return True, None
     manifest = effective_manifest(state_dir, connection, run)
     reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
-    current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
+    current = next((item for item in reservations if item["state"] == "held"), None)
     current = current or next((item for item in reservations if item["checkout_root"] == manifest["checkoutRoot"]), None)
     task = connection.execute("SELECT cwd FROM tasks WHERE task_id=?", (run_id,)).fetchone()
     reservation_access = "read" if manifest["access"] == "read" else "write"
-    if (current is None or task is None or current["access"] != reservation_access
+    if (current is None or current["access"] != reservation_access
             or task["cwd"] != manifest["path"]
             or current["checkout_root"] != manifest["checkoutRoot"]):
-        return True, "workspace-ownership-lost", helper_policy, run
-    conflicts = connection.execute(
-        "SELECT holder_task_id FROM workspace_reservations WHERE checkout_root=?"
-        " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
-        (manifest["checkoutRoot"], run_id, reservation_access)).fetchall()
-    if conflicts and (current["state"] != "transferred" or any(
-            item["holder_task_id"] not in ids for item in conflicts)):
-        return True, "workspace-ownership-lost", helper_policy, run
-    return True, None, helper_policy, run
+        return True, "workspace-ownership-lost"
+    conflict = connection.execute(
+        "SELECT 1 FROM workspace_reservations WHERE checkout_root=?"
+        " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write') LIMIT 1",
+        (manifest["checkoutRoot"], run_id, reservation_access)).fetchone()
+    return True, "workspace-ownership-lost" if conflict else None
 
 
-def _candidate_problem(connection, candidate, request, run, now):
+def _candidate_problem(connection, candidate, request, now):
     from ..catalog import buddy_state
     published = buddy_state.get(connection, candidate["buddyId"])
     constraints = request.get("constraints", {})
@@ -310,7 +296,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
     return min(known, key=router_history._parse) if known else None
 
 
-def routing_boundary(connection, row, *, now, run_id=None, owner_run_id=None, state_dir=None) -> dict | None:
+def routing_boundary(connection, row, *, now, run_id=None, state_dir=None) -> dict | None:
     """Build a current readable Host boundary from frozen evidence, without writes."""
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     execution_changed = row["status"] == "completed" and route is not None and route["state"] in ("needs-host", "fenced")
@@ -319,15 +305,12 @@ def routing_boundary(connection, row, *, now, run_id=None, owner_run_id=None, st
     request = _json(row["requested_json"], {})
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
-        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
+        stopped, problem = _continuation_context(connection, route, run_id, state_dir)
         return build_boundary(
             kind="routing-changed", code=row["reason_code"],
             reason=reason_from_json(row["reason_code"], row["reason_params_json"]),
             candidates=[], facts=request, router_trials=[], retry_at=None, decision_id=row["decision_id"],
-            run_id=owner_run_id or run_id,
-            target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
-            helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
-            explicit_buddy=True)
+            run_id=run_id, shutdown_confirmed=stopped, continuation_problem=problem)
     if snapshot["facts"].get("routerCalled") is False:
         return None
     trials = router_trials(connection, row, now=now)
@@ -349,19 +332,15 @@ def routing_boundary(connection, row, *, now, run_id=None, owner_run_id=None, st
     candidates = facts.get("buddies") or []
     retry_at = _retry_at(connection, snapshot["facts"],
                          trials, now=now, kind=kind)
-    stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
-    dispatch_docs = router_sequence.dispatches(connection, row["decision_id"])
-    if any(not _stopped(connection, item["taskId"]) for item in dispatch_docs) or any(
-            item["outcome"] in ("stopUnknown", "unknown", "executing") for item in trials if item["taskId"]):
+    stopped, problem = _continuation_context(connection, route, run_id, state_dir)
+    if any(item["outcome"] in ("stopUnknown", "unknown", "executing") for item in trials if item["taskId"]):
         stopped = False
     boundary = build_boundary(
         kind=kind, code=code, reason=reason, candidates=candidates, facts=facts,
         router_trials=trials, retry_at=retry_at, decision_id=row["decision_id"],
-        run_id=owner_run_id or run_id,
-        target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
-        helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem)
+        run_id=run_id, shutdown_confirmed=stopped, continuation_problem=problem)
     boundary["candidates"] = [
-        {**candidate, "problem": _candidate_problem(connection, candidate, request, run, now)}
+        {**candidate, "problem": _candidate_problem(connection, candidate, request, now)}
         for candidate in candidates
     ]
     return boundary

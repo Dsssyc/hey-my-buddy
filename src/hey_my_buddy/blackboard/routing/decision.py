@@ -466,11 +466,10 @@ class DecisionCoordinator:
         reassignment or a failure recovery.
         """
         task_text = spec["task"]
-        continuation = connection.execute("SELECT input_text,helper_outcomes_json FROM workflow_continuations"
+        continuation = connection.execute("SELECT input_text FROM workflow_continuations"
                                           " WHERE run_id=? AND state='queued' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
         if continuation:
             task_text += "\n\nContinuation:\n" + continuation["input_text"]
-            task_text += "\nHelper outcomes:\n" + continuation["helper_outcomes_json"]
         access = (manifest["access"] if manifest is not None else
                   json.loads(connection.execute(
                       "SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?", (run_id,)
@@ -877,7 +876,7 @@ class DecisionCoordinator:
             cancelled = cancelled or route["run_state"] == "cancelled" or (ancestor is not None and ancestor["state"] == "cancelled")
             if (route["state"] != "pending"
                     or route["current_routing_id"] != row["decision_id"]
-                    or not self.board.workflow.routing_run_open(connection, route["run_id"])
+                    or route["run_state"] != "executing"
                     or ancestor is not None):
                 checked.update(changed=True, code="workflow-routing-fenced")
         if not cancelled and not checked["changed"] and not released:
@@ -1122,7 +1121,7 @@ class DecisionCoordinator:
             return {**checked, "code": code, "params": params, "changed": changed,
                     "output": {**output, "code": code}}
 
-        # Check review input even when the helper failed: an explicit changed
+        # Check review input even when the Router failed: an explicit changed
         # copy/manifest is a circumstance boundary, never a Router no-answer.
         verification = output.get("inputVerification")
         manifest = document.get("executionWorkspace") or {}
@@ -1434,7 +1433,7 @@ class DecisionCoordinator:
 
         The compact summary is the low-token Host path: it carries the frozen
         selected worker buddy and the decision's own model identity as
-        separate keys, and never the persisted model input, the helper envelope or
+        separate keys, and never the persisted model input, the execution envelope or
         the bounded table collections.
         """
         schemas.reject_unknown(params, GET_FIELDS, "selection.get")
@@ -1562,7 +1561,7 @@ class DecisionCoordinator:
                     "resolvedBuddy": (output or {}).get("resolved"),
                     "usage": (output or {}).get("usage"),
                     "elapsedSeconds": (output or {}).get("elapsedSeconds"),
-                    "helperShutdownConfirmed": (output or {}).get("shutdownConfirmed"),
+                    "routerShutdownConfirmed": (output or {}).get("shutdownConfirmed"),
                 }
             )
         return view

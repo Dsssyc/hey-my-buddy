@@ -37,7 +37,7 @@ from hey_my_buddy.errors import BoardError
 # The session tools one run actually mounts; refusal envelopes verify only
 # against this set, never a fixed global one.
 MOUNTED_TOOLS = ("hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn")
-from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+from hey_my_buddy.protocol.turn_output import validate_outcome
 
 
 FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
@@ -512,7 +512,7 @@ class InquiryEvidenceTests(unittest.TestCase):
     def test_late_answer_after_finish_preserves_successful_completion(self):
         self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_finish_turn", "toolCallId": "finish"})
         outcome = {"disposition": "completed", "summary": "work preserved", "remaining": [], "decisions": [], "artifacts": [], "request": None}
-        finish = self.signed({"version": 1, "identity": self.bridge["identity"], "inputSha256": self.bridge["inputSha256"],
+        finish = self.signed({"version": 2, "identity": self.bridge["identity"], "inputSha256": self.bridge["inputSha256"],
                               "outcome": outcome, "receiptId": "f"*32})
         self.result(3, "finish", content=finish)
         self.answer(4, "late"); self.result(5, "late")

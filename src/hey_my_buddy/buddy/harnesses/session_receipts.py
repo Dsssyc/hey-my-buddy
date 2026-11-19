@@ -19,13 +19,7 @@ from typing import Callable
 
 from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.schemas import MAX_ANSWER_BYTES, MAX_INQUIRIES_PER_RUN as MAX_INQUIRIES, MAX_QUESTION_BYTES
-
-#: The byte bound of one micro task outcome document, shared by the Worker role's
-#: six-field validator, the MCP carrier's input frames and the refusal budgets
-#: below. It lives here — the common receipt primitive — so both sides take it
-#: from one place and the roles do not own a byte budget the native verification
-#: also enforces.
-MAX_OUTCOME_BYTES = 65536
+from ...protocol.turn_output import MAX_OUTCOME_BYTES, TURN_OUTPUT_VERSION
 
 #: Inquiry budgets come from the board operation contract; both native bridges
 #: and their receipt verifiers consume those same values.
@@ -120,7 +114,9 @@ def verify_receipt(raw: object, configuration: dict,
         signature = receipt.pop("signature")
         if not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(receipt, configuration["key"])):
             raise ReceiptError("invalid-finish", "the finish tool receipt failed its signature verification")
-        if receipt["version"] != 1 or receipt["identity"] != configuration["identity"] or receipt["inputSha256"] != configuration["inputSha256"]:
+        if type(receipt["version"]) is not int or receipt["version"] != TURN_OUTPUT_VERSION:
+            raise ReceiptError("invalid-finish", "the finish tool receipt version is not supported")
+        if receipt["identity"] != configuration["identity"] or receipt["inputSha256"] != configuration["inputSha256"]:
             raise ReceiptError("invalid-finish", "the finish tool receipt failed its attempt-identity binding")
         if not isinstance(receipt["receiptId"], str) or len(receipt["receiptId"]) != 32 or validate_outcome(receipt["outcome"]):
             raise ReceiptError("invalid-finish", "the finish tool receipt failed its outcome validation")

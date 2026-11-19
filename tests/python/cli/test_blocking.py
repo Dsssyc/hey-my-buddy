@@ -34,19 +34,19 @@ class AwaitTests(unittest.TestCase):
         active = {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
                   "actions": ["await", "inquire", "cancel", "get"]}
         boundary = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
-                    "workflow": {"activeRequestId": "req-7", "requestKind": "attention"},
+                    "workflow": {"activeRequestId": "req-7"},
                     "resultAvailable": False, "revision": 2, "actions": ["continue", "cancel", "get"]}
         def service(method, params, directory):
             calls.append(method)
             if method == "workflow_get":
                 return {"state": "awaiting-host", "actions": ["continue", "cancel", "get"],
-                        "activeRequest": {"requestId": "req-7", "kind": "attention"},
+                        "activeRequest": {"requestId": "req-7"},
                         "finalArtifactId": None}
             return active if method == "task_get" else boundary
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
         self.assertEqual(calls, ["task_get", "task_wait", "workflow_get"])
         self.assertEqual(answer["requestId"], "req-7")
-        self.assertEqual(answer["requestKind"], "attention")
+        self.assertNotIn("requestKind", answer)
         self.assertEqual(answer["actions"], ["continue", "cancel", "get"])
         self.assertNotIn("nextCommands", answer)
         self.assertNotIn("resultCommand", answer)
@@ -144,7 +144,7 @@ class AwaitTests(unittest.TestCase):
                   "revision": 1, "actions": ["await", "inquire", "cancel", "get"]}
         boundary = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
                     "revision": 2, "resultAvailable": False, "actions": ["continue", "cancel", "get"],
-                    "workflow": {"activeRequestId": "req-1", "requestKind": "attention"}}
+                    "workflow": {"activeRequestId": "req-1"}}
         waits = 0
         calls = []
         def service(method, params, directory):
@@ -159,7 +159,7 @@ class AwaitTests(unittest.TestCase):
                 return boundary
             if method == "workflow_get":
                 return {"state": "awaiting-host", "actions": boundary["actions"],
-                        "activeRequest": {"requestId": "req-1", "kind": "attention"},
+                        "activeRequest": {"requestId": "req-1"},
                         "finalArtifactId": None}
             self.fail(f"unexpected call {method}")
         with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):

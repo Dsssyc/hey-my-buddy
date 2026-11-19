@@ -781,7 +781,7 @@ class NativeConnection:
             "method": method[:120] if isinstance(method, str) else "unknown",
             "at": _now(),
             "outcome": outcome,
-            "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
+            "hostAction": "no interactive Host is attached; the turn must report attention in its own structured outcome",
         }
         if method == "interaction/requestPermission":
             record.update(_permission_request_facts(message.get("params")))

@@ -19,7 +19,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
     verify_tool_refusal,
 )
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.json_codec import decode_strict_json
 
 # The session tools one run actually mounts; refusal envelopes verify only
@@ -65,6 +65,14 @@ class ReceiptTests(unittest.TestCase):
         for invalid in ('{"a":1,"a":2}', '{"a":NaN}', '{"a":Infinity}'):
             with self.assertRaises(ValueError):
                 decode_strict_json(invalid)
+
+    def test_a_signed_historical_version_cannot_finish_a_new_turn(self):
+        historical = json.loads(self.receipt())
+        historical.pop("signature")
+        historical["version"] = 1
+        historical["signature"] = sign_receipt(historical, self.bridge["key"])
+        with self.assertRaisesRegex(ReceiptError, "receipt version is not supported"):
+            verify_receipt(json.dumps(historical), self.bridge, validate_outcome)
 
     def test_receipt_failures_distinguish_malformed_signature_identity_and_outcome(self):
         # Safe, bounded diagnostics: each stage names its own failure without

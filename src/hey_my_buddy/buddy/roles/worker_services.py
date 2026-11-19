@@ -40,7 +40,8 @@ from ...paths import native_path
 from ...private_files import read_text
 from ...errors import BoardError
 from ...protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records
-from .turn_io import canonical_json, validate_outcome
+from ...protocol.turn_output import TURN_OUTPUT_VERSION, validate_outcome
+from .turn_io import canonical_json
 from .prompts import worker_prompt
 from ..harnesses.session_receipts import (
     MAX_ANSWER_BYTES,
@@ -62,20 +63,18 @@ OUTCOME_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
     "properties": {
-        "disposition": {"type": "string", "enum": ["completed", "assistance", "attention"]},
+        "disposition": {"type": "string", "enum": ["completed", "attention"]},
         "summary": {"type": "string", "minLength": 1,
                     "description": "The entire serialized outcome, including this report, must fit in 64 KiB of UTF-8."},
         "remaining": STRINGS, "decisions": STRINGS,
         "artifacts": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object", "additionalProperties": True}]}},
-        "request": {"description": "Required for every outcome. Use null when disposition is completed; otherwise provide the complete assistance or attention request.", "anyOf": [
+        "request": {"description": "Required for every outcome. Use null when disposition is completed; for attention provide the complete request.", "anyOf": [
             {"type": "null"},
             {"type": "object", "additionalProperties": False,
              "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
              "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
                             "neededWork": {"type": "string"}, "expectedArtifacts": STRINGS,
-                            "acceptance": {"type": "string"},
-                            "suggestedBuddyId": {"description": "Optional buddy suggestion the Host may ignore; an explicit null means no suggestion.",
-                                                   "type": ["string", "null"], "maxLength": 256}}},
+                            "acceptance": {"type": "string"}}},
         ]},
     },
 }
@@ -88,7 +87,7 @@ def outcome_schema_for(*, delegation_authority: bool = False) -> dict:
     schema["properties"]["disposition"]["enum"].append("waiting")
     schema["properties"]["request"]["description"] = (
         "Required for every outcome. Use null when disposition is completed or waiting; "
-        "otherwise provide the complete assistance or attention request.")
+        "for attention provide the complete request.")
     return schema
 
 
@@ -104,7 +103,7 @@ ANSWER_SCHEMA = {
 }
 CHECKPOINT_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}, "required": []}
 FINISH_DESCRIPTION = (
-    "Conclude the owning Buddy root turn with completed, assistance or attention. Include all six fields: "
+    "Conclude the owning Buddy root turn with completed or attention. Include all six fields: "
     "disposition, summary, remaining, decisions, artifacts, request. For completed, request must be null. "
     "Correct validation errors and retry; stop after one successful receipt, once your work and internal "
     "subagents have settled. A call after this turn's accepted receipt is refused: the turn has already "
@@ -129,7 +128,7 @@ ANSWER_DESCRIPTION = (
 )
 ATTENTION_REFUSAL = (
     "This run refused a native interactive request because no Host approval channel is attached. Conclude the "
-    "turn with disposition attention (or assistance) and describe the refused request in the outcome request; "
+    "turn with disposition attention and describe the refused request in the outcome request; "
     "a completed outcome is not accepted while that request is unresolved."
 )
 INQUIRY_CHANNEL_ABSENT = "this turn has no mounted inquiry channel"
@@ -159,7 +158,7 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
                    "block finishing this turn.")
     return worker_prompt(task_text, turn_input, credential_file=credential_file, delivery=(
         "This is a Buddy root turn for a micro task. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
-        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
+        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use attention with a request object when you need help or a Host decision, including when a native permission or user-input request was refused. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
         *(("When you have handed off work to micro tasks you own and need their results, conclude this Lead turn with disposition waiting, request: null and a clear summary. The blackboard will start a later turn when an owned task needs your attention.",)
           if turn_input.get("context", {}).get("delegationAuthority") is True else ()),
         inquiry,
@@ -335,7 +334,7 @@ def _checkpoint_batch(pending: list[dict]) -> tuple[list[dict], int]:
 def _finish_receipt(arguments: dict, configuration: dict) -> dict:
     # Each call has its own receipt: a child calling this tool must not
     # prevent the owning root from later issuing its independent receipt.
-    receipt = {"version": 1, "identity": configuration["identity"],
+    receipt = {"version": TURN_OUTPUT_VERSION, "identity": configuration["identity"],
                "inputSha256": configuration["inputSha256"], "outcome": arguments,
                "receiptId": secrets.token_hex(16)}
     receipt["signature"] = sign_receipt(receipt, configuration["key"])

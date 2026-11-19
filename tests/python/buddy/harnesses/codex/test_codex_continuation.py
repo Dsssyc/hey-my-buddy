@@ -56,9 +56,9 @@ class CodexContinuationTests(WorkflowTestCase):
         self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False,
                          result_mutator=lambda payload: (payload.clear(), payload.update(failed_result.result)))
         failed = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, failed)
+        self.continue_failed_turn(board, failed)
         second = self.claim(board, claim_request_id="c2")
-        self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
+        self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session", failed_result.error)
         resumed_result = execute(second, "ok")
         self.assertEqual(resumed_result.status, "ok", resumed_result.to_report())
         self.assertEqual(resumed_result.result["sessionId"], failed_result.result["sessionId"])
@@ -71,7 +71,10 @@ class CodexContinuationTests(WorkflowTestCase):
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         self.assertEqual(delivered["currentTurn"]["state"], "returned")
-        self.continue_run(board, delivered)
+        board.call("workflow_continue", {
+            "runId": delivered["runId"], "artifactId": delivered["finalArtifactId"],
+            "input": "Continue the review",
+        })
         document = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
         self.assertTrue(document["context"]["lastAssistantMessage"]["validatedOutcome"])
 
@@ -109,8 +112,15 @@ class CodexContinuationTests(WorkflowTestCase):
         self.assertIsNone(failed["turns"][0]["disposition"])
         return board, failed
 
-    def continued_input(self, board, failed, **kwargs):
-        self.continue_run(board, failed, **kwargs)
+    @staticmethod
+    def continue_failed_turn(board, failed):
+        board.call("workflow_continue", {
+            "runId": failed["runId"], "turnId": failed["currentTurn"]["turnId"],
+            "input": "Continue from the previous turn",
+        })
+
+    def continued_input(self, board, failed):
+        self.continue_failed_turn(board, failed)
         return self.claim(board, claim_request_id="c2")["claim"]["turn"]["input"]
 
     def test_invalid_outcome_can_resume_exact_completed_native_history(self):
@@ -161,7 +171,7 @@ class CodexContinuationTests(WorkflowTestCase):
 
     def test_refused_resume_does_not_erase_the_last_message_before_reconstruction(self):
         board, failed = self.failed_run()
-        self.continue_run(board, failed)
+        self.continue_failed_turn(board, failed)
         second = self.claim(board, claim_request_id="c2")
         previous_message = second["claim"]["turn"]["input"]["context"]["lastAssistantMessage"]
 

@@ -157,11 +157,11 @@ def build_packet(connection) -> dict | None:
         })
     boundaries = defaultdict(list)
     for row in connection.execute(
-        "SELECT run_id,request_id,kind,state,reason_code,summary,created_at,decided_at"
+        "SELECT run_id,request_id,state,reason_code,summary,created_at,decided_at"
         f" FROM workflow_requests WHERE run_id IN ({placeholders})"
         " ORDER BY created_at,request_id", run_ids):
         boundaries[row["run_id"]].append({
-            "requestId": row["request_id"], "kind": row["kind"], "state": row["state"],
+            "requestId": row["request_id"], "state": row["state"],
             "reasonCode": row["reason_code"], "summary": row["summary"],
             "createdAt": row["created_at"], "decidedAt": row["decided_at"],
         })

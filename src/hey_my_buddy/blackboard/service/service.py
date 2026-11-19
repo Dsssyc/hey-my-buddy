@@ -21,7 +21,6 @@ from ...install import runtime
 from ...protocol import schemas
 from ...protocol.harness_names import HARNESS_NAMES
 from ..tasks import macro_tasks, micro_task, workflow as workflow_module
-from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report
 from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
@@ -604,13 +603,10 @@ class BoardService(_BaseResource):
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:
             return
-        selections = [params.get('buddy')]
-        if isinstance(params.get('helpers'), list):
-            selections.extend(helper.get('buddy') for helper in params['helpers'] if isinstance(helper, dict))
-        with self.store.db.read() as connection:
-            names = {workflow_module.named_buddy(connection, choice)['harness']
-                     for choice in selections if isinstance(choice, str) and choice != 'route'}
-        for name in sorted(names):
+        choice = params.get('buddy')
+        if isinstance(choice, str) and choice != 'route':
+            with self.store.db.read() as connection:
+                name = workflow_module.named_buddy(connection, choice)['harness']
             if explicit and name in HARNESS_NAMES and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
@@ -669,9 +665,9 @@ class BoardService(_BaseResource):
 
     def workflow_continue(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            self._touch_harnesses(params, explicit=True)
             return self.store.workflow.continue_run(
-                params, console_authority=workflow_module.console_authority_from_scope()
+                params, console_authority=workflow_module.console_authority_from_scope(),
+                prepare_buddy=lambda normalized: self._touch_harnesses(normalized, explicit=True),
             )
 
         return self._guard("workflow.continue", request_json, handler)
@@ -840,20 +836,7 @@ class BoardService(_BaseResource):
                 for name in sorted(names & set(HARNESS_NAMES)):
                     self.harnesses.refresh(name, preflight=True)
             self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})
-            response = self.store.admit_execution(nonce, task_id=task_id)
-            claim = response.get("claim")
-            if claim is not None:
-                record_path = None
-                if claim["task"]["spec"]["adapter"] != "command":
-                    with self.store.db.read() as connection:
-                        member = connection.execute(
-                            f"SELECT group_id FROM ({macro_tasks.MEMBERS_SQL}) WHERE task_id=?",
-                            (claim["task"]["taskId"],)).fetchone()
-                    if member is not None:
-                        record_path = str(session_record_path(
-                            self.store.directory, member["group_id"], claim["attempt"]["attemptId"]))
-                claim["sessionRecordPath"] = record_path
-            return response
+            return self.store.admit_execution(nonce, task_id=task_id)
 
     def execution_progress(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

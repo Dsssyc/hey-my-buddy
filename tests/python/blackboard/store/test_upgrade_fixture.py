@@ -206,7 +206,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         session_id = (turn['input']['previousSessionId'] if turn['resumeMode'] == 'native-session'
                       else 'fixture-schema33-continued')
         record = {
-            'version': 1, 'taskId': run_id, 'attemptId': attempt['attemptId'],
+            'version': 2, 'taskId': run_id, 'attemptId': attempt['attemptId'],
             'generation': attempt['generation'], 'turnId': turn['turnId'],
             'resumeMode': turn['resumeMode'],
             'previousSessionId': turn['input']['previousSessionId'],
@@ -524,14 +524,20 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertIsNone(connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE name='model_notes'").fetchone())
                 continue
+            if name == 'workflow_children':
+                self.assertTrue(original)
+                self.assertNotIn(name, after['tables'])
+                continue
             actual = [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
             if name == 'meta':
                 self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
                                  [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
-            elif name in ('attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts'):
+            elif name in ('attempts', 'workflow_runs', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts'):
                 changed = {'workspace_manifest_json', 'manifest_sha256'}
                 if name == 'workflow_runs':
-                    changed.add('execution_workspace_json')
+                    changed.update(('execution_workspace_json', 'active_request_id'))
+                if name == 'workflow_continuations':
+                    changed.update(('kind', 'request_id'))
                 actual_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
                 keep = [column for column in old_columns[name] if column in actual_columns and column not in changed]
                 expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
@@ -542,7 +548,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual([tuple(row[actual_columns.index(column)] for column in keep) for row in actual],
                                  [tuple(row[macro_columns.index(column)] for column in keep) for row in original])
             elif name == 'tasks':
-                removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds',
+                removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds', 'queue_reason',
                            'router_budget_seconds', 'owner', 'spec_json', 'input_fingerprint'}
                 keep = [i for i, column in enumerate(task_columns) if column not in removed]
                 actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(tasks)'))]
@@ -603,7 +609,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     if value['reservation_id'] in releases:
                         value.update(state='released', released_at=releases[value['reservation_id']])
                     value['checkout_root'] = sealed_roots[value['workspace_id'], value['manifest_sha256']]
-                    for removed in ('checkout_id', 'repository_id', 'path'):
+                    for removed in ('checkout_id', 'repository_id', 'path', 'holder_kind', 'parent_run_id'):
                         value.pop(removed)
                     expected.append(value)
                 after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workspace_reservations)')]]
@@ -619,7 +625,31 @@ class UpgradeFixtureTests(unittest.TestCase):
                     expected.append(value)
                 after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workflow_integrations)')]]
                 self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
-            elif name in ('workflow_routes', 'workflow_requests', 'workflow_scope_versions',
+            elif name == 'workflow_requests':
+                columns = old_columns[name]
+                for row in original:
+                    request = dict(zip(columns, row))
+                    current = connection.execute('SELECT rowid,* FROM workflow_requests WHERE request_id=?',
+                                                 (request['request_id'],)).fetchone()
+                    if request['kind'] in ('helper-report', 'helper-attention'):
+                        self.assertIsNone(current)
+                        continue
+                    self.assertEqual((current['rowid'], current['run_id']), (request['rowid'], request['run_id']))
+                    payload = json.loads(request['payload_json'])
+                    payload.pop('suggestedBuddyId', None)
+                    self.assertEqual(json.loads(current['payload_json']), payload)
+                    decision = json.loads(request['decision_json']) if request['decision_json'] else None
+                    if decision and 'resolution' in decision:
+                        self.assertEqual(current['state'], 'resolved')
+                        self.assertEqual(json.loads(current['resolution_json']), {**decision, 'legacy': True})
+                    elif decision and 'decision' in decision:
+                        self.assertEqual(current['state'], 'superseded')
+                        self.assertIsNone(current['resolution_json'])
+                    else:
+                        self.assertEqual(current['state'], request['state'])
+                    self.assertIsNone(current['response_kind'])
+                    self.assertIsNone(current['response_id'])
+            elif name in ('workflow_routes', 'workflow_scope_versions',
                           'workflow_workspace_conflicts', 'workflow_host_conclusions'):
                 current_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
                 keep = [column for column in old_columns[name] if column in current_columns]
@@ -824,7 +854,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
-        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'request_id'),
+        for table, column in (('workflow_runs', 'title'), ('workflow_requests', 'payload_json'),
                               ('workflow_turns', 'input_json')):
             with self.subTest(table=table):
                 original = [tuple(row) for row in connection.execute(f'SELECT rowid,{column} FROM {table}')]
@@ -895,7 +925,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertIn(item['journal'], resources)
 
     def test_in_progress_deletion_removes_its_commands_events_and_fence(self):
-        from hey_my_buddy.blackboard.tasks import macro_task_deletion
+        from hey_my_buddy.blackboard.tasks import checkout_processes, macro_task_deletion
 
         fixture, connection = self.restored()
         store = BoardStore(fixture['state'])
@@ -909,9 +939,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         identifiers = {target, *scope.runs, *scope.tasks, *scope.attempts, *scope.decisions}
         self.assertTrue(scope.runs)
         self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands').fetchone()[0], 0)
-        with mock.patch.object(macro_task_deletion, '_delete_sessions', return_value=[]):
+        with mock.patch.object(macro_task_deletion, '_delete_sessions', return_value=[]), \
+             mock.patch.object(checkout_processes, '_processes', return_value=([], True)):
             result = macro_task_deletion.delete(store, target, len(scope.runs))
-        self.assertEqual(result['state'], 'deleted')
+        self.assertEqual(result['state'], 'deleted', result.get('failures'))
         self.assertTrue(result['duplicate'])
         self.assertEqual(result['microTaskCount'], len(scope.runs))
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 0)
@@ -953,7 +984,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                      'FROM provider_cooling').fetchone()
         self.assertEqual(tuple(cooling), ('codex', 'openai', 1, None))
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 1)
-        for table in ('workflow_runs', 'workflow_children', 'agent_credentials', 'workflow_artifacts',
+        for table in ('workflow_runs', 'agent_credentials', 'workflow_artifacts',
                       'workflow_suggestions', 'workflow_host_conclusions', 'attempt_activity',
                       'attempt_reminders', 'workflow_routes', 'workflow_continuations', 'workspace_reservations',
                       'attempt_interruptions', 'attempt_shutdown_evidence', 'attempt_process_identities'):
@@ -1329,19 +1360,113 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(json.loads(row['reason_params_json']), {'errorCode': 'CATALOG_UNAVAILABLE'})
         self.assertEqual(json.loads(row['payload_json']), {'source': 'routing'})
 
-    def assert_helper_lead_wakeup(self, db, case, *, answered):
+        evidence = {
+            table: [tuple(row) for row in db.execute(query)]
+            for table, query in (
+                ('workflow_turns', 'SELECT * FROM workflow_turns ORDER BY rowid'),
+                ('workflow_artifacts', 'SELECT * FROM workflow_artifacts ORDER BY rowid'),
+                ('workflow_host_conclusions', 'SELECT * FROM workflow_host_conclusions ORDER BY rowid'),
+                ('attempts', 'SELECT attempt_id,result_json FROM attempts ORDER BY rowid'),
+                ('events', 'SELECT * FROM events ORDER BY rowid'),
+            )
+        }
+        files = {path: (fixture['state'] / path).read_bytes() for path in fixture['resourceFiles']}
+        expected_bindings = {
+            row['continuation_id']: tuple(row)[1:] for row in db.execute(
+                'SELECT continuation_id,workspace_id,workspace_manifest_sha256,workspace_facts_role,'
+                'workspace_kind,checkout_root,repository_path,input_commit,staged_commit FROM workflow_continuations')
+        }
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        for table, query in (
+            ('workflow_turns', 'SELECT * FROM workflow_turns ORDER BY rowid'),
+            ('workflow_artifacts', 'SELECT * FROM workflow_artifacts ORDER BY rowid'),
+            ('workflow_host_conclusions', 'SELECT * FROM workflow_host_conclusions ORDER BY rowid'),
+            ('attempts', 'SELECT attempt_id,result_json FROM attempts ORDER BY rowid'),
+            ('events', 'SELECT * FROM events ORDER BY rowid'),
+        ):
+            self.assertEqual([tuple(row) for row in db.execute(query)], evidence[table], table)
+        for path, content in files.items():
+            self.assertEqual((fixture['state'] / path).read_bytes(), content, path)
+        self.assertEqual({
+            row['continuation_id']: tuple(row)[1:] for row in db.execute(
+                'SELECT continuation_id,workspace_id,workspace_manifest_sha256,workspace_facts_role,'
+                'workspace_kind,checkout_root,repository_path,input_commit,staged_commit FROM workflow_continuations')
+        }, expected_bindings)
+        for name, action in (('partialRestore', 'restore'), ('abandonBlocked', 'abandon')):
+            with self.subTest(upgraded=name):
+                case = ids[name]
+                row = db.execute('SELECT rowid,state,response_kind,response_id,resolution_json FROM workflow_requests '
+                                 'WHERE request_id=?', (case['requestId'],)).fetchone()
+                self.assertEqual(tuple(row)[:4], (case['requestRowid'], 'resolved', 'resolution', case['conflictId']))
+                saved = json.loads(row['resolution_json'])
+                self.assertEqual(saved['parameters']['resolution'], action)
+                self.assertEqual(saved['result']['state'], 'open')
+                self.assertEqual(saved['result']['artifactId'], case.get('artifactId'))
+
+        case = ids['proxyFamily']
+        self.assertEqual(tuple(db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
+                                          'WHERE continuation_id=?', (case['continuationId'],)).fetchone()),
+                         ('manual', 'consumed', case['childRunId'], case['childRequestId']))
+        sharers = {row['request_id']: row for row in db.execute(
+            'SELECT request_id,state,response_kind,resolution_json FROM workflow_requests WHERE response_id=?',
+            (case['continuationId'],))}
+        self.assertEqual(set(sharers), {case['childRequestId'], case['siblingRequestId']})
+        owner = sharers[case['childRequestId']]
+        self.assertEqual(tuple(owner)[1:3], ('resolved', 'continue'))
+        self.assertEqual(json.loads(owner['resolution_json'])['result']['conflictId'], case['conflictId'])
+        self.assertEqual(tuple(sharers[case['siblingRequestId']])[1:], ('superseded', 'continue', None))
+        for attempt in attempts:
+            self.assertEqual(tuple(db.execute('SELECT session_group_id,waiting_hint_seq FROM attempts '
+                                              'WHERE attempt_id=?', (attempt['attempt_id'],)).fetchone()),
+                             ('run:' + case['parentRunId'], 0))
+        self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name IN "
+                                     "('workflow_children','workflow_continuations_auto_unique')").fetchone())
+        self.assertIsNone(db.execute('SELECT request_id FROM workflow_requests '
+                                     "WHERE json_type(payload_json,'$.suggestedBuddyId') IS NOT NULL").fetchone())
+
+        for name in ('autoContinued', 'declined', 'reportedHelper', 'cancelPolicy'):
+            with self.subTest(upgraded=name):
+                case = ids[name]
+                row = db.execute('SELECT kind,state,request_id FROM workflow_continuations WHERE continuation_id=?',
+                                 (case['continuationId'],)).fetchone()
+                self.assertEqual(tuple(row)[:2], ('manual', 'consumed'))
+                if name == 'reportedHelper':
+                    self.assertIsNone(row['request_id'])
+                    self.assertIsNone(db.execute('SELECT 1 FROM workflow_requests WHERE request_id=?',
+                                                 (case['reportRequestId'],)).fetchone())
+        self.assert_helper_lead_wakeup(db, ids['leadWakeupAnswered'], answered=True, migrated=True)
+        row = db.execute('SELECT state,reason_code,reason_params_json,decision_id,payload_json '
+                         'FROM workflow_requests WHERE request_id=?', (routing['requestId'],)).fetchone()
+        self.assertEqual(tuple(row), ('open', 'dispatch.buddy-rejected', '{"errorCode":"CATALOG_UNAVAILABLE"}',
+                                      routing['decisionId'], '{"source":"routing"}'))
+        self.assertIsNone(db.execute("SELECT 1 FROM tasks WHERE queue_reason IN ('helper-attention','awaiting-helpers')").fetchone())
+
+        closed_request = ids['partialRestore']['requestId']
+        for invalid in (
+            'null', '{}', '{"legacy":true,"resolution":{}}',
+            '{"parameters":{"resolution":"restore","observedFingerprint":"f"},'
+            f'"result":{{"conflictId":"{ids["partialRestore"]["conflictId"]}",'
+            '"state":"open","resolvedFingerprint":"f"}}',
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(sqlite3.IntegrityError):
+                db.execute('UPDATE workflow_requests SET resolution_json=? WHERE request_id=?', (invalid, closed_request))
+        db.rollback()
+
+    def assert_helper_lead_wakeup(self, db, case, *, answered, migrated=False):
+        kind = "NULL" if migrated else 'r.kind'
         row = db.execute(
-            'SELECT w.delegation_authority,r.kind,r.state,r.response_kind,r.response_id,'
+            f'SELECT w.delegation_authority,{kind},r.state,r.response_kind,r.response_id,'
             'r.reason_code,r.reason_params_json,r.payload_json FROM workflow_requests r '
             'JOIN workflow_runs w ON w.run_id=r.run_id WHERE r.request_id=? AND w.run_id=?',
             (case['requestId'], case['leadRunId'])).fetchone()
+        expected_kind = None if migrated else 'helper-report'
         if answered:
-            self.assertEqual(tuple(row)[:5], (1, 'helper-report', 'superseded', 'continue', case['continuationId']))
+            self.assertEqual(tuple(row)[:5], (1, expected_kind, 'superseded', 'continue', case['continuationId']))
         else:
-            self.assertEqual(tuple(row)[:5], (1, 'helper-report', 'open', None, None))
+            self.assertEqual(tuple(row)[:5], (1, expected_kind, 'open', None, None))
         self.assertEqual(row['reason_code'], 'SHUTDOWN_UNCONFIRMED')
         self.assertIsInstance(json.loads(row['reason_params_json']), dict)
-        self.assertEqual(json.loads(row['payload_json']), {'helperOutcomes': []})
+        self.assertEqual(json.loads(row['payload_json']), {} if migrated else {'helperOutcomes': []})
         wakeup = db.execute('SELECT kind,state,trigger_event_json FROM workflow_continuations WHERE continuation_id=?',
                             (case['wakeupContinuationId'],)).fetchone()
         self.assertEqual(tuple(wakeup)[:2], ('lead-wakeup', 'invalidated' if answered else 'recorded'))
@@ -1371,6 +1496,20 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertIsNone(db.execute('SELECT 1 FROM workflow_children WHERE parent_run_id=?',
                                              (case['runId'],)).fetchone())
         self.assert_helper_lead_wakeup(db, ids['leadWakeupOpen'], answered=False)
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        for decision in ('approve', 'decline'):
+            with self.subTest(upgraded=decision):
+                case = ids['offline' + decision.title()]
+                row = db.execute(
+                    'SELECT c.kind,c.state,c.run_id,c.note,c.input_text,r.state,r.response_kind,r.resolution_json '
+                    'FROM workflow_continuations c JOIN workflow_requests r ON r.request_id=c.request_id '
+                    'WHERE c.continuation_id=? AND r.request_id=?',
+                    (case['continuationId'], case['requestId']),
+                ).fetchone()
+                self.assertEqual(tuple(row)[:4], ('manual', 'queued', case['runId'], None))
+                self.assertIn(decision + 'd', row['input_text'])
+                self.assertEqual(tuple(row)[5:], ('superseded', None, None))
+        self.assert_helper_lead_wakeup(db, ids['leadWakeupOpen'], answered=False, migrated=True)
 
     def test_every_helper_reject_stock_loads_independently_with_its_guard_facts(self):
         # These queries select the old shape that the next schema must refuse.
@@ -1433,6 +1572,17 @@ class UpgradeFixtureTests(unittest.TestCase):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         cases = metadata['helperRetirementStock']['scenarios']['rejectCases']
         self.assertEqual(set(cases), set(guards))
+        rejections = {
+            'waiting-helpers-children': ('waiting-helpers', 'parentRunId'),
+            'transferred-reservations': ('held or transferred workspace reservation', 'parentRunId'),
+            'unreclaimed-helper-checkout': ('unreclaimed helper checkout', 'workspaceId'),
+            'lead-tree-child': ('unsettled helper under Lead or terminal ancestor', 'childRunId'),
+            'terminal-parent-children': ('unsettled helper under Lead or terminal ancestor', 'failedChildRunId'),
+            'helper-tree-pause': ('helper tree pause', 'parentRunId'),
+            'open-helper-attention': ('open helper request', 'requestId'),
+            'open-helper-report': ('open helper request', 'requestId'),
+            'helper-tree-deletion-mark': ('helper tree deletion', 'deletionId'),
+        }
         for name, query in guards.items():
             with self.subTest(case=name):
                 fixture, db = self.helper_stock_board(name, lambda fixture: load_helper_reject_case(fixture, name))
@@ -1445,6 +1595,57 @@ class UpgradeFixtureTests(unittest.TestCase):
                     manifest = artifact_manifest(fixture['state'], row)
                     self.assertTrue(Path(manifest['checkoutRoot']).is_dir())
                 self.assertIsNotNone(db.execute(query, ids).fetchone())
+                board = fixture['state'] / 'board.sqlite3'
+                contents = board.read_bytes()
+                with self.assertRaisesRegex(ValueError, 'resolve helper stock in the old release') as caught:
+                    upgrade_state(fixture['state'])
+                reason, key = rejections.get(name, ('unconsumed helper continuation', 'continuationId'))
+                self.assertIn(reason, str(caught.exception))
+                self.assertIn(ids[key], str(caught.exception))
+                self.assertEqual(board.read_bytes(), contents)
+                self.assertEqual(db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '41')
+
+    def test_invalid_helper_resolution_stock_leaves_schema_and_row_bytes_unchanged(self):
+        fixture, db = self.helper_stock_board('ambiguous-helper-resolution', load_helper_retirement_stock)
+        case = fixture['helperRetirementStock']['scenarios']['proxyFamily']
+        db.execute("UPDATE workflow_requests SET payload_json=json_set(payload_json,'$.origin.requestId',?) "
+                   'WHERE request_id=?', (case['siblingRequestId'], case['proxyRequestId']))
+        db.commit()
+        board = fixture['state'] / 'board.sqlite3'
+        contents = board.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'proxy and origin name different requests') as caught:
+            upgrade_state(fixture['state'])
+        self.assertIn(case['proxyRequestId'], str(caught.exception))
+        self.assertEqual(board.read_bytes(), contents)
+
+        db.execute("UPDATE workflow_requests SET payload_json=json_set(payload_json,'$.origin.requestId',?) "
+                   'WHERE request_id=?', (case['childRequestId'], case['proxyRequestId']))
+        standalone = fixture['helperRetirementStock']['scenarios']['partialRestore']['requestId']
+        db.execute("UPDATE workflow_requests SET decision_json=json_remove(decision_json,'$.result.artifactId') "
+                   'WHERE request_id=?', (standalone,))
+        db.commit()
+        contents = board.read_bytes()
+        with self.assertRaisesRegex(ValueError, standalone):
+            upgrade_state(fixture['state'])
+        self.assertEqual(board.read_bytes(), contents)
+
+        db.execute("UPDATE workflow_requests SET decision_json=json_set(decision_json,'$.result.artifactId',NULL) "
+                   'WHERE request_id=?', (standalone,))
+        saved = json.loads(db.execute('SELECT decision_json FROM workflow_requests WHERE request_id=?',
+                                      (case['childRequestId'],)).fetchone()[0])
+        saved['parameters'] = {'resolution': 'restore', 'observedFingerprint': 'f' * 64,
+                               'targetRunId': case['childRunId']}
+        db.execute("UPDATE workflow_requests SET state='approved',response_kind='resolution',response_id=?,decision_json=? "
+                   'WHERE request_id IN (?,?)', (case['conflictId'], _json(saved), case['childRequestId'], case['proxyRequestId']))
+        db.execute("UPDATE workflow_requests SET decision_json=NULL WHERE response_kind='continue' AND response_id=?",
+                   (case['continuationId'],))
+        db.commit()
+        upgrade_state(fixture['state'])
+        migrated = db.execute('SELECT state,response_kind,response_id,resolution_json FROM workflow_requests WHERE request_id=?',
+                              (case['childRequestId'],)).fetchone()
+        self.assertEqual(tuple(migrated)[:3], ('resolved', 'resolution', case['conflictId']))
+        del saved['parameters']['targetRunId']
+        self.assertEqual(json.loads(migrated['resolution_json']), saved)
 
     def test_stock_provenance_pins_each_generated_supplement(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())

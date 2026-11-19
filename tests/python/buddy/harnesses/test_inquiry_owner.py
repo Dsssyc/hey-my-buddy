@@ -22,9 +22,9 @@ from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.harnesses.dsh.protocol import NativeError, RootTurnEvidence
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.protocol.turn_output import validate_outcome
 
 TASK_MATERIAL_ROOT = Path(os.environ.get("HMB_INQUIRY_OWNER_MATERIAL_ROOT", tempfile.gettempdir()))
 RUN = RunIdentity(task_id="task-owner", attempt_id="attempt-owner", generation=2,
@@ -91,7 +91,7 @@ class NativeReceiptFixture:
             checkpoint_name="mcp__buddy_fixture__hey_my_buddy_checkpoint",
             answer_name="mcp__buddy_fixture__hey_my_buddy_answer_inquiry",
             on_delivery=bridge.deliver_inquiries, on_answer=bridge.record_answer,
-            validate_outcome=turn_io.validate_outcome,
+            validate_outcome=validate_outcome,
             mounted_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry",
                            "hey_my_buddy_finish_turn"))
     def event(self, update: dict, *, child=False) -> None:

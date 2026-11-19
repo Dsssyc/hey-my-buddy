@@ -232,7 +232,7 @@ class RoleStopTests(unittest.TestCase):
             if invalid_summary:
                 raise ValueError("invalid summary")
             return {"sessionId": selected.native_identity.session_id,
-                    "outcome": {"disposition": "assistance", "summary": "selected summary"}}
+                    "outcome": {"disposition": "attention", "summary": "selected summary"}}
         with mock.patch.object(inline_run, "run_seam", return_value=module), \
              mock.patch.object(inline_run, "adapter", return_value=SimpleNamespace(interrupted_resume=True)), \
              mock.patch.object(run_execution, "worker_request", side_effect=prepare), \
@@ -514,7 +514,7 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(code, 0)
         handle = self._finished_handle(result, code, grace_deadline=time.monotonic() + 300,
                                        grace_expired=False)
-        turn = {"outcome": {"disposition": "assistance", "summary": "partial work"},
+        turn = {"outcome": {"disposition": "attention", "summary": "partial work"},
                 "sessionId": "native-session"}
         context = SimpleNamespace(turn_input={"resumeMode": "initial"}, spec={"harness": "zcode"},
                                   effective_workspace=None, turn_output_file=lambda: self.root / "turn-output.json")

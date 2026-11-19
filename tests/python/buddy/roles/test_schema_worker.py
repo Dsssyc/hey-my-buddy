@@ -40,13 +40,13 @@ class CodexSchemaTests(unittest.TestCase):
             answered, _provenance = policy.delivery(
                 result, {"unansweredDeliveredInquiries": 0})
             self.assertEqual(answered["disposition"], "completed", harness)
-            assistance = {**outcome, "disposition": "assistance", "request": delivered["request"]}
-            assistance_result = SimpleNamespace(value=SimpleNamespace(
-                parsed=SimpleNamespace(value={"outcome": assistance})))
+            attention = {**delivered, "request": {**delivered["request"], "summary": "My own request"}}
+            attention_result = SimpleNamespace(value=SimpleNamespace(
+                parsed=SimpleNamespace(value={"outcome": attention})))
             pending, _provenance = policy.delivery(
-                assistance_result, {"unansweredDeliveredInquiries": 1})
+                attention_result, {"unansweredDeliveredInquiries": 1})
             self.assertEqual(pending["disposition"], "attention", harness)
-            self.assertEqual(pending["request"], assistance["request"])
+            self.assertEqual(pending["request"], attention["request"])
 
     def test_schema_worker_gets_an_attempt_private_inquiry_service(self):
         from hey_my_buddy.buddy.harnesses.registry import run_seam
@@ -163,13 +163,16 @@ class CodexSchemaTests(unittest.TestCase):
 
         check(worker_format("codex").schema)
 
-    def test_codex_buddy_suggestion_is_required_and_nullable(self):
-        request = worker_format("codex").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertIn("suggestedBuddyId", request["required"])
-        self.assertEqual(request["properties"]["suggestedBuddyId"],
-                         {"anyOf": [{"type": "string"}, {"type": "null"}]})
-        claude_request = worker_format("claude").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertNotIn("suggestedBuddyId", claude_request["required"])
+    def test_native_schemas_expose_attention_with_a_closed_request(self):
+        for harness in ("codex", "claude"):
+            with self.subTest(harness=harness):
+                completed, attention = worker_format(harness).schema["properties"]["outcome"]["anyOf"]
+                self.assertEqual(completed["properties"]["disposition"]["enum"], ["completed"])
+                self.assertEqual(attention["properties"]["disposition"]["enum"], ["attention"])
+                request = attention["properties"]["request"]
+                self.assertFalse(request["additionalProperties"])
+                self.assertNotIn("suggestedBuddyId", request["properties"])
+                self.assertEqual(set(request["required"]), set(request["properties"]))
 
 
 class SchemaWorkerTests(NativeRunCase):
@@ -273,13 +276,12 @@ class SchemaWorkerTests(NativeRunCase):
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
-        # Codex requires a nullable buddy suggestion; ADR-030
-        # pins the full assembled prompt, including the published Worker text.
+        # Pin the v2 native schemas and the assembled prompt with its Worker role text.
         hashes = {
-            "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "4345d84e8ec926d09e12aff7d55f2a168bdcc4464ab17f4d07b203fe1f3efc99"),
-            "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "0e4621ddeeee1e51181c1c31d9206cc740387142e653948475dc1a060b2231bd"),
+            "codex": ("2d03b0c1f028543fa3f8b0f1084d092646b634c873bd26b80bbc505d50134825",
+                      "1b765d421c879b2ec65e7f824ef008de4ba16c59da56ca84bb3a0e6564d9cc13"),
+            "claude": ("5ff083b80258fe5201563d95540837dddc1c7c1013085423c24606b866656ed3",
+                       "8872fafb9ea696a21a6d166299ebbc06e3029d7733e316bc6e38e8f7b4927271"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):

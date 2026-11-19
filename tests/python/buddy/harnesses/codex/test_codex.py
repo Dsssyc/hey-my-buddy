@@ -153,10 +153,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["activity"], {"phase": "finishing",
                                                       "eventSeq": activity["eventSeq"]})
 
-    def test_assistance_uses_the_same_strict_outcome_schema(self):
-        outcome = self.execute(self.context("assistance"))
+    def test_attention_uses_the_same_strict_outcome_schema(self):
+        outcome = self.execute(self.context("attention"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "attention")
 
     def test_last_completed_final_answer_wins_and_superseded_facts_reach_receipt(self):
         cases = (("final-invalid-then-valid", False), ("final-valid-then-valid", True),
@@ -292,7 +292,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(second.status, "ok", second.to_report())
         self.assertEqual(second.result["sessionId"], first.result["sessionId"])
 
-    def test_completed_result_cannot_also_request_assistance(self):
+    def test_completed_result_cannot_also_request_attention(self):
         outcome = self.execute(self.context("completed-request"))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result["code"], "invalid-result")
@@ -484,7 +484,7 @@ class CodexAdapterTests(unittest.TestCase):
                                               stop_initiator="host"), "wrap-up")
         self.assertTrue(outcome.shutdown_confirmed)
         turn = outcome.result["turn"]
-        from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+        from hey_my_buddy.protocol.turn_output import validate_outcome
         self.assertIsNone(validate_outcome(turn["outcome"]))
         self.assertEqual(turn["outcome"]["summary"], "Stopped partial work summary")
         self.assertEqual(turn["sessionId"], started["threadId"])

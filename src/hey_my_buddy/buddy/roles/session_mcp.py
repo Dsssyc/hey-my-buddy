@@ -27,7 +27,7 @@ from pathlib import Path
 from ...text import configure_utf8_output
 from ...private_files import read_text
 from ...json_codec import canonical_json, decode_strict_json
-from ..harnesses.session_receipts import MAX_OUTCOME_BYTES
+from ...protocol.turn_output import MAX_OUTCOME_BYTES
 from . import worker_services
 
 

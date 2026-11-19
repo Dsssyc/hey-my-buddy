@@ -205,7 +205,11 @@ class ExportBoardSampleTests(WorkflowTestCase):
         board.call('workflow_cancel', {'runId': cancelled['runId'], 'note': 'Fixture'})
         running = self.submit(board, request_id='running', kind='worktree')
         self.claim(board, run_id=running['runId'])
-        path = private_dirs.session_record_path(board.directory, first['macroTaskId'], attempt)
+        historical_group = 'run:former-session-owner'
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE attempts SET session_group_id=? WHERE attempt_id=?',
+                               (historical_group, attempt))
+        path = private_dirs.session_record_path(board.directory, historical_group, attempt)
         record = SessionRecord(path, attempt)
         record.append(MessageChunk(sessionUpdate='agent_message_chunk',
                                    content=TextContent(type='text', text='Sample transcript')))
@@ -235,9 +239,11 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertFalse((output / 'controls').exists())
         self.assertFalse((output / 'harnesses').exists())
         self.assertEqual([p.name for p in native_path(output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
-        self.assertEqual(native_path(private_dirs.session_record_path(output, first['macroTaskId'], attempt)).read_bytes(), native_path(path).read_bytes())
+        self.assertEqual(native_path(private_dirs.session_record_path(output, historical_group, attempt)).read_bytes(), native_path(path).read_bytes())
         self.assertEqual(native_path(output / inquiry.relative_to(board.directory)).read_bytes(), native_path(inquiry).read_bytes())
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
+            self.assertEqual(connection.execute('SELECT session_group_id FROM attempts WHERE attempt_id=?',
+                                                (attempt,)).fetchone()[0], historical_group)
             self.assertEqual(set(row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')),
                              {first['runId'], second['runId']})
             columns = {row[1] for row in connection.execute('PRAGMA table_info(workflow_runs)')}

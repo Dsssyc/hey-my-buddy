@@ -39,27 +39,11 @@ def workspace_candidates(store, task_ids=None) -> list[str]:
 
 
 def _finished_at(connection, run):
-    """A failed/cancelled borrower ends with the terminal parent it borrowed from."""
     if run['state'] == 'accepted':
         return connection.execute('SELECT accepted_at FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()[0]
     if run['state'] == 'concluded':
         return host_conclusions.current(connection, run)['created_at']
-    if run['state'] not in ('failed', 'cancelled'):
-        return None
-    parent = connection.execute(
-        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),"
-        f" run_bindings AS ({RUN_BINDINGS_CTE})"
-        " SELECT p.* FROM workflow_children c JOIN workflow_runs p ON p.run_id=c.parent_run_id"
-        " JOIN run_bindings pb ON pb.run_id=p.run_id"
-        " JOIN manifest_owners po ON po.workspace_id=pb.workspace_id"
-        " AND po.manifest_sha256=pb.manifest_sha256"
-        " JOIN run_bindings rb ON rb.run_id=c.child_task_id"
-        " JOIN manifest_owners ro ON ro.workspace_id=rb.workspace_id"
-        " AND ro.manifest_sha256=rb.manifest_sha256"
-        " WHERE c.child_task_id=? AND po.checkout_root=ro.checkout_root",
-        (run['run_id'],),
-    ).fetchone()
-    return _finished_at(connection, parent) if parent is not None else None
+    return None
 
 
 def native_roots(store) -> list[Path]:

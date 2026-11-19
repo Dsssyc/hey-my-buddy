@@ -208,10 +208,17 @@ class UpgradeChainTests(unittest.TestCase):
         attempts = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
         tasks = [dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')]
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 41, 'targetSchema': 42})
-        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')],
+        columns = ','.join(['rowid', *(row[1] for row in self.db.execute('PRAGMA table_info(attempts)')
+                                      if row[1] != 'session_group_id')])
+        self.assertEqual([dict(row) for row in self.db.execute(f'SELECT {columns} FROM attempts ORDER BY rowid')],
                          [{**row, 'connection_reason': None, 'probe_unknown': 0, 'waiting_reason': None,
                            'waiting_hint_seq': 0}
                           for row in attempts])
+        for task in tasks:
+            if task['queue_reason'] in ('helper-attention', 'awaiting-helpers'):
+                self.assertEqual(self.db.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
+                                                 (task['task_id'],)).fetchone()[0], None)
+                task['queue_reason'] = None
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')], tasks)
         attempt_id = self.db.execute('SELECT attempt_id FROM attempts ORDER BY rowid LIMIT 1').fetchone()[0]
         # The reason-bearing probes need a still-running shape: the idle stock's
@@ -661,7 +668,8 @@ class UpgradeChainTests(unittest.TestCase):
         upgrade.upgrade_state(self.state)
         expected = []
         for row in before:
-            value = {key: item for key, item in row.items() if key not in ('checkout_id', 'repository_id', 'path')}
+            value = {key: item for key, item in row.items()
+                     if key not in ('checkout_id', 'repository_id', 'path', 'holder_kind', 'parent_run_id')}
             value['checkout_root'] = roots[row['workspace_id'], row['manifest_sha256']]
             if row['state'] == 'held' and row['holder_task_id'] in decisions:
                 value.update(state='released', released_at=decisions[row['holder_task_id']])

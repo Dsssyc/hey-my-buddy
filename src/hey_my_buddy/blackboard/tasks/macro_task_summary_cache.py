@@ -35,7 +35,7 @@ THIN_HISTORY_SQL = micro_task.replace_sql_once(
 MEMBER_COLUMNS = (
     "task_id", "task_rowid", "adapter", "state", "selected_attempt_id", "active_attempt_id",
     "created_at", "accepted_at", "revision", "updated_at", "micro_task_run_id",
-    "run_state", "child_parent_run_id", "delegated_parent_run_id", "decision_id",
+    "run_state", "delegated_parent_run_id", "decision_id",
     "route_run_id", "root_run_id", "root_lead_run_id", "project_path", "project_id",
     "project_repository_path", "review_ready",
 )
@@ -134,10 +134,8 @@ def dependencies(connection, members):
              " WHERE t.run_id IN ({}) ORDER BY t.run_id,t.turn_index"),
             ("conclusion", "SELECT run_id,conclusion_id,execution_status"
              " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
-            ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,response_kind,response_id,decided_at"
+            ("request", "SELECT run_id,request_id,turn_id,attempt_id,state,response_kind,response_id,decided_at"
              " FROM workflow_requests WHERE run_id IN ({}) ORDER BY run_id,request_id"),
-            ("child", "SELECT child_task_id,parent_run_id,request_id,state"
-             " FROM workflow_children WHERE child_task_id IN ({}) ORDER BY child_task_id"),
             ("route", "SELECT route.run_id,route.decision_id,decision.task_id,route.state"
              " FROM workflow_routes route JOIN decision_requests decision USING(decision_id)"
              " WHERE route.run_id IN ({}) ORDER BY route.run_id,route.decision_id"),

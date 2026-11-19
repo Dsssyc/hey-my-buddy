@@ -100,7 +100,7 @@ def _page(stream, params: dict) -> dict:
 
 def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     owner = tasks.identity(store, task_id, attempt_id)
-    if owner['group_id'] is None:
+    if owner['session_group_id'] is None:
         raise BoardError('SESSION_NOT_RECORDED', 'This attempt has no session record',
                          reason=reason('session.not-recorded'))
     harness = owner['harness']
@@ -111,7 +111,7 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     stopped = WorkflowCoordinator.result_payload(stored).get('sessionRecordFailure')
     response = {'state': 'ended' if owner['execution_state'] == 'finished' else 'running',
                 'stopped': stopped, 'coverage': {kind: declaration.to_payload() for kind, declaration in session_coverage(harness).items()}}
-    path = private_dirs.session_record_path(store.directory, owner['group_id'], attempt_id)
+    path = private_dirs.session_record_path(store.directory, owner['session_group_id'], attempt_id)
     opened = False
     try:
         fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
@@ -122,7 +122,7 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
             # well so deletion during the read cannot return retained bytes.
             native_path(path).stat()
     except FileNotFoundError:
-        if opened or tasks.deleting(store, owner['group_id']):
+        if opened or tasks.deleting(store, task_id, attempt_id):
             raise BoardError('SESSION_DELETED', 'The session record was deleted',
                              reason=reason('session.deleted')) from None
         if stopped is not None:
@@ -140,4 +140,7 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     except OSError:
         raise BoardError('SESSION_UNREADABLE', 'The session record could not be read',
                          reason=reason('session.unreadable')) from None
+    if tasks.deleting(store, task_id, attempt_id):
+        raise BoardError('SESSION_DELETED', 'The session record was deleted',
+                         reason=reason('session.deleted'))
     return {**response, **page}

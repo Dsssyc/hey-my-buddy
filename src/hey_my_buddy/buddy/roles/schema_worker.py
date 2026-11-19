@@ -11,12 +11,11 @@ from dataclasses import dataclass, replace
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
-from .turn_io import validate_outcome
+from ...protocol.turn_output import validate_outcome
 from .prompts import worker_prompt
 
 
-def outcome_schema(*, summary_description: str | None = None, suggested_buddy: bool = False,
-                   require_suggested_buddy: bool = False) -> dict:
+def outcome_schema(*, summary_description: str | None = None) -> dict:
     request = {
         "type": "object", "additionalProperties": False,
         "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
@@ -25,10 +24,6 @@ def outcome_schema(*, summary_description: str | None = None, suggested_buddy: b
                        "expectedArtifacts": {"type": "array", "items": {"type": "string"}},
                        "acceptance": {"type": "string"}},
     }
-    if suggested_buddy:
-        request["properties"]["suggestedBuddyId"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
-        if require_suggested_buddy:
-            request["required"].append("suggestedBuddyId")
     summary = {"type": "string"}
     if summary_description is not None:
         summary["description"] = summary_description
@@ -44,7 +39,7 @@ def outcome_schema(*, summary_description: str | None = None, suggested_buddy: b
         }
     return {"type": "object", "additionalProperties": False, "required": ["outcome"],
             "properties": {"outcome": {"anyOf": [branch(["completed"], {"type": "null"}),
-                                                 branch(["assistance", "attention"], request)]}}}
+                                                 branch(["attention"], request)]}}}
 
 
 @dataclass(frozen=True)
@@ -113,9 +108,7 @@ class NativeSchemaWorker:
         unanswered = bool(facts.get("unansweredDeliveredInquiries"))
         attention = unanswered or (denied and (outcome is None or outcome["disposition"] in ("completed", "waiting")))
         if attention:
-            if unanswered and outcome is not None and outcome["disposition"] in ("assistance", "attention"):
-                outcome = {**outcome, "disposition": "attention"}
-            else:
+            if outcome is None or outcome["disposition"] != "attention":
                 outcome = self.attention_outcome(facts)
         elif outcome is None:
             message = "the native root turn has no strict structured final outcome"

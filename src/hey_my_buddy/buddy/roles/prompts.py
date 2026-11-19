@@ -62,9 +62,8 @@ def _canonical_member_span(document: dict, path: tuple[str, ...]) -> tuple[int, 
 def _turn_fragments(turn_input: dict) -> tuple[tuple[str, str], ...]:
     document = _prompt_turn_input(turn_input)
     text = canonical_json(document)
-    # These fields are written by the Host's continuation/decision operations.
-    paths = (("context", "continuation", "input"), ("context", "continuation", "note"),
-             ("context", "hostDecision"))
+    # These fields carry the Host's continuation text.
+    paths = (("context", "continuation", "input"), ("context", "continuation", "note"))
     spans = sorted(span for path in paths if (span := _canonical_member_span(document, path)) is not None)
     fragments, offset = [], 0
     for start, end in spans:

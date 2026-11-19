@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults, utc_now
+from hey_my_buddy.blackboard.store.schema_41_42 import OWNERSHIP_41
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
@@ -92,9 +93,8 @@ def _rows(connection, table: str, column: str, values) -> list[dict]:
         values)]
 
 
-def _session_groups(records: dict, groups: dict[str, str]) -> dict[str, str]:
-    # Session locations need only ownership links, independent of the current
-    # history reader's presentation columns and their stored forms.
+def _legacy_session_groups(records: dict, groups: dict[str, str]) -> dict[str, str]:
+    # Before schema 42 the owning run's current grouping located the file.
     result = dict(groups)
     routed_groups = {row['decision_id']: groups[row['run_id']] for row in records['workflow_routes']}
     for dispatch in records['router_dispatches']:
@@ -178,13 +178,16 @@ def _select(connection, source_schema: int,
         _rebind_workspace_owners(connection, records)
     # Relationships survive only when both micro tasks were selected. A selected
     # child of an omitted parent becomes a root; no omitted task is pulled in.
-    for table, owner, child in (('workflow_children', 'parent_run_id', 'child_task_id'),
-                                ('workflow_lead_tasks', 'lead_run_id', 'owned_run_id'),
-                                ('workflow_fixes', 'run_id', 'fixed_run_id')):
+    relationships = [('workflow_lead_tasks', 'lead_run_id', 'owned_run_id'),
+                     ('workflow_fixes', 'run_id', 'fixed_run_id')]
+    if source_schema <= 41:
+        relationships.append(('workflow_children', 'parent_run_id', 'child_task_id'))
+    for table, owner, child in relationships:
         records[table] = [row for row in _rows(connection, table, owner, selected)
                           if row[child] in selected]
+    run_groups = RUN_GROUPS_SQL if source_schema >= 42 else f'WITH RECURSIVE {OWNERSHIP_41} SELECT * FROM groups'
     groups = {row['run_id']: row['group_id'] for row in connection.execute(
-        f'SELECT * FROM ({RUN_GROUPS_SQL}) WHERE run_id IN ({",".join("?" for _ in selected)})', selected)}
+        f'SELECT * FROM ({run_groups}) WHERE run_id IN ({",".join("?" for _ in selected)})', selected)}
     macros = {group for group in groups.values() if not group.startswith('run:')}
     records['macro_tasks'] = _rows(connection, 'macro_tasks', 'macro_task_id', macros)
     if source_schema >= 35:
@@ -233,9 +236,14 @@ def _select(connection, source_schema: int,
             run['submission_verifier'] = None
     for attempt in records['attempts']:
         attempt['nonce_verifier'] = secrets.token_hex(32)
-    session_groups = _session_groups(records, groups)
-    sessions = [(row['task_id'], row['attempt_id'], session_groups[row['task_id']])
-                for row in records['attempts'] if row['task_id'] in session_groups]
+    if source_schema >= 42:
+        sessions = [(row['task_id'], row['attempt_id'], row['session_group_id'])
+                    for row in records['attempts'] if row['session_group_id'] is not None]
+    else:
+        session_groups = _legacy_session_groups(records, groups)
+        sessions = [(row['task_id'], row['attempt_id'], session_groups[row['task_id']])
+                    for row in records['attempts']
+                    if row['adapter'] != 'command' and row['task_id'] in session_groups]
     return records, sessions
 
 
@@ -463,13 +471,17 @@ def export_sample(source: Path, output: Path) -> Path:
                             if int(version) >= 36:
                                 from hey_my_buddy.blackboard.store.schema_35_36 import _accumulate_defects
                                 _accumulate_defects(writer)
-                    # The surviving lineage determines each destination session's
-                    # group; source group identity still locates the original file.
-                    target_groups = _session_groups(records, {
-                        row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
+                    # Only legacy readers derive a destination group from its
+                    # selected lineage. Frozen ownership travels with the row.
+                    target_groups = None
+                    if int(version) <= 41:
+                        target_groups = _legacy_session_groups(records, {
+                            row['run_id']: row['group_id'] for row in writer.execute(
+                                f'WITH RECURSIVE {OWNERSHIP_41} SELECT * FROM groups')})
                     for task, attempt, group in sessions:
                         origin = private_dirs.session_record_path(source, group, attempt)
-                        target = private_dirs.session_record_path(stage, target_groups[task], attempt)
+                        target_group = group if target_groups is None else target_groups[task]
+                        target = private_dirs.session_record_path(stage, target_group, attempt)
                         _copy_optional_regular(origin, target)
                     for attempt in records['attempts']:
                         origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])

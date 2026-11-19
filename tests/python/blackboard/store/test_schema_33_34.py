@@ -264,7 +264,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 ('workflow_turns', 'turn_id,input_json'),
                 ('attempts', 'attempt_id,result_json'),
                 ('workflow_artifacts', 'artifact_id,manifest_json,created_at,run_id,turn_id,attempt_id'),
-                ('workflow_continuations', 'continuation_id,input_text,helper_outcomes_json'),
+                ('workflow_continuations', 'continuation_id,input_text'),
                 ('attempt_received_receipts', '*'),
                 ('workflow_workspace_conflicts', 'conflict_id,evidence_json,delivery_json,created_at,updated_at')):
             query = f'SELECT rowid,{columns} FROM {table} ORDER BY rowid'
@@ -293,11 +293,10 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         self.assertEqual({row[0] for row in db.execute('SELECT result_form FROM attempts WHERE result_json IS NOT NULL')},
                          {'archived-report-v1'})
         self.assertEqual(db.execute('SELECT COUNT(*) FROM attempts WHERE result_json IS NULL AND result_form IS NOT NULL').fetchone()[0], 0)
-        for table in ('workflow_runs','workflow_children','workflow_continuations'):
+        for table in ('workflow_runs','workflow_continuations'):
             self.assertNotIn('workspace_manifest_json', {row[1] for row in db.execute(f'PRAGMA table_info({table})')})
         self.assertNotIn('manifest_sha256', {row[1] for row in db.execute('PRAGMA table_info(workflow_artifacts)')})
-        self.assertFalse({'workspace_id','workspace_manifest_sha256'} &
-                         {row[1] for row in db.execute('PRAGMA table_info(workflow_children)')})
+        self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='workflow_children'").fetchone())
 
     def test_unique_fact_owner_matches_every_frozen_pair(self):
         fixture, db = self.restored()

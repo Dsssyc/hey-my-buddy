@@ -7,14 +7,17 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+import errno
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import uuid
 
 from ... import private_dirs
 from ...errors import BoardError
+from ...paths import native_path
 from ...protocol import schemas
 from ...protocol.reasons import reason
 from . import micro_task, projects, storage, worker_sessions
@@ -402,8 +405,55 @@ def _delete_private_roots(store, scope):
         return skipped
 
 
-def _delete_session_group(store, target):
-    return _remove_owned_tree(private_dirs.session_group_root(store.directory, target), object_kind='session-records')
+def _delete_session_records(store, scope):
+    """Remove only the attempt files proved by the deleting scope's rows."""
+    grouped = {}
+    for attempt in scope.attempt_rows:
+        group = attempt['session_group_id']
+        if group is not None:
+            record = private_dirs.session_record_path(store.directory, group, attempt['attempt_id'])
+            grouped.setdefault(group, []).append(record)
+    with collect_skipped() as skipped:
+        def unproven(path):
+            skipped.append({'objectKind': 'session-records', 'path': str(path),
+                            'reason': reason('macro-task-deletion.owner-unproven')})
+
+        for group, records in grouped.items():
+            root = records[0].parent
+            # Inspect each component from the state directory down before accessing it.
+            for directory in (root.parent.parent, root.parent, root):
+                if private_dirs.linked(directory) or (
+                        native_path(directory).exists() and not native_path(directory).is_dir()):
+                    unproven(directory)
+                    break
+            else:
+                for record in records:
+                    try:
+                        mode = native_path(record).lstat().st_mode
+                        if private_dirs.linked(record) or not stat.S_ISREG(mode):
+                            unproven(record)
+                        elif os.name == 'nt':
+                            from ...windows_files import unlink_regular_file
+                            unlink_regular_file(record)
+                        else:
+                            native_path(record).unlink()
+                    except FileNotFoundError:
+                        pass
+                # The storage lock covers competing deletions. Admission also
+                # serializes with this empty-directory removal: a still-live
+                # attempt in a shared historical directory may be about to open it.
+                with store.db.write() as connection:
+                    live = connection.execute(
+                        "SELECT 1 FROM attempts WHERE session_group_id=?"
+                        " AND (execution_state!='finished' OR shutdown_confirmed!=1) LIMIT 1",
+                        (group,),).fetchone()
+                    if live is None:
+                        try:
+                            native_path(root).rmdir()
+                        except OSError as error:
+                            if error.errno not in (errno.ENOENT, errno.ENOTEMPTY, errno.EEXIST):
+                                raise
+        return skipped
 
 
 def _delete_rows(store, connection, scope, deletion):
@@ -415,7 +465,7 @@ def _delete_rows(store, connection, scope, deletion):
     if deletion['target_kind'] == 'macro-task':
         project_ids.add(connection.execute('SELECT project_id FROM macro_tasks WHERE macro_task_id=?',
                                            (deletion['target_id'],)).fetchone()['project_id'])
-    bindings = {'runId':r, 'targetRunId':r,
+    bindings = {'runId':r,
                 'requestId':{x['request_id'] for x in _rows(connection,'workflow_requests','run_id',r)},
                 'continuationId':{x['continuation_id'] for x in _rows(connection,'workflow_continuations','run_id',r)},
                 'artifactId':{x['artifact_id'] for x in _rows(connection,'workflow_artifacts','run_id',r)},
@@ -464,10 +514,10 @@ def _delete_rows(store, connection, scope, deletion):
         ('workflow_requests',[('run_id',r)]),('workflow_continuations',[('run_id',r)]),
         ('workflow_suggestions',[('run_id',r),('attempt_id',a)]),('workflow_scope_versions',[('run_id',r)]),
         ('workflow_workspace_conflicts',[('run_id',r)]),('workspace_cleanup_plans',[('run_id',r)]),
-        ('workspace_reservations',[('holder_task_id',t),('parent_run_id',r)]),
+        ('workspace_reservations',[('holder_task_id',t)]),
         ('agent_credentials',[('run_id',r),('attempt_id',a)]),
         ('workflow_integrations',[('run_id',r)]),('workflow_artifacts',[('run_id',r)]),
-        ('workflow_turns',[('run_id',r)]),('workflow_children',[('parent_run_id',r),('child_task_id',t)]),
+        ('workflow_turns',[('run_id',r)]),
         ('workflow_routes',[('run_id',r)]),('router_claims',[('task_id',t),('attempt_id',a)]),
         ('router_dispatches',[('decision_id',d),('task_id',t)]),('router_requests',[('decision_id',d)]),
         ('decision_requests',[('decision_id',d),('task_id',t),('attempt_id',a)]),('evaluation_decisions',[('decision_id',d)])]:
@@ -566,7 +616,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     _require_unused_storage(store, connection, scope, target)
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
                                 ('private-root',_delete_private_roots),
-                                ('session-records',lambda store, scope: _delete_session_group(store, target))):
+                                ('session-records',_delete_session_records)):
             try:
                 skipped = operation(store,scope)
             except (BoardError,OSError) as error:

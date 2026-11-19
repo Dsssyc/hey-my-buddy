@@ -203,7 +203,7 @@ def _workspace_reference_rows(connection):
     for table in (
         'tasks', 'attempts', 'artifacts', 'macro_tasks', 'resource_claims', 'messages',
         'events', 'commands', 'decision_requests', 'harness_health',
-        'workflow_runs', 'workflow_children', 'workspace_reservations',
+        'workflow_runs', 'workspace_reservations',
         'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
         'workflow_requests', 'workflow_scope_versions', 'workflow_workspace_conflicts',
         'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions'):
@@ -284,6 +284,8 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
 
 def inspect(store) -> dict:
     from . import workspace
+    from .macro_tasks import RUN_GROUPS_SQL
+    from .micro_task import ROUTING_TASKS_SQL
     from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest
     from .workflow import repository_candidates
     state = store.directory.resolve()
@@ -310,6 +312,15 @@ def inspect(store) -> dict:
     workspace_inputs = []
     unproven_workspaces = []
     with store.db.read() as connection:
+        session_records = {
+            private_dirs.session_record_path(state, row['session_group_id'], row['attempt_id']): row
+            for row in connection.execute(
+                f'WITH groups AS MATERIALIZED ({RUN_GROUPS_SQL})'
+                ' SELECT a.attempt_id,a.task_id,a.session_group_id,g.group_id FROM attempts a'
+                f' LEFT JOIN ({ROUTING_TASKS_SQL}) route ON route.task_id=a.task_id'
+                ' LEFT JOIN groups g ON g.run_id=COALESCE(route.run_id,a.task_id)'
+                ' WHERE a.session_group_id IS NOT NULL')
+        }
         for run in connection.execute('SELECT * FROM workflow_runs'):
             try:
                 manifest = effective_manifest(state, connection, run)
@@ -370,13 +381,29 @@ def inspect(store) -> dict:
                     adapter=path.parent.parent.name)
     harnesses = state / 'harnesses'
     sessions = state / 'sessions'
-    if sessions.exists():
-        for category in ('macro-tasks', 'micro-tasks'):
-            groups = sessions / category
-            if groups.exists():
-                for group in sorted(groups.iterdir()):
-                    add('session-records', group, ['macro-task-deletion'], groupId=(
-                        group.name if category == 'macro-tasks' else 'run:' + group.name))
+    def session_directories(directory):
+        if private_dirs.linked(directory) or (
+                native_path(directory).exists() and not native_path(directory).is_dir()):
+            add('session-records', directory, ['owner-unproven'])
+            return []
+        try:
+            return sorted(directory / entry.name for entry in native_path(directory).iterdir())
+        except FileNotFoundError:
+            return []
+
+    for category in session_directories(sessions):
+        if category.name not in ('macro-tasks', 'micro-tasks'):
+            add('session-records', category, ['owner-unproven'])
+            continue
+        for group in session_directories(category):
+            for path in session_directories(group):
+                owner = session_records.get(path)
+                if owner is None or private_dirs.linked(path) or not native_path(path).is_file():
+                    add('session-records', path, ['owner-unproven'])
+                else:
+                    add('session-records', path, ['macro-task-deletion'],
+                        groupId=owner['group_id'], sessionGroupId=owner['session_group_id'],
+                        taskId=owner['task_id'], attemptId=owner['attempt_id'])
     seen = set()
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
