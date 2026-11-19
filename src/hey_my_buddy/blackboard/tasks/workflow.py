@@ -2324,6 +2324,14 @@ class WorkflowCoordinator:
         boundary = self._open_boundary(connection, run)
         if boundary is None and default_state is None:
             return None
+        # A task with an active attempt keeps executing: its queue reason is
+        # owned by the attempt row, and closing the last boundary returns the
+        # run to its executing turn instead of to waiting-helpers.
+        active = connection.execute(
+            "SELECT active_attempt_id FROM tasks WHERE task_id=?", (run_id,)
+        ).fetchone()["active_attempt_id"] is not None
+        if boundary is None and active and default_state == "waiting-helpers":
+            default_state = "executing"
         state = "awaiting-host" if boundary is not None else default_state
         request_id = boundary["request_id"] if boundary is not None else None
         connection.execute(
@@ -2332,10 +2340,13 @@ class WorkflowCoordinator:
         )
         if (run['state'], run['active_request_id']) != (state, request_id):
             connection.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?', (run_id,))
-        connection.execute(
-            "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-            ("helper-attention" if boundary is not None and boundary["child_task_id"] else "awaiting-host" if boundary is not None else "awaiting-helpers", now, run_id),
-        )
+        if active:
+            connection.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (now, run_id))
+        else:
+            connection.execute(
+                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+                ("helper-attention" if boundary is not None and boundary["child_task_id"] else "awaiting-host" if boundary is not None else "awaiting-helpers", now, run_id),
+            )
         self.board._append_event(
             connection, "workflow.boundary_updated", task_id=run_id, revision=None,
             payload={"activeRequestId": request_id, "state": state},

@@ -694,6 +694,62 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(parent["state"], "awaiting-host")
         self.assertEqual(parent["activeRequest"]["childTaskId"], child)
 
+    def test_kept_helper_boundary_commits_while_the_parent_executes_its_next_turn(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        run_id = submitted["runId"]
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": run_id})
+        approved = self.decide(
+            board,
+            view,
+            view["activeRequest"]["requestId"],
+            helpers=[
+                {
+                    "title": "helper-1",
+                    "task": "helper one",
+                    "cwd": str(self.workdir("h")),
+                    "workspace": {"kind": "worktree", "access": "write"},
+                }
+            ],
+        )
+        self.assertEqual(approved["state"], "waiting-helpers")
+        # The kept helper stays alive across the parent's next turn.
+        continued = self.continue_run(board, approved, helper_policy="keep")
+        self.assertEqual(continued["state"], "executing")
+        parent_turn = self.claim(board, claim_request_id="parent-turn-2")
+        self.assertEqual(parent_turn["claim"]["turn"]["turnIndex"], 2)
+        parent_attempt = parent_turn["claim"]["attempt"]["attemptId"]
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT active_attempt_id FROM tasks WHERE task_id=?", (run_id,)).fetchone()[0], parent_attempt)
+
+        # The kept helper raises its own boundary while the parent executes:
+        # the helper's result commits, a proxy opens on the parent, and the
+        # running parent's queue reason stays owned by its active attempt.
+        child = approved["children"][0]["taskId"]
+        helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
+        self.finish_turn(board, helper, disposition="assistance")
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["activeRequest"]["childTaskId"], child)
+        self.assertIsNone(parent["queueReason"])
+        with board.store.db.read() as connection:
+            self.assertEqual(tuple(connection.execute(
+                "SELECT active_attempt_id, queue_reason FROM tasks WHERE task_id=?", (run_id,)).fetchone()),
+                (parent_attempt, None))
+
+        # Answering the boundary while the parent still executes commits
+        # cleanly and returns the run to executing with its active attempt.
+        self.decide(board, parent, parent["activeRequest"]["requestId"], decision="decline")
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["state"], "executing")
+        self.assertIsNone(parent["queueReason"])
+        with board.store.db.read() as connection:
+            self.assertEqual(tuple(connection.execute(
+                "SELECT active_attempt_id, queue_reason FROM tasks WHERE task_id=?", (run_id,)).fetchone()),
+                (parent_attempt, None))
+
     def test_manual_continue_invalidates_auto_and_cancels_helpers(self):
         board = self.board()
         self.register(board)
