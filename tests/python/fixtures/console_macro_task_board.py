@@ -1,17 +1,17 @@
 """Reusable, fictional console/macro task board and real HTTP measurement.
 
-Run this file in a fresh interpreter with --source (or --baseline-source),
+Run this file in a fresh interpreter with --source,
 --state-root, --runtime-root and --output-root. All three writable roots must be
 explicit and empty. Nothing is copied from another board; reuse is refused.
 The source supplies its own support/MockWorkspace/catalog/native-turn fixtures.
 No daemon, Worker process, harness, account discovery or model is launched.
 
 Full scale follows the published *scale*, not an unpublished historical fixture:
-60 macros, 360 micro-task runs (including 10 helpers), 40 plain commands, 130
+60 macros, 360 micro-task runs (including 10 Lead-owned micro tasks), 40 plain commands, 130
 pending roots, 100 private SQL-injected 1,900,000-byte execution results and
 4,000 synthetic attempt files. Smoke retains every relationship at small scale.
-Only execution-result payloads bypass public admission limits; their short,
-valid turn outcomes and all relational identities remain intact.
+An early resolved request and a version 1 turn exercise reads from upgraded
+history. Large execution-result payloads are injected after admission.
 
 Each coding/scenario gets a discarded warm-up and >=5 retained samples. Writes
 finish before the request. HTTP do_GET entry/return and macro_task_list entry/
@@ -36,14 +36,13 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-BASELINE_SHA = "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc"
 BUDDY = {"harness": "dsh", "provider": "deepseek-official",
                  "model": "deepseek-flash", "effort": "off"}
 BUDDY_ID = ":".join(BUDDY.values())
@@ -57,7 +56,7 @@ SCENARIOS = ("no-write", "unrelated-meta", "unrelated-plain",
 class Recipe:
     macros: int = 60
     members_per_macro: int = 6
-    helpers: int = 10
+    leads: int = 10
     plain: int = 40
     pending_roots: int = 130
     large_results: int = 100
@@ -68,7 +67,7 @@ class Recipe:
 
     @classmethod
     def smoke(cls):
-        return cls(macros=3, members_per_macro=4, helpers=1, plain=2,
+        return cls(macros=3, members_per_macro=4, leads=1, plain=2,
                    pending_roots=4, large_results=2, result_bytes=8192,
                    evidence_files=40, routed_roots=1, accepted_roots=1)
 
@@ -137,7 +136,7 @@ class SyntheticBoard:
         self.board = None
         self.macros: list[str] = []
         self.roots: list[str] = []
-        self.helpers: list[str] = []
+        self.owned: list[str] = []
         self.completed_attempts: list[str] = []
         self.plain: list[str] = []
         self.operations = 0
@@ -186,7 +185,7 @@ class SyntheticBoard:
         self.operations += 1
         return self.board.call(operation, params)
 
-    def _submit(self, name, *, macro_task=None, macro_task_id=None, routed=False):
+    def _submit(self, name, *, macro_task=None, macro_task_id=None, routed=False, lead=False, credential=None):
 
         cwd = self.state / "fictional-project" / name
         cwd.mkdir(parents=True, exist_ok=True)
@@ -198,6 +197,11 @@ class SyntheticBoard:
         params = {"task": task, "title": title, "cwd": str(cwd), "macroTaskId": macro_task_id or "standalone",
                   "buddy": "route" if routed else BUDDY_NAME, "checkout": "worktree", "access": "write",
                   "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}
+        if lead:
+            params.update(delegationAuthority=True, access="full", accessNote="Synthetic Lead delegation")
+        if credential is not None:
+            params.pop("macroTaskId")
+            params["credential"] = credential
         response = self.call("workflow_submit", params)
         view = self.call("workflow_get", {"runId": response["runId"]})
         if routed:
@@ -218,18 +222,26 @@ class SyntheticBoard:
             decision.update(preferredBuddyId=BUDDY_ID, reselected=False)
         self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=self.board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': decision}})
 
-    def _finish(self, run_id, *, disposition="completed"):
+    def _finish(self, run_id, *, disposition="completed", claim=None, historical=False):
         from protocol.fixtures.native_turn import claim_record
-        claim = self.board.service.admit_execution(NONCE, task_id=run_id)["claim"]
+        claim = claim or self.board.service.admit_execution(NONCE, task_id=run_id)["claim"]
         attempt = claim["attempt"]
         outcome = {"disposition": disposition, "summary": "Fictional short display summary.",
                    "decisions": [], "remaining": [], "artifacts": [], "request": None}
-        if disposition == "assistance":
+        if disposition in ("attention", "assistance"):
             outcome.update(remaining=["Fictional Host review"], request={
                 "summary": "Fictional review", "attempted": "Synthetic implementation",
-                "neededWork": ["Inspect fictional output"], "acceptance": "Fictional review recorded",
-                "expectedArtifacts": ["Fictional decision"]})
-        record = claim_record(claim, outcome=outcome)
+                "neededWork": "Inspect fictional output", "acceptance": "Fictional review recorded",
+                "expectedArtifacts": []})
+        if historical:
+            from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+            from hey_my_buddy.protocol.turn_output import HISTORICAL_TURN_OUTPUT_VERSION
+            record = claim_record(claim, outcome=outcome, version=HISTORICAL_TURN_OUTPUT_VERSION)
+            # Seed an already admitted v1 record through the same identity checks used for retained turns.
+            validation = patch.object(WorkflowCoordinator, "_validate_turn", WorkflowCoordinator._validate_retained_turn)
+        else:
+            record = claim_record(claim, outcome=outcome)
+            validation = nullcontext()
         evidence = self.state / "attempts" / run_id / attempt["attemptId"]
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / "turn-output.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
@@ -239,24 +251,19 @@ class SyntheticBoard:
                   "logPaths": {}, "turn": record, "turnResultPath": str(evidence / "turn-output.json"),
                   "workspaceSeal": record_reference(self.state, self.workspace.seal(
                       self.state, manifest, run_id, attempt["attemptId"]))}
-        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
+        with validation:
+            self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
+                                          'nonce': NONCE, 'status': 'ok', 'result': result,
+                                          'shutdownConfirmed': True, 'exitCode': 0})
         if disposition == "completed":
             self.completed_attempts.append(attempt["attemptId"])
 
-    def _helper(self, parent, name):
-        view = self.call("workflow_get", {"runId": parent})
-        request_id = view["activeRequest"]["requestId"]
-        self.call("workflow_continue", {
-            "runId": parent, "requestId": request_id, "decision": "approve", "autoContinue": True,
-            "helpers": [{"title": name, "task": "Fictional helper", "cwd": str(self.state / "fictional-project"),
-                         "buddy": BUDDY_NAME, "checkout": "worktree", "access": "write",
-                         "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}],
-        })
-        with self.board.store.db.read() as connection:
-            helper = connection.execute("SELECT child_task_id FROM workflow_children WHERE parent_run_id=?"
-                                        " AND request_id=?", (parent, request_id)).fetchone()[0]
-        self.helpers.append(helper)
-        self._finish(helper, disposition="assistance")
+    def _delegate_owned(self, lead_id, name):
+        claim = self.board.service.admit_execution(NONCE, task_id=lead_id)["claim"]
+        owned = self._submit(name, credential=claim["agentCredential"])["runId"]
+        self.owned.append(owned)
+        self._finish(lead_id, disposition="waiting", claim=claim)
+        self._finish(owned, disposition="attention")
 
     def generate(self):
         r = self.recipe
@@ -273,19 +280,25 @@ class SyntheticBoard:
         pending, accepted = 0, 0
         for macro in range(r.macros):
             macro_task_id = None
-            parent = None
-            for member in range(r.members_per_macro - int(macro < r.helpers)):
+            has_lead = macro < r.leads and r.members_per_macro >= 2
+            direct = r.members_per_macro - int(has_lead)
+            for member in range(direct):
+                lead = has_lead and member == direct - 1
                 view = self._submit(f"macro-{macro:03d}-root-{member}",
                                     macro_task=f"Fictional macro {macro:03d}" if macro_task_id is None else None,
-                                    macro_task_id=macro_task_id, routed=member == 0 and macro < r.routed_roots)
+                                    macro_task_id=macro_task_id, routed=member == 0 and macro < r.routed_roots, lead=lead)
                 run_id = view["runId"]
                 self.roots.append(run_id)
                 if macro_task_id is None:
                     macro_task_id = view["macroTaskId"]
                     self.macros.append(macro_task_id)
-                    parent = run_id
+                if lead:
+                    self._delegate_owned(run_id, f"owned-{macro:03d}")
+                    continue
                 is_pending = pending < r.pending_roots
-                self._finish(run_id, disposition="assistance" if is_pending else "completed")
+                historical = is_pending and pending == 0
+                disposition = "assistance" if historical else "attention" if is_pending else "completed"
+                self._finish(run_id, disposition=disposition, historical=historical)
                 if is_pending:
                     pending += 1
                 elif accepted < r.accepted_roots:
@@ -295,16 +308,44 @@ class SyntheticBoard:
                                                   "note": "Synthetic fixture review only",
                                                   "notRequired": "Fictional fixture has no Git target"})
                     accepted += 1
-            if macro < r.helpers:
-                self._helper(parent, f"synthetic-helper-{macro}")
         for number in range(r.plain):
             self.clock.advance(1)
             view = self.board.submit_execution(**{"requestId": f"synthetic-plain-{number}", "adapter": "command",
                                              "argv": ["synthetic-never-executed"], "task": "Fictional plain record",
                                              "cwd": str(self.state / "fictional-project")})
             self.plain.append(view["task"]["runId"])
+        self._seed_early_resolution()
         self._inject_results()
         self._evidence()
+
+    def _seed_early_resolution(self):
+        """Seed the retained form of a resolved workspace conflict from an upgraded board."""
+        if not self.roots:
+            return
+        run_id = self.roots[-1]
+        view = self.call("workflow_get", {"runId": run_id})
+        turn = view["currentTurn"]
+        conflict_id = f"historical-conflict-{run_id}"
+        at = turn["updatedAt"]
+        evidence = {"manifestSha256": view["workspace"]["manifestSha256"],
+                    "entries": [{"path": "outside-scope.txt", "changed": True}],
+                    "blockingPaths": ["outside-scope.txt"]}
+        outcome = {"conflictId": conflict_id, "action": "restore", "state": "restored", "actor": {"role": "host"}}
+        with self.board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO workflow_workspace_conflicts(conflict_id,run_id,attempt_id,turn_id,observed_fingerprint,"
+                "evidence_json,state,action,resolved_paths_json,actor_role,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,'restored','restore',?,'host',?,?)",
+                (conflict_id, run_id, turn["attemptId"], turn["turnId"], hashlib.sha256(conflict_id.encode()).hexdigest(),
+                 json.dumps(evidence), json.dumps(evidence["blockingPaths"]), at, at),
+            )
+            connection.execute(
+                "INSERT INTO workflow_requests(request_id,run_id,attempt_id,turn_id,reason_code,reason_params_json,"
+                "payload_json,state,resolution_json,created_at,updated_at,decided_at)"
+                " VALUES(?,?,?,?,'workspace-scope-violation',?,'{}','resolved',?,?,?,?)",
+                (f"historical-request-{run_id}", run_id, turn["attemptId"], turn["turnId"],
+                 json.dumps({"conflictIds": [conflict_id]}), json.dumps({"legacy": True, "resolution": outcome}), at, at, at),
+            )
 
     def _inject_results(self):
         """PRIVATE FIXTURE SQL INJECTION, not a production result submission."""
@@ -336,7 +377,7 @@ class SyntheticBoard:
         from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
         with self.board.store.db.read() as connection:
             tables = ("tasks", "workflow_runs", "macro_tasks", "attempts", "workflow_turns", "workflow_requests",
-                      "workflow_children", "workflow_routes", "decision_requests", "events", "artifacts",
+                      "workflow_lead_tasks", "workflow_routes", "decision_requests", "events", "artifacts",
                       "workflow_artifacts", "workflow_integrations", "workflow_continuations")
             counts = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
             lengths = [row[0] for row in connection.execute("SELECT length(CAST(result_json AS BLOB)) FROM attempts WHERE json_type(result_json,'$.privateSyntheticInjection')='object'")]
@@ -353,12 +394,12 @@ class SyntheticBoard:
             evidence = [self.state / "attempts" / row[0] / row[1] for row in connection.execute("SELECT task_id,attempt_id FROM attempts")]
         files = [file for path in evidence for file in path.rglob("*") if file.is_file()]
         db_path = self.board.store.db.path
-        return {"synthetic": True, "recipeVersion": 1, "seed": self.seed, "recipe": asdict(self.recipe),
+        return {"synthetic": True, "recipeVersion": 2, "seed": self.seed, "recipe": asdict(self.recipe),
                 "schemaVersion": int(schema), "counts": counts, "workflowStates": states, "eventKinds": event_kinds,
                 "microTaskRuns": counts["workflow_runs"], "plainRecords": len(self.plain),
                 "pendingRoots": pending_root_count(self.board.store),
                 "largeResultBytes": lengths, "largeResultTotalBytes": sum(lengths),
-                "maxDisplaySummaryCharacters": max(len(outcome["summary"]) for outcome in outcomes),
+                "maxDisplaySummaryCharacters": max((len(outcome["summary"]) for outcome in outcomes), default=0),
                 "attemptFiles": len(files), "attemptFileBytes": sum(file.stat().st_size for file in files),
                 "databaseBytes": db_path.stat().st_size,
                 "databaseSidecarBytes": {suffix: Path(str(db_path) + suffix).stat().st_size if Path(str(db_path) + suffix).exists() else 0 for suffix in ("-wal", "-shm")},
@@ -366,7 +407,7 @@ class SyntheticBoard:
                 "subprocessLaunchAttempts": self.launch_guard.call_count,
                 "runtimeEntries": sorted(path.name for path in self.runtime.iterdir()),
                 "paths": {"state": "<private-state>", "runtime": "<private-runtime>", "database": "<private-state>/" + db_path.name},
-                "injection": "Private fixture UPDATE attempts.result_json only; admitted turn outcome unchanged",
+                "injection": "Private fixture history seed and oversized execution results",
                 "boundaries": "Synthetic native/router receipts and MockWorkspace; no native execution or Git verification"}
 
     def mutate(self, scenario, ordinal, *, relevant_macro, other_macro):
@@ -579,9 +620,7 @@ def source_digest(source):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    choices = parser.add_mutually_exclusive_group(required=True)
-    choices.add_argument("--source", type=Path)
-    choices.add_argument("--baseline-source", type=Path, help="git-archive export of the fixed baseline SHA")
+    parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--source-revision", help="Host's fixed final source SHA; recorded as declared")
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--runtime-root", type=Path, required=True)
@@ -591,7 +630,7 @@ def main(argv=None):
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--generate-only", action="store_true")
     args = parser.parse_args(argv)
-    source = (args.source or args.baseline_source).resolve()
+    source = args.source.resolve()
     state, runtime, output = (path.resolve() for path in (args.state_root, args.runtime_root, args.output_root))
     roots = (state, runtime, output)
     if any(a == b or a.is_relative_to(b) or b.is_relative_to(a) for index, a in enumerate(roots) for b in roots[index + 1:]):
@@ -619,7 +658,7 @@ def main(argv=None):
                               "error": str(error), "initialFacts": fixture.initial_facts,
                               "samples": [json.loads(line) for line in (output / "samples.jsonl").read_text(encoding="utf-8").splitlines()],
                               "aggregates": None}
-        report.update(sourceRevisionDeclared=BASELINE_SHA if args.baseline_source else args.source_revision,
+        report.update(sourceRevisionDeclared=args.source_revision,
                       sourceContentSha256=source_digest(source), helperSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                       pythonVersion=sys.version, paths={"source": "<selected-source>", "state": "<private-state>", "runtime": "<private-runtime>", "output": "<private-output>"})
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")

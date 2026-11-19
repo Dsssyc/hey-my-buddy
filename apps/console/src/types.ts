@@ -227,14 +227,14 @@ type Decision = {
   routingMode?: RoutingMode | null;
 };
 export type Lineage = {
-  kind: "micro-task" | "helper" | "decision" | "execution";
+  kind: "micro-task" | "decision" | "execution";
   parentRunId: string | null;
   rootRunId: string | null;
   project: { id: string; kind: "git" | "folder"; path: string | null; label: string } | null;
   routingTask?: { runId: string; title: string | null; titleSource: "title" | "first-line" | null; macroTaskId: string | null; macroTaskTitle: string | null } | null;
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
   delegationAuthority?: boolean;
-  /** Lead owning this micro task's root tree, including helper descendants. */
+  /** Lead owning this micro task. */
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };

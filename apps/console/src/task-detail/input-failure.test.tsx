@@ -31,7 +31,7 @@ describe("input rejection at the console response boundary", () => {
       expect(parsed.requests[0]!.reason).toEqual(reason);
       history.turns[0]!.inputFailure = failure;
       // Audit's wire form nests the request payload.
-      const wire = { ...record, audit: { ...history, requests: [{ ...record.activeRequest, payload: {}, decision: null }] }, routingHistory: { entries: [], nextCursor: null } };
+      const wire = { ...record, audit: { ...history, requests: [{ ...record.activeRequest, payload: {}, resolution: null }] }, routingHistory: { entries: [], nextCursor: null } };
       const parsedAudit = parseAudit(wire, "m1").audit;
       expect(parsedAudit.turns[0]!.inputFailure).toEqual(failure);
       expect(parsedAudit.requests[0]!.inputFailure).toEqual(failure);
@@ -173,7 +173,7 @@ describe("input rejection presentation", () => {
 
   it("shows the request's frozen failure once while waiting for Host, without repeating the summary", () => {
     const history = audit(), record = workflow(), failure = inputFailure(false);
-    const request = { ...history.requests[0]!, state: "open", reason: { code: "workflow.input-rejected", params: { harness: "codex" } }, inputFailure: failure };
+    const request = { ...history.requests[0]!, state: "open" as const, reason: { code: "workflow.input-rejected", params: { harness: "codex" } }, inputFailure: failure };
     record.activeRequest = request; record.requests = [request];
     const model = timeline(), nowMs = Date.parse("2026-09-26T11:30:00Z");
     const ctx: Context = { view: parseTask(task(), "m1"), workflow: record, audit: { ...history, requests: [request] }, routing: [], bases: {},

@@ -19,6 +19,21 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             recipe=fixture_module.Recipe.smoke(), seed=613,
         ))
 
+    def test_retained_boundary_and_early_resolution_remain_readable(self):
+        board = self.fixture.board
+        earlier = board.call("workflow_get", {"runId": self.fixture.roots[0], "includeAudit": True})
+        self.assertEqual(earlier["audit"]["turns"][0]["disposition"], "assistance")
+        self.assertEqual(earlier["activeRequest"]["state"], "open")
+
+        resolved = board.call("workflow_get", {"runId": self.fixture.roots[-1], "includeAudit": True})
+        request = resolved["audit"]["requests"][0]
+        conflict = resolved["workspaceConflicts"][0]
+        self.assertEqual(request["state"], "resolved")
+        self.assertEqual(request["resolution"], {"legacy": True, "resolution": {
+            "conflictId": conflict["conflictId"], "state": "restored", "action": "restore", "actor": {"role": "host"},
+        }})
+        self.assertEqual([], resolved["audit"]["continuations"])
+
     def test_unrelated_commits_recompute_no_macro_and_related_commits_only_one(self):
         with fixture_module.HandlerProbe(self.fixture.board) as probe:
             first, page = probe.request("identity")

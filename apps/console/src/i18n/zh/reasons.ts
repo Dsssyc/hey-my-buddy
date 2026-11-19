@@ -72,7 +72,6 @@ export default {
   "harness.shutdown-unverified": "尚未确认 harness 进程已停止。",
   "harness.timeout": "harness 响应超时。",
   "harness.version-unknown": "无法确认 harness 的版本，请检查 CLI 后检测。",
-  "helpers-settled": "授权的协助任务已到达边界，等待 Host 决定下一步。",
   "history.reason-unavailable": "历史记录 {{recordId}} 的原因无法还原。",
   "interrupted-before-delivery": "执行在交付结果之前被中断。",
   "inquiry-answer-empty": "问询桥报告已回答，但没有可用的回答文字。",

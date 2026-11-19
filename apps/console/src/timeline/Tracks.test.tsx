@@ -214,7 +214,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(slot("track-label")?.textContent).toContain("claude-opus-5-5");
   });
   it("retains orange diamonds after human waits and acceptance waits settle", () => {
-    track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);
+    track([execution({ spanId: "h", kind: "host", state: "superseded", expectedSeconds: null, inquiries: null })]);
     expect(slot("host-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
     expect(slot("waiting-diamond")?.getAttribute("data-kind")).toBe("hand");

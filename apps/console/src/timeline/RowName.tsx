@@ -23,14 +23,14 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   list?: boolean;
   /** The taller lane-header row (60px) beside the ordinary 52px one. */
   tall?: boolean;
-  /** The member's tree level inside its Lead lane. */
-  laneLevel?: number;
+  /** The row belongs to the Lead lane. */
+  owned?: boolean;
   /** A Lead's stripe starts at the lane's left edge, before its separate disclosure. */
   lead?: boolean;
   /** A word the accessible name starts with, such as the Lead badge. */
   ariaPrefix?: string;
   onClick: () => void; onEnter: () => void; onLeave: () => void; onFocus: (event: FocusEvent<HTMLButtonElement>) => void; onBlur: () => void;
-}>(function RowName({ row, rows, tabIndex, current, fresh, list, tall, laneLevel, lead, ariaPrefix, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
+}>(function RowName({ row, rows, tabIndex, current, fresh, list, tall, owned, lead, ariaPrefix, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
   const state = rowStateInfo(row, rows);
   const title = displayTitle(row.titleSource, row.title);
@@ -42,7 +42,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
     : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
     : row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
   const mark = paused ? "paused" : tone === "live" ? "live" : row.state === "delivered" ? "review"
-    : row.state === "awaiting-host" || row.kind !== "helper" && (row.state === "failed" || row.state === "cancelled") && !["queued", "running", "reconciliation-needed"].includes(row.status) ? "hand"
+    : row.state === "awaiting-host" || (row.state === "failed" || row.state === "cancelled") && !["queued", "running", "reconciliation-needed"].includes(row.status) ? "hand"
       : null;
   const showState = !state.settled;
   return <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
@@ -52,11 +52,10 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       fresh && "row-fresh",
       tall ? "h-[60px] border-t-0" : "h-[52px]",
       current ? "bg-selected-row hover:bg-selected-row" : "hover:bg-sunk")}
-    style={{ paddingLeft: 13 + (laneLevel ?? row.depth) * 18 }} data-state-tone={tone ?? "queued"}>
-    {Array.from({ length: laneLevel ?? 0 }, (_, index) => <span key={index} aria-hidden="true" data-slot="lane-guide" data-level={index + 1} className="absolute inset-y-0 border-l border-line" style={{ left: 13.5 + index * 18 }}/>)}
-    {tone && <div aria-hidden="true" data-slot="row-state-edge" className="pointer-events-none absolute inset-y-0 w-[3px]" style={{ left: lead ? -28 : (laneLevel === undefined ? 0 : 12.5 + (laneLevel - 1) * 18), background: `var(--${tone === "hand" ? "hand-mark" : tone === "live" ? "ink" : tone})` }}/>}
+    style={{ paddingLeft: owned ? 31 : 13 }} data-state-tone={tone ?? "queued"}>
+    {owned && <span aria-hidden="true" data-slot="lane-guide" className="absolute inset-y-0 border-l border-line" style={{ left: 13.5 }}/>}
+    {tone && <div aria-hidden="true" data-slot="row-state-edge" className="pointer-events-none absolute inset-y-0 w-[3px]" style={{ left: lead ? -28 : (owned ? 12.5 : 0), background: `var(--${tone === "hand" ? "hand-mark" : tone === "live" ? "ink" : tone})` }}/>}
     <span className="flex w-full min-w-0 items-center gap-1.5 text-sm">
-      {row.kind === "helper" && <span aria-hidden="true" className="text-ink3">└</span>}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <ScrollingTitle text={title.fullText} className="font-medium"/>
         {row.fixes && <FixLink title={repairTitle!} label={repair!}/>}

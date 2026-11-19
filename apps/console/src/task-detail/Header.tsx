@@ -24,8 +24,8 @@ export type StateWord = { key: "confirmingStop" | "running" | "stopping" | "unkn
 const queueReasons = [
   "awaiting-execution", "capacity", "model-capacity", "cwd-overlap", "capability-mismatch",
   "awaiting-model-selection", "awaiting-buddy-validation", "awaiting-routing-shutdown",
-  "awaiting-workspace-preparation", "awaiting-helpers", "awaiting-host", "awaiting-owned",
-  "awaiting-acknowledgement", "helper-attention", "attempt-uncertain-after-restart",
+  "awaiting-workspace-preparation", "awaiting-host", "awaiting-owned",
+  "awaiting-acknowledgement", "attempt-uncertain-after-restart",
   "harness-probe-unknown", "workflow-routing-fenced", "workflow-accepted",
   "workflow-concluded", "workflow-cancelled", "workflow-failed", "router-retry-in-progress",
   "router-dispatch-unfinished", "decision-dispatch-superseded", "decision-dispatch-advanced",
@@ -49,12 +49,10 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
     case "delivered": return { key: "review", mark: "review" };
     case "accepted": return { key: "accepted", mark: "done" };
-    case "failed": return task.lineage?.kind === "helper" ? { key: "failed", mark: "fail" }
-      : { key: lead ? "failedLead" : "failedHost", mark: "hand" };
-    case "cancelled": return task.lineage?.kind === "helper" ? { key: "ended", mark: "idle" }
-      : { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
+    case "failed": return { key: lead ? "failedLead" : "failedHost", mark: "hand" };
+    case "cancelled": return { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
     case "concluded": return conclusionStatus === "failed" ? { key: "failed", mark: "fail" } : { key: "ended", mark: "idle" };
-    case "executing": case "waiting-helpers": case "waiting-owned": return { key: "running", mark: "live" };
+    case "executing": case "waiting-owned": return { key: "running", mark: "live" };
     default: break;
   }
   if (task.state === "running") return { key: "running", mark: "live" };

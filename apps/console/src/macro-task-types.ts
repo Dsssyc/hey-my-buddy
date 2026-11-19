@@ -15,7 +15,7 @@ const macroTaskSummaryFields = z.looseObject({
   paused: z.object({ pausedAt: dateString, shutdownConfirmed: z.boolean() }).nullable(),
   createdAt: z.string().nullable(),
   lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended", "empty"]),
-  counts: z.looseObject({ roots: safeCount, helpers: safeCount, accepted: safeCount, failed: safeCount,
+  counts: z.looseObject({ roots: safeCount, accepted: safeCount, failed: safeCount,
     active: safeCount, host: safeCount, review: safeCount, ended: safeCount, unfinished: safeCount, delivered: safeCount }),
   matchingRuns: safeCount, rootRunIds: z.array(z.string()),
 });
@@ -59,7 +59,7 @@ const timelineRowSchema = z.looseObject({
   : !Object.hasOwn(row, "fixesTitle") && !Object.hasOwn(row, "fixesTitleSource"))
   && (!Object.hasOwn(row, "fixedBy") || row.fixedBy !== undefined));
 export type TimelineRow = z.infer<typeof timelineRowSchema> & {
-  runId: string; parentRunId: string | null; rootRunId: string;
+  runId: string; rootRunId: string;
   titleSource: "title" | "task" | "none";
   createdAt: string;
   /** Micro task workflow state (for example executing, awaiting-host, delivered, accepted). */
@@ -72,10 +72,8 @@ export type TimelineRow = z.infer<typeof timelineRowSchema> & {
   category: MacroTaskCategory;
   /** Every recorded attempt proved its stop; unknown is never reported as stopped. */
   shutdownConfirmed: boolean;
-  /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
-  depth: number;
-  kind: "micro-task" | "helper";
-  /** Lead owning this row's root tree, including helper descendants. */
+  kind: "micro-task";
+  /** Lead owning this micro task. */
   rootLeadRunId: string | null;
   /** Recorded owner of a Lead's own micro task, if any. */
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
@@ -115,7 +113,7 @@ export type TimelineSpan = z.infer<typeof timelineSpanSchema> & {
   /**
    * queue: queued (open) or admitted; execution/routing: the attempt's execution state
    * (starting, executing, finalizing, uncertain, finished, or rejected before the model started); host: the request state
-   * (open, approved, declined, superseded, cancelled).
+   * (open, resolved, superseded, cancelled).
    */
   state: string;
   attemptId: string | null; turnId: string | null; turnIndex: number | null;
@@ -125,7 +123,7 @@ export type TimelineSpan = z.infer<typeof timelineSpanSchema> & {
   terminationReason?: string | null;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
-  requestKind?: string; reason?: Reason | null; decisionTaskId?: string;
+  reason?: Reason | null; decisionTaskId?: string;
   /** Native usage of the span's own execution; a shape the console does not read is unknown. */
   tokenUsage?: unknown;
   /** Exact recorded decision; never infer it from the run's current route. */
@@ -135,7 +133,7 @@ export type TimelineEvent = {
   seq: number; runId: string;
   /** A current service event kind; kept open for newer kinds. */
   kind: string; at: string;
-  decision: string | null; verdict: string | null; state: string | null; strategy: string | null; note: string | null;
+  verdict: string | null; state: string | null; strategy: string | null; note: string | null;
   actor: Actor | null;
   attemptId: string | null; requestId: string | null; artifactId: string | null;
   integrationId?: string | null; continuationId?: string | null; eventKind?: string;

@@ -75,15 +75,18 @@ async function fixture(page: Page) {
     if (request.operation !== "workflow_get" || request.params.runId !== run) return route.continue();
     const response = await route.fetch();
     const data = await response.json();
+    const boundary = data.result.requests.find((request: { requestId: string }) => request.requestId === "req-a1-1");
+    boundary.reason = null;
     const history = data.result.audit;
     if (history) {
       const first = history.turns.find((turn: { turnIndex: number }) => turn.turnIndex === 1);
       first.disposition = "assistance";
       first.summary = "Worker 请求的摘要原文不应重复出现在回合结果里";
       const request = history.requests.find((request: { requestId: string }) => request.requestId === "req-a1-1");
+      request.reason = null;
       request.summary = "## Worker 请求\n\n需要核对 `sample/` 的边界。";
       request.attempted = "已读取 **工作树**。";
-      request.neededWork = ["批准读取 `sample/`"];
+      request.neededWork = ["核对 `sample/`"];
       request.acceptance = "完成 **路径核对**。";
       request.expectedArtifacts = ["`boundary.md` 与检查结果"];
     }
@@ -203,17 +206,17 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
   });
 
   test("distinguishes a request from its response by a neutral rule and gray kind, and removes explanatory hovers", async ({ page }) => {
-    await open(page, `#tasks/${macro}/${run}/5`);
+    await open(page, `#tasks/${macro}/${run}/4`);
     const quote = pane(page).locator('[data-slot=request-quote]');
     await expect(quote.locator("h2")).toHaveText("Worker 请求");
     await expect(quote).toHaveCSS("border-left-width", "2px");
     const kind = quote.locator('[data-slot=request-kind]');
-    await expect(kind).toHaveText("协助请求");
+    await expect(kind).toHaveText("需要决定");
     const colors = await kind.evaluate(node => ({ kind: getComputedStyle(node).color, label: getComputedStyle(node.closest("blockquote")!.querySelector("dt")!).color }));
     expect(colors.kind).toBe(colors.label);
     expect(await contrastOf(kind)).toBeGreaterThanOrEqual(4.5);
-    const response = pane(page).locator('[data-slot=host-response]').first();
-    await expect(response).toContainText("继续。读取合成样例目录已获批准");
+    const response = pane(page).locator('[data-slot=workspace-resolution]');
+    await expect(response).toContainText("已恢复");
     expect((await response.boundingBox())!.y).toBeGreaterThan((await quote.boundingBox())!.y);
     await expect(pane(page).locator("dt").filter({ hasText: /^(谁|决定|时刻)$/ })).toHaveCount(0);
     await kind.hover();

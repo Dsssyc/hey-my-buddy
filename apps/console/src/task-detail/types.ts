@@ -36,11 +36,10 @@ export type CompactRequest = {
   reason?: Reason | null;
   inputFailure?: InputFailure;
   requestId: string;
-  kind: string;
-  state: string;
+  state: "open" | "resolved" | "superseded" | "cancelled";
   createdAt: string;
   decidedAt: string | null;
-  childTaskId: string | null;
+  decisionId: string | null;
   routing: boolean;
 };
 
@@ -138,7 +137,8 @@ export type Workflow = {
   activeRequest: OpenRequest | null;
   requests: CompactRequest[];
   counts: { turns: number; openRequests: number };
-  children: { taskId: string; role: string; state: "active" | "attention" | "succeeded" | "failed" | "cancelled" }[];
+  ownedMicroTasks: { runId: string }[];
+  workspaceConflicts: WorkspaceConflict[];
   artifacts: Artifact[];
   integrations: Integration[];
   finalArtifactId: string | null;
@@ -147,15 +147,32 @@ export type Workflow = {
   shutdown: { selfConfirmed: boolean; descendantsConfirmed: boolean; unconfirmedCount: number } | null;
 };
 
-/** One full request of the audit, with the decision made on it. */
+/** One full request of the audit, with any recorded workspace resolution. */
 export type AuditRequest = OpenRequest & {
   turnId: string | null;
-  decision: { decision: string | null; note: string | null; actor: Actor | null } | null;
-  /** The routing decision a routing boundary stopped at. */
-  decisionId: string | null;
+  resolution: WorkspaceResolution | null;
 };
 
-export type Continuation = { continuationId: string; turnId: string | null; input: string; createdAt: string; kind: string; note: string | null };
+type ResolutionAction = "restore" | "adopt" | "abandon";
+type ResolutionState = "open" | "restored" | "adopted" | "abandoned";
+
+export type WorkspaceConflict = {
+  conflictId: string;
+  action: ResolutionAction | null;
+  actor: Actor | null;
+  note: string | null;
+};
+
+export type WorkspaceResolution = {
+  conflictId: string;
+  state: ResolutionState;
+  action: ResolutionAction | null;
+  actor: Actor | null;
+  note: string | null;
+  continuationBlocked: boolean;
+};
+
+export type Continuation = { continuationId: string; requestId: string | null; turnId: string | null; input: string; createdAt: string; kind: string; note: string | null };
 
 /** What only the audit read carries (`workflow_get {runId, includeAudit: true}`). */
 export type Audit = {

@@ -261,7 +261,7 @@ class PreviewFixtureTest(unittest.TestCase):
             recorded = json.loads((fixtures / "normal" / timeline_path).read_text(encoding="utf-8"))
             for event in recorded["events"]:
                 self.assertFalse({"label", "summary"} & event.keys())
-                self.assertTrue({"decision", "verdict", "state", "strategy", "note"} <= event.keys())
+                self.assertTrue({"verdict", "state", "strategy", "note"} <= event.keys())
         self.assertEqual("concluded", rows["preview-run-b2"]["state"])
         self.assertEqual("failed", rows["preview-run-b2"]["conclusionStatus"])
         self.assertEqual("preview-run-b1", rows["preview-run-b2"]["rootLeadRunId"])
@@ -301,7 +301,7 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertNotIn("hostId",owned)
             self.assertNotIn("sourceHostId",owned["task"]["lineage"])
             self.assertNotIn("currentHostId",owned["task"]["lineage"])
-            self.assertIsNone(row["parentRunId"], "Lead-owned work is an independent micro task")
+            self.assertNotIn("parentRunId", row)
             self.assertEqual(owned["runId"], row["rootRunId"])
             self.assertIsNone(owned["finalAttemptId"])
             self.assertIsNone(owned["finalArtifactId"])
@@ -702,7 +702,7 @@ class PreviewDeletionTest(unittest.TestCase):
             settled = self.call(server, "/api/macro-tasks/" + preview.MACRO_C + "/timeline")[1]
             self.assertEqual(settled["macroTask"]["counts"]["unfinished"], 0)
             for row in settled["rows"]:
-                if row["runId"] in {"preview-run-d2", "preview-run-d3", "preview-run-d5-h1", "preview-run-d5-h2"}:
+                if row["runId"] in {"preview-run-d2", "preview-run-d3"}:
                     self.assertEqual(row["state"], "concluded")
                     task = self.call(server, "/api/tasks/" + row["runId"])[1]
                     self.assertEqual(task["workflow"]["state"], "concluded")
@@ -871,7 +871,7 @@ class PreviewDeletionTest(unittest.TestCase):
                     self.assertEqual("none", untitled["titleSource"])
                 elif group == self.preview.MACRO_C:
                     self.assertEqual(0, preview["blockerTotal"])
-                    self.assertEqual(4, preview["unconcludedFailureCount"])
+                    self.assertEqual(2, preview["unconcludedFailureCount"])
                     self.assertGreater(scope["artifacts"]["count"], 0)
                     self.assertEqual(16384, scope["artifacts"]["bytes"])
                     self.assertIsNone(scope["sessions"]["bytes"])

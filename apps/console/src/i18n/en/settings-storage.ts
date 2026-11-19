@@ -24,7 +24,7 @@ export default {
     "retention-history-unproven": "Retention history not proven", "retained-runtime": "Retained runtime", "owner-unproven": "Ownership not proven", "linked-path": "Linked path",
     "changing": "Contents are changing while being measured",
     "not-accepted": "Micro task not accepted", "final-artifact-missing": "Final artifact missing", "integration-missing": "Integration record missing",
-    "unresolved-conflict": "Unresolved conflicts", "active-children": "Active assistance tasks", "workspace-dependency": "Checkout dependencies not met",
+    "unresolved-conflict": "Unresolved conflicts", "workspace-dependency": "Checkout dependencies not met",
     "durable-record": "Durable record", "current-backup": "Retained backup", "runtime-owned-by-default-state": "Runtime belongs to the default blackboard",
     "candidate-changed": "Data changed", STORAGE_CHANGED: "Candidate changed", STORAGE_UNSAFE: "Removal path identity changed", STORAGE_PROTECTED: "Protected data", "filesystem-error": "Filesystem error",
   },

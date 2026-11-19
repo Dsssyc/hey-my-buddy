@@ -162,19 +162,23 @@ describe("what the steps do not make up", () => {
     }
   });
 
-  it("gives a Host wait the request it is for, and the step that ends it, whether a decision or a continuation names that request or not", () => {
+  it("gives a Host wait the request it is for, and the step that ends it, using the recorded request identity", () => {
     const result = buildSteps(timeline(), "m1", NOW);
     expect(result.steps[3]!.waits[0]).toMatchObject({ kind: "host", requestId: "req-1" });
     expect(result.steps.flatMap(step => step.waits).filter(wait => wait.kind !== "host").every(wait => wait.requestId === null)).toBe(true);
-    // Two requests answered at the same instant, by continuations that name no request: each wait ends in its own.
+    // The events carry continuation IDs. Deliberately give the answers a different order and instant from the waits.
     const twins = timeline();
     twins.spans = [twins.spans[0]!, twins.spans[1]!, twins.spans[2]!,
-      span("hA", "host", at("10:30"), at("10:40"), { state: "approved", requestId: "req-A" }),
-      span("hB", "host", at("10:31"), at("10:40"), { state: "approved", requestId: "req-B" }),
+      span("hA", "host", at("10:30"), at("10:40"), { state: "superseded", requestId: "req-A" }),
+      span("hB", "host", at("10:31"), at("10:40"), { state: "superseded", requestId: "req-B" }),
       twins.spans[5]!];
-    twins.events = [event(1, "dispatch", at("10:00")), event(2, "continue", at("10:40"), { continuationId: "c-A" }), event(3, "continue", at("10:40"), { continuationId: "c-B" })];
-    const continued = buildSteps(twins, "m1", NOW).steps.filter(step => step.kind === "continue");
-    expect(continued.map(step => step.waits.map(wait => wait.requestId))).toEqual([["req-A"], ["req-B"]]);
+    twins.events = [event(1, "dispatch", at("10:00")), event(2, "continue", at("10:41"), { continuationId: "c-B" }), event(3, "continue", at("10:41"), { continuationId: "c-A" })];
+    const response = { turnId: null, input: "Input", createdAt: at("10:41"), kind: "manual", note: null };
+    const continued = buildSteps(twins, "m1", NOW, [
+      { ...response, continuationId: "c-A", requestId: "req-A" },
+      { ...response, continuationId: "c-B", requestId: "req-B" },
+    ]).steps.filter(step => step.kind === "continue");
+    expect(continued.map(step => step.waits.map(wait => wait.requestId))).toEqual([["req-B"], ["req-A"]]);
   });
 
   it("keeps spans that start at the same instant, or have no start, in the order the timeline gave them", () => {

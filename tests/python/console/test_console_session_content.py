@@ -22,11 +22,11 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         run = self.submit(board, **({'create_macro': {'title': 'Session fixture', 'goal': 'Session fixture'}} if macro else {}))
         task_id, attempt_id = run['runId'], 'session-attempt'
         now = board.store.now()
+        group_id = run.get('macroTaskId') or 'run:' + task_id
         with board.store.db.write() as connection:
             connection.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,'
-                               'execution_state,adapter,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                               (attempt_id, task_id, 1, 'fixture', 'executing', harness, now, now))
-        group_id = run.get('macroTaskId') or 'run:' + task_id
+                               'execution_state,adapter,created_at,updated_at,session_group_id) VALUES(?,?,?,?,?,?,?,?,?)',
+                               (attempt_id, task_id, 1, 'fixture', 'executing', harness, now, now, group_id))
         path = private_dirs.session_record_path(board.directory, group_id, attempt_id)
         events = [self.event(attempt_id, f'消息 {i}') for i in range(count)]
         header = self.line(SESSION_FORMAT.model_dump(mode='json', by_alias=True, exclude_none=True))

@@ -114,7 +114,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}/preview-run-a2/5$`));
       await expect(page.locator('[data-slot="detail-strip"] [data-slot="event-cluster"][aria-pressed="true"]')).toHaveCount(1);
-      await expect(page.locator('[data-slot="detail-pane"]').getByRole("heading", { name: locale === "zh-CN" ? "继续" : "Continue", exact: true })).toBeVisible();
+      const pane = page.locator('[data-slot="detail-pane"]');
+      await expect(pane.getByRole("heading", { name: locale === "zh-CN" ? "决定" : "Decision", exact: true })).toBeVisible();
+      await expect(pane.locator('[data-slot="workspace-resolution"]')).toContainText(locale === "zh-CN" ? "已采纳" : "Adopted");
       await expectNoSidewaysScroll(page);
     });
 

@@ -89,8 +89,15 @@ class ReadmeSceneTests(unittest.TestCase):
                         self.assertLessEqual(turn["startedAt"], entry["createdAt"])
                         self.assertIsNone(turn["finishedAt"])
                     if entry["activeRequest"]:
-                        self.assertEqual("assistance", entry["attempts"][-1]["disposition"])
+                        self.assertEqual("attention", entry["attempts"][-1]["disposition"])
                         self.assertEqual(entry["attempts"][-1]["finishedAt"], entry["activeRequest"]["createdAt"])
+                samples = p.FIXTURES["runs"]["readme-samples"]
+                request, = p.request_records(samples)
+                continuation, = samples["continuations"]
+                self.assertEqual("superseded", request["state"])
+                self.assertEqual(request["requestId"], continuation["requestId"])
+                self.assertEqual(["dispatch", "continue", "integrate", "accept"],
+                                 [event["kind"] for event in samples["markers"]])
 
     def test_rejection_changes_buddy_in_the_same_task_and_preserves_event_order(self):
         p = self.scene("en")

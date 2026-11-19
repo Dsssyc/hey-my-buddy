@@ -240,7 +240,7 @@ EMIT_LAYOUT = {
                      "snapshot-missing-tasks.json", "workflow-missing-state.json"),
 }
 
-MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.request_approved",
+MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.workspace_resolved",
                  "continue": "workflow.continued", "integrate": "workflow.integration_recorded",
                  "accept": "workflow.acknowledged", "reject": "workflow.acknowledged",
                  "conclude": "workflow.host_concluded",
@@ -412,7 +412,7 @@ def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_sta
 def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, attempt_id: str | None = None,
          request_id: str | None = None, buddy: dict | None = None,
          confirmed: bool | None = None, uncertain: bool = False, generation: int | None = None,
-         disposition: str | None = None, error: str | None = None, request_kind: str | None = None,
+         disposition: str | None = None, error: str | None = None, request_reason: dict | None = None,
          summary: str | None = None, decision_task: str | None = None,
          turn_index: int | None = None, result_status: str | None = None,
          routing_record: dict | None = None) -> dict:
@@ -422,7 +422,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
             "shutdownConfirmed": confirmed, "uncertain": uncertain,
             "clockSkew": bool(start and end and end < start)}
     extras = {"generation": generation, "disposition": disposition, "error": error,
-              "requestKind": request_kind, "summary": summary, "decisionTaskId": decision_task}
+              "reason": request_reason, "summary": summary, "decisionTaskId": decision_task}
     view.update({key: value for key, value in extras.items() if value is not None})
     if routing_record is not None:
         view["decisionId"] = routing_record["decisionId"]
@@ -438,27 +438,27 @@ def marker(at: str, kind: str, *, actor: dict[str, str] | None = None, note: str
     names = {"request_id": "requestId", "artifact_id": "artifactId", "integration_id": "integrationId",
              "continuation_id": "continuationId", "attempt_id": "attemptId"}
     return {"seq": 0, "runId": None, "kind": kind, "at": at,
-            "decision": None, "verdict": None, "state": None, "strategy": None, "note": note,
+            "verdict": None, "state": None, "strategy": None, "note": note,
             "actor": actor, "attemptId": None,
             "requestId": None, "artifactId": None, "integrationId": None, "continuationId": None,
             "eventKind": MARKER_EVENTS[kind], **{names.get(key, key): value for key, value in extra.items()}}
 
 
 ACTIVE_REQUEST = {
-    "requestId": "req-a2-2", "kind": "assistance", "routing": False, "state": "open",
+    "requestId": "req-a2-2", "decisionId": None, "routing": False, "state": "open",
     "createdAt": instant(9, 20), "decidedAt": None,
     "summary": "需要 Host 决定是否允许在合成预览中访问外部样例仓库（等待中）",
     "attempted": "合成预览请求已执行到需要 Host 决定的位置",
     "neededWork": ["由 Host 确认合成预览范围"], "expectedArtifacts": [],
-    "acceptance": "合成预览：仅检查渲染分支，不产生真实验收", "childTaskId": None, "reason": None,
+    "acceptance": "合成预览：仅检查渲染分支，不产生真实验收", "reason": None,
 }
 LEAD_REQUEST = {
-    "requestId": "req-b4-1", "kind": "assistance", "routing": False, "state": "open",
+    "requestId": "req-b4-1", "decisionId": None, "routing": False, "state": "open",
     "createdAt": instant(7, 25), "decidedAt": None,
     "summary": "需要 Lead 决定路径样例的核对范围",
     "attempted": "已核对合成路径样例，等待 Lead 处理差异",
     "neededWork": ["由 Lead 确定后续核对范围"], "expectedArtifacts": [],
-    "acceptance": "合成预览：只展示等待 Lead 的请求", "childTaskId": None, "reason": None,
+    "acceptance": "合成预览：只展示等待 Lead 的请求", "reason": None,
 }
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, note: str,
             constraints: dict, *,
@@ -577,8 +577,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         "activity": activity,
         "cancellation": cancellation,
         "checkout": checkout, "access": access,
-        "kind": ("decision" if adapter == "decision" else "execution") if not micro_task else (
-            "helper" if parent is not None else "micro-task"),
+        "kind": ("decision" if adapter == "decision" else "execution") if not micro_task else "micro-task",
     }
 
 
@@ -714,7 +713,7 @@ def continuation(continuation_id: str, attempt_id: str, text: str, *, request_id
                  created: str, note: str | None = None) -> dict:
     """One Host continuation as the audit lists it: the input the next turn was given."""
     return {"continuationId": continuation_id, "kind": "manual", "state": "consumed", "requestId": request_id,
-            "note": note, "helperPolicy": "none", "helperOutcomes": [], "input": text,
+            "note": note, "input": text,
             "attemptId": attempt_id, "turnId": f"turn-{attempt_id}",
             "createdAt": created, "consumedAt": created}
 
@@ -748,10 +747,10 @@ def input_rejection_runs() -> list[dict]:
         entries.append(run(run_id, project="alpha", group=MACRO_INPUT, title=title, title_source="title",
             task_text="合成输入拒收：核对声明、实际总量与六个部分。", created=instant(1, 40), updated=instant(1, 42),
             state="awaiting-host", status="failed", category="host", buddy=buddy, result=True,
-            active_request={"requestId": request_id, "kind": "attention", "routing": False, "state": "open",
+            active_request={"requestId": request_id, "decisionId": None, "routing": False, "state": "open",
                             "summary": "Synthetic input rejection", "reason": explanation, "inputFailure": failure,
                             "attempted": None, "neededWork": [], "expectedArtifacts": [], "acceptance": None,
-                            "childTaskId": None, "createdAt": instant(1, 42), "decidedAt": None},
+                            "createdAt": instant(1, 42), "decidedAt": None},
             attempts=[attempt(attempt_id, 1, "finished", True, instant(1, 41), instant(1, 42), buddy,
                               error="Synthetic input rejection", disposition="attention", result_status="failed",
                               result={"code": "HARNESS_INPUT_REJECTED", "inputFailure": failure})],
@@ -759,7 +758,7 @@ def input_rejection_runs() -> list[dict]:
                         attempt_id=attempt_id, buddy=buddy, confirmed=True, generation=1, turn_index=1,
                         result_status="failed", error="Synthetic input rejection"),
                    span(f"host:{request_id}", "host", instant(1, 42), None, "open", request_id=request_id,
-                        request_kind="attention", summary="Synthetic input rejection")],
+                        summary="Synthetic input rejection")],
             markers=[marker(instant(1, 40), "dispatch", actor=host_actor())]))
     return entries
 
@@ -784,9 +783,9 @@ def build_runs() -> dict[str, dict]:
                 span("execution:att-a1-1", "execution", instant(6, 5), instant(6, 40), "finished",
                      attempt_id="att-a1-1", buddy=CFG_FLASH, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
-                span("host:req-a1-1", "host", instant(6, 40), instant(6, 44), "approved",
-                     request_id="req-a1-1", request_kind="assistance",
-                     summary="需要 Host 批准在隔离工作树外读取合成样例目录"),
+                span("host:req-a1-1", "host", instant(6, 40), instant(6, 44), "resolved",
+                     request_id="req-a1-1", request_reason=reason("workspace-scope-violation", conflictIds=["conflict-a1"]),
+                     summary="需要 Host 处置工作树中超出授权范围的改动"),
                 span("queue:att-a1-2", "queue", instant(6, 45), instant(6, 46), "admitted",
                      attempt_id="att-a1-2"),
                 span("execution:att-a1-2", "execution", instant(6, 46), instant(7, 0), "finished",
@@ -803,7 +802,7 @@ def build_runs() -> dict[str, dict]:
             ],
             markers=[
                 marker(instant(6, 0), "dispatch", actor=host_actor()),
-                marker(instant(6, 44), "decide", actor=host_actor(), request_id="req-a1-1", decision="approve"),
+                marker(instant(6, 44), "decide", actor=host_actor(), request_id="req-a1-1"),
                 marker(instant(6, 45), "continue", actor=host_actor(), continuation_id="cont-a1-1"),
                 marker(instant(7, 3), "integrate", actor=host_actor(), artifact_id="art-a1",
                        integration_id="int-a1", strategy="merge", state="verified"),
@@ -825,9 +824,9 @@ def build_runs() -> dict[str, dict]:
                 message("inq-a1-3", None, "上一轮停下了吗？", created=instant(6, 42),
                         state="discarded", reason=reason("inquiry-root-turn-ended")),
             ],
-            continuations=[continuation("cont-a1-1", "att-a1-2", "继续。读取合成样例目录已获批准；把路径边界也核对一遍。",
-                                        request_id="req-a1-1", created=instant(6, 45), note="批准读取后继续")]),
-        run("preview-run-a1-h1", project="alpha", group=MACRO_A, parent="preview-run-a1",
+            continuations=[continuation("cont-a1-1", "att-a1-2", "继续。核对恢复后的合成样例目录及路径边界。",
+                                        request_id=None, created=instant(6, 45), note="恢复后继续")]),
+        run("preview-run-a1-h1", project="alpha", group=MACRO_A,
             title="补充 schema 升级离线副本的验证测试", title_source="title",
             task_text="为 board_prepare 的离线副本补充验证测试，覆盖行数不变与来源文件哈希不变。",
             created=instant(6, 20), updated=instant(6, 55), state="delivered", status="completed",
@@ -857,7 +856,7 @@ def build_runs() -> dict[str, dict]:
             ],
             markers=[marker(instant(6, 20), "dispatch", actor=host_actor())],
             artifacts=[artifact("art-a1h", "att-h1-2", "/synthetic-preview/diffs/a1h.diff", ["tests/python/test_board_prepare.py"])]),
-        run("preview-run-a1-h1-h1", project="alpha", group=MACRO_A, parent="preview-run-a1-h1",
+        run("preview-run-a1-h1-h1", project="alpha", group=MACRO_A,
             title="核对离线副本的跨平台路径边界", title_source="task",
             task_text="核对 Windows 与 macOS 下离线副本路径大小写与分隔符的边界记录。",
             created=instant(6, 56), updated=instant(7, 2), state="executing", status="reconciliation-needed",
@@ -876,7 +875,7 @@ def build_runs() -> dict[str, dict]:
             markers=[marker(instant(6, 56), "dispatch", actor=host_actor())]),
         run("preview-run-a2", project="alpha", group=MACRO_A,
             title="修正 Host 等待片段与决定标记的渲染", title_source="title",
-            task_text="修正第一轮时间轴中等待 Host 的开放片段、决定标记与协助请求的呈现。",
+            task_text="修正第一轮时间轴中等待 Host 的开放片段、决定标记与边界请求的呈现。",
             created=instant(8, 30), updated=instant(9, 20), state="awaiting-host", status="completed",
             category="host", buddy=CFG_CLAUDE, result=True, continuation_count=1,
             routing=ROUTING_A2_ABSTENTION,
@@ -891,9 +890,9 @@ def build_runs() -> dict[str, dict]:
                 span("execution:att-a2-1", "execution", instant(8, 36), instant(8, 55), "finished",
                      attempt_id="att-a2-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
-                span("host:req-a2-1", "host", instant(8, 55), instant(9, 0), "declined",
-                     request_id="req-a2-1", request_kind="routing",
-                     summary="合成预览：路由需要 Host 决定，已按预览策略拒绝"),
+                span("host:req-a2-1", "host", instant(8, 55), instant(9, 1), "resolved",
+                     request_id="req-a2-1", request_reason=reason("workspace-scope-violation", conflictIds=["conflict-a2"]),
+                     summary="合成预览：Host 采纳了超出授权范围的改动"),
                 span("routing:att-router-a2-abstention", "routing", instant(9, 0), instant(9, 1), "finished",
                      attempt_id="att-router-a2-abstention", confirmed=True, disposition="abstention",
                      decision_task="preview-run-a2-router-abstention", routing_record=ROUTING_A2_ABSTENTION),
@@ -903,7 +902,6 @@ def build_runs() -> dict[str, dict]:
                      attempt_id="att-a2-2", buddy=CFG_CLAUDE, confirmed=True, generation=2,
                      disposition="assistance", turn_index=2),
                 span("host:req-a2-2", "host", instant(9, 20), None, "open", request_id="req-a2-2",
-                     request_kind="assistance",
                      summary="需要 Host 决定是否允许在合成预览中访问外部样例仓库（等待中）"),
             ],
             attempts=[
@@ -911,15 +909,15 @@ def build_runs() -> dict[str, dict]:
                         result="合成预览：第一轮结束，交给 Host 决定。",
                         usage=usage("zcode-native", 6000, 4000, 900)),
                 attempt("att-a2-2", 2, "finished", True, instant(9, 2), instant(9, 20), CFG_CLAUDE,
-                        result="合成预览：第二轮结束，需要 Host 协助。",
+                        disposition="assistance", result="合成预览：第二轮结束，需要 Host 决定。",
                         usage=usage("claude-native", 9500, 7000, 1100)),
             ],
             markers=[
                 marker(instant(8, 30), "dispatch", actor=host_actor()),
-                marker(instant(9, 0), "decide", actor=host_actor(), request_id="req-a2-1", decision="decline"),
                 marker(instant(9, 1), "continue", actor=host_actor(), continuation_id="cont-a2-1"),
+                marker(instant(9, 1), "decide", actor=host_actor(), request_id="req-a2-1"),
             ],
-            continuations=[continuation("cont-a2-1", "att-a2-2", "路由放弃了选择；改用 Claude 继续，保留第一轮的结论。",
+            continuations=[continuation("cont-a2-1", "att-a2-2", "工作区已采纳；改用 Claude 继续，保留第一轮的结论。",
                                         request_id="req-a2-1", created=instant(9, 1))]),
         run("preview-run-a3", project="alpha", group=MACRO_A,
             title="修正折叠区间的键盘焦点顺序", title_source="title",
@@ -949,12 +947,12 @@ def build_runs() -> dict[str, dict]:
             task_text="核对冷却中的候选，等待 Host 决定下一步。",
             created=instant(9, 43), updated=instant(9, 44), state="awaiting-host", status="queued",
             category="host", buddy=None, routing=ROUTING_A4,
-            active_request={"requestId": "req-a4-cooling", "kind": "attention", "routing": True,
+            active_request={"requestId": "req-a4-cooling", "decisionId": ROUTING_A4["decisionId"], "routing": True,
                             "state": "open", "summary": None, "reason": ROUTING_A4["reason"],
                             "attempted": None, "neededWork": [], "expectedArtifacts": [], "acceptance": None,
-                            "childTaskId": None, "createdAt": instant(9, 44), "decidedAt": None},
+                            "createdAt": instant(9, 44), "decidedAt": None},
             spans=[span("host:req-a4-cooling", "host", instant(9, 44), None, "open",
-                        request_id="req-a4-cooling", request_kind="attention")],
+                        request_id="req-a4-cooling")],
             markers=[marker(instant(9, 43), "dispatch", actor=host_actor())]),
         run("preview-run-b1", project="beta", group=MACRO_B,
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
@@ -994,7 +992,7 @@ def build_runs() -> dict[str, dict]:
             artifacts=[artifact("art-b1", "att-b1-2", "/synthetic-preview/diffs/b1.diff",
                                 ["harnesses/dsh/plugins/sandbox.js"])],
             integrations=[integration("int-b1", "art-b1", "att-b1-2", host_paths=[])]),
-        run("preview-run-b1-h1", project="beta", group=MACRO_B, parent="preview-run-b1",
+        run("preview-run-b1-h1", project="beta", group=MACRO_B, lead_owner=("preview-run-b1", "turn-att-b1-1"),
             title="整理 macOS 与 Windows 沙箱规则差异清单", title_source="title",
             task_text="整理两个平台的沙箱规则差异清单。",
             created=instant(3, 10), updated=instant(3, 25), state="concluded", status="concluded",
@@ -1006,15 +1004,15 @@ def build_runs() -> dict[str, dict]:
                 span("execution:att-b1h-1", "execution", instant(3, 11), instant(3, 25), "finished",
                      attempt_id="att-b1h-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1,
-                     error="synthetic preview cancellation: Host cancelled the helper", result_status="cancelled"),
+                     error="synthetic preview cancellation: Lead cancelled the micro task", result_status="cancelled"),
             ],
             attempts=[attempt("att-b1h-1", 1, "finished", True, instant(3, 11), instant(3, 25), CFG_GLM,
-                              error="synthetic preview cancellation: Host cancelled the helper",
-                              result="synthetic preview cancellation: Host cancelled the helper",
+                              error="synthetic preview cancellation: Lead cancelled the micro task",
+                              result="synthetic preview cancellation: Lead cancelled the micro task",
                               usage=usage("zcode-native", 2500, 1500, 300),
-                              stop_initiator="host", cancel_requested_at=instant(3, 24, 30),
+                              stop_initiator="lead", cancel_requested_at=instant(3, 24, 30),
                               grace_deadline=instant(3, 25, 15), result_status="cancelled", termination_reason="wrap-up")],
-            cancellation={"actor": host_actor(), "note": "Host 接手剩余工作"},
+            cancellation={"actor": {"role": "lead", "id": "preview-run-b1"}, "note": "Lead 接手剩余工作"},
             artifacts=[artifact("art-b1h-partial", "att-b1h-1", "/synthetic-preview/diffs/b1h.partial.diff",
                                 ["harnesses/dsh/plugins/sandbox-rules.md"],
                                 kind="partial-output", partial=True, verified=False, final=False,
@@ -1022,12 +1020,12 @@ def build_runs() -> dict[str, dict]:
                                                            ["harnesses/dsh/plugins/sandbox-rules.md"]))],
             conclusion=host_conclusion("preview-conclusion-b1-h1", attempt_id="att-b1h-1",
                                        execution_status="cancelled",
-                                       note="synthetic preview cancellation: Host cancelled the helper",
+                                       note="synthetic preview cancellation: Lead cancelled the micro task",
                                        artifact_id="art-b1h-partial",
-                                       actor=host_actor(), created_at=instant(3, 25)),
-            markers=[marker(instant(3, 10), "dispatch", actor=host_actor()),
-                     marker(instant(3, 24, 30), "cancel", actor=host_actor(), stopInitiator="host", note="Host 接手剩余工作"),
-                     marker(instant(3, 26), "conclude", actor=host_actor(), state="cancelled")]),
+                                       actor={"role": "lead", "id": "preview-run-b1"}, created_at=instant(3, 25)),
+            markers=[marker(instant(3, 10), "dispatch", actor={"role": "lead", "id": "preview-run-b1"}),
+                     marker(instant(3, 24, 30), "cancel", actor={"role": "lead", "id": "preview-run-b1"}, stopInitiator="lead", note="Lead 接手剩余工作"),
+                     marker(instant(3, 26), "conclude", actor={"role": "lead", "id": "preview-run-b1"}, state="cancelled")]),
         run("preview-run-b2", project="beta", group=MACRO_B,
             lead_owner=("preview-run-b1", "turn-att-b1-2"),
             title="封存配额耗尽时的部分输出", title_source="title",
@@ -1057,7 +1055,7 @@ def build_runs() -> dict[str, dict]:
                                        artifact_id="art-b2-partial",
                                        actor={"role": "lead", "id": "preview-run-b1"},
                                        created_at=instant(6, 26))),
-        # The assistance request wakes the Lead after its first waiting return.
+        # The owned micro task’s boundary wakes the Lead after its first waiting return.
         # Its second input already includes that request; another owned micro
         # task remains queued, with no later boundary to wake the parked Lead.
         run("preview-run-b3", project="beta", group=MACRO_B,
@@ -1098,7 +1096,7 @@ def build_runs() -> dict[str, dict]:
                      attempt_id="att-b4-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="assistance", turn_index=1),
                 span("host:req-b4-1", "host", instant(7, 25), None, "open", request_id="req-b4-1",
-                     request_kind="assistance", summary=LEAD_REQUEST["summary"]),
+                     summary=LEAD_REQUEST["summary"]),
             ],
             attempts=[attempt("att-b4-1", 1, "finished", True, instant(7, 11), instant(7, 25), CFG_GLM,
                               disposition="assistance", result=LEAD_REQUEST["summary"],
@@ -1200,7 +1198,7 @@ def build_runs() -> dict[str, dict]:
             markers=[marker(instant(9, 46), "dispatch", actor={"role": "lead", "id": "preview-run-b7"}),
                      marker(instant(9, 59, 30), "cancel", actor={"role": "lead", "id": "preview-run-b7"},
                             stopInitiator="lead", note="Lead 停止这条平台核对")]),
-        run(STANDALONE, project="beta",
+        run(STANDALONE, project="beta", delegation_authority=True,
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
             created=instant(5, 0), updated=instant(5, 35), state="accepted", status="completed",
@@ -1222,7 +1220,7 @@ def build_runs() -> dict[str, dict]:
             artifacts=[artifact("art-c1", "att-c1-1", "/synthetic-preview/diffs/c1.diff",
                                 ["apps/console/src/task-title.test.tsx"])],
             integrations=[integration("int-c1", "art-c1", "att-c1-1")]),
-        run("preview-run-c1-h1", project="beta", group=None, parent=STANDALONE,
+        run("preview-run-c1-h1", project="beta", group=None, lead_owner=(STANDALONE, "turn-att-c1-1"),
             title=None, title_source="none", task_text="   ",
             created=instant(5, 6), updated=instant(5, 25), state="delivered", status="completed",
             category="review", buddy=CFG_GLM, result=True,
@@ -1290,39 +1288,43 @@ def build_runs() -> dict[str, dict]:
                      marker(instant(1, 24), "conclude", actor=host_actor(), state="failed")]),
     ]
     runs.extend(input_rejection_runs())
-    # An accepted ordinary root does not leave terminal helpers for the Host.
+    # Concluded micro tasks retain their execution outcomes.
     runs.extend([
-        run("preview-run-d5", project="alpha", group=MACRO_C, title="已验收的根与终态 helper", title_source="title",
-            task_text="核对 helper 失败或取消后由根收回工作，根已验收。",
+        run("preview-run-d5", project="alpha", group=MACRO_C, title="已验收的核对工作", title_source="title",
+            task_text="核对并验收路径样例。",
             created=instant(1, 25), updated=instant(1, 36), state="accepted", status="completed",
             category="ended", buddy=CFG_CODEX, accepted=instant(1, 36), result=True,
             spans=[span("execution:att-d5-1", "execution", instant(1, 25), instant(1, 35), "finished",
                         attempt_id="att-d5-1", buddy=CFG_CODEX, confirmed=True, generation=1, turn_index=1)],
             attempts=[attempt("att-d5-1", 1, "finished", True, instant(1, 25), instant(1, 35), CFG_CODEX,
-                              result="合成预览：已处理 helper 结果并完成根微任务。")],
-            artifacts=[artifact("art-d5", "att-d5-1", "/synthetic-preview/diffs/d5.diff", ["synthetic/helper-result.txt"])],
+                              result="合成预览：已完成路径样例核对。")],
+            artifacts=[artifact("art-d5", "att-d5-1", "/synthetic-preview/diffs/d5.diff", ["synthetic/review-result.txt"])],
             markers=[marker(instant(1, 25), "dispatch", actor=host_actor()),
                      marker(instant(1, 36), "accept", actor=host_actor(), verdict="accepted")]),
-        run("preview-run-d5-h1", project="alpha", group=MACRO_C, parent="preview-run-d5",
-            title="失败后交还给根的 helper", title_source="title", task_text="保留失败的 helper 结果，交由根继续处理。",
-            created=instant(1, 26), updated=instant(1, 30), state="failed", status="failed",
+        run("preview-run-d5-h1", project="alpha", group=MACRO_C,
+            title="已作结论的失败微任务", title_source="title", task_text="保留失败结果与 Host 结论。",
+            created=instant(1, 26), updated=instant(1, 30), state="concluded", status="concluded",
+            conclusion=host_conclusion("conclusion-d5-1", attempt_id="att-d5h1-1", execution_status="failed",
+                                       note="合成预览结论", artifact_id=None, actor=host_actor(), created_at=instant(1, 30)),
             category="ended", buddy=CFG_GLM, result=True,
             spans=[span("execution:att-d5h1-1", "execution", instant(1, 27), instant(1, 30), "finished",
                         attempt_id="att-d5h1-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
-                        result_status="failed", error="Synthetic helper failure")],
+                        result_status="failed", error="Synthetic execution failure")],
             attempts=[attempt("att-d5h1-1", 1, "finished", True, instant(1, 27), instant(1, 30), CFG_GLM,
-                              result="合成预览：helper 执行失败，检出已交还根。", error="Synthetic helper failure",
+                              result="合成预览：执行失败。", error="Synthetic execution failure",
                               result_status="failed", turn_state="failed")],
             markers=[marker(instant(1, 26), "dispatch", actor=host_actor())]),
-        run("preview-run-d5-h2", project="alpha", group=MACRO_C, parent="preview-run-d5",
-            title="取消后交还给根的 helper", title_source="title", task_text="保留取消的 helper 结果，交由根继续处理。",
-            created=instant(1, 26, 30), updated=instant(1, 31), state="cancelled", status="cancelled",
+        run("preview-run-d5-h2", project="alpha", group=MACRO_C,
+            title="已作结论的取消微任务", title_source="title", task_text="保留取消结果与 Host 结论。",
+            created=instant(1, 26, 30), updated=instant(1, 31), state="concluded", status="concluded",
+            conclusion=host_conclusion("conclusion-d5-2", attempt_id="att-d5h2-1", execution_status="cancelled",
+                                       note="合成预览结论", artifact_id=None, actor=host_actor(), created_at=instant(1, 31)),
             category="ended", buddy=CFG_GLM, result=True,
             spans=[span("execution:att-d5h2-1", "execution", instant(1, 28), instant(1, 31), "finished",
                         attempt_id="att-d5h2-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
                         result_status="cancelled")],
             attempts=[attempt("att-d5h2-1", 1, "finished", True, instant(1, 28), instant(1, 31), CFG_GLM,
-                              result="合成预览：helper 已取消，检出已交还根。", result_status="cancelled",
+                              result="合成预览：执行已取消。", result_status="cancelled",
                               termination_reason="wrap-up", turn_state="failed")],
             markers=[marker(instant(1, 26, 30), "dispatch", actor=host_actor())]),
     ])
@@ -1444,7 +1446,7 @@ def index_runs(runs: list[dict]) -> dict:
             elif entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed"):
                 entry["category"] = "active"
             elif entry["state"] in ("failed", "cancelled"):
-                entry["category"] = "ended" if entry["parentRunId"] else "active" if by_id[root]["leadOwner"] else "host"
+                entry["category"] = "active" if by_id[root]["leadOwner"] else "host"
         entry["requestId"] = entry.get("requestId") or f"request-{entry['runId']}"
         entry["cwd"] = (PROJECTS[entry["project"]]["path"] if entry["checkout"] == "none"
                         else f"/synthetic-preview/checkouts/{entry['runId']}")
@@ -1494,7 +1496,7 @@ def index_runs(runs: list[dict]) -> dict:
         if entry["kind"] in ("decision", "execution"):
             continue
         group = entry["group"] or (f"run:{by_id[entry['parentRunId']]['rootRunId']}"
-                                   if entry["parentRunId"] else f"run:{entry['runId']}")
+                                   if entry["parentRunId"] else f"run:{entry['leadOwner'][0] if entry['leadOwner'] else entry['runId']}")
         groups.setdefault(group, []).append(entry["runId"])
     for macro_id in MACRO_TASKS:
         groups.setdefault(macro_id, [])
@@ -1994,7 +1996,7 @@ def delete_macro_task(params: dict, state: PreviewState) -> dict:
 # Thin projections: fixture record -> console DTO                              #
 # --------------------------------------------------------------------------- #
 def shutdown_view(entry: dict) -> dict:
-    """Recorded stop evidence over helpers and Lead-owned micro tasks, excluding routing."""
+    """Recorded stop evidence over Lead-owned micro tasks, excluding routing."""
     unconfirmed: list[str] = []
     stack = [entry]
     while stack:
@@ -2002,9 +2004,8 @@ def shutdown_view(entry: dict) -> dict:
         if not current["shutdownConfirmed"]:
             unconfirmed.append(current["runId"])
         stack.extend(child for child in FIXTURES["runs"].values()
-                     if child["kind"] in ("micro-task", "helper")
-                     and (child["parentRunId"] == current["runId"]
-                          or child["leadOwner"] is not None and child["leadOwner"][0] == current["runId"]))
+                     if child["kind"] == "micro-task"
+                     and child["leadOwner"] is not None and child["leadOwner"][0] == current["runId"])
     own = entry["shutdownConfirmed"]
     return {"selfConfirmed": own, "descendantsConfirmed": unconfirmed == ([] if own else [entry["runId"]]),
             "unconfirmedRunIds": unconfirmed[:32], "unconfirmedCount": len(unconfirmed), "truncated": False}
@@ -2051,7 +2052,7 @@ def task_view(entry: dict) -> dict:
         spec["decision"] = {"decisionId": entry["decisionId"], "kind": "select"}
     view: dict[str, Any] = {
         "runId": entry["runId"], "requestId": entry["requestId"],
-        "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
+        "owner": None if entry["kind"] == "micro-task" else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
         "requiredCapabilities": [], "exclusiveResources": [], **duration,
         "state": entry["status"],
@@ -2071,7 +2072,7 @@ def task_view(entry: dict) -> dict:
         # `selectedAttempt`; null when no usage was recorded (never 0).
         "tokenUsage": selected["usage"] if selected is not None else None,
     }
-    if entry["kind"] in ("micro-task", "helper"):
+    if entry["kind"] == "micro-task":
         view["workflow"] = workflow_extension(entry)
         view["workflowState"] = entry["state"]
         view["awaitingHost"] = entry["state"] == "awaiting-host"
@@ -2104,7 +2105,6 @@ def workflow_extension(entry: dict) -> dict:
                  "title": entry["title"],
                  "macroTaskId": entry["group"]}
     if entry["activeRequest"]:
-        extension["requestKind"] = entry["activeRequest"]["kind"]
         extension["requestSummary"] = entry["activeRequest"]["summary"]
         extension["requestReason"] = entry["activeRequest"]["reason"]
         extension["requestRouting"] = entry["activeRequest"]["routing"]
@@ -2152,29 +2152,33 @@ def request_records(entry: dict) -> list[dict]:
             continue
         active = entry["activeRequest"] if entry["activeRequest"] and entry["activeRequest"]["requestId"] == span_item["requestId"] else None
         records.append(active or {
-            "requestId": span_item["requestId"], "kind": span_item["requestKind"], "routing": span_item["requestKind"] == "routing",
+            "requestId": span_item["requestId"], "decisionId": None, "routing": False,
             "state": span_item["state"], "summary": span_item.get("summary") or "",
             "attempted": entry.get("requestAttempted", "合成预览：已尝试的步骤"),
-            "reason": reason("router-out-of-bounds", bound="constraints") if span_item["requestKind"] == "routing" else None,
+            "reason": span_item.get("reason"),
             "neededWork": entry.get("requestNeededWork", ["合成预览：需要完成的事"]), "expectedArtifacts": [],
             "acceptance": entry.get("requestAcceptance", "合成预览：验收条件"),
-            "childTaskId": None, "createdAt": span_item["startAt"], "decidedAt": span_item["endAt"],
+            "createdAt": span_item["startAt"], "decidedAt": span_item["endAt"],
         })
     return records
 
 
-#: The state the board keeps of a helper, by the state of its micro task.
-CHILD_STATE = {"executing": "active", "waiting-helpers": "active", "waiting-owned": "active", "awaiting-host": "attention",
-               "delivered": "succeeded", "accepted": "succeeded", "concluded": "failed", "failed": "failed", "cancelled": "cancelled"}
+PREVIEW_RESOLUTIONS = {
+    "req-a1-1": {"legacy": True, "resolution": {
+        "conflictId": "conflict-a1", "action": "restore", "state": "restored", "actor": host_actor(),
+    }},
+    "req-a2-1": {"result": {"conflictId": "conflict-a2", "state": "adopted",
+                            "artifactId": "art-a2-partial", "resolvedFingerprint": digest("conflict-a2")}},
+}
 
 
 def workflow_view(entry: dict) -> dict:
     """The micro task view consumed by ``TaskDetails``/``WorkflowPanel``."""
     turns = turn_views(entry)
-    children = [{"taskId": child["runId"], "role": "helper", "state": CHILD_STATE[child["state"]],
-                 "integrator": False, "requestId": child["requestId"]}
-                for child in FIXTURES["runs"].values()
-                if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == entry["runId"]]
+    owned = [{"runId": child["runId"], "leadTurnId": child["leadOwner"][1],
+              "createdAt": child["createdAt"], "state": child["state"]}
+             for child in FIXTURES["runs"].values()
+             if child["leadOwner"] and child["leadOwner"][0] == entry["runId"]]
     routing = ({key: entry["routing"][key] for key in
                 ("status", "decisionId", "taskId", "attemptId", "generation", "selectedBuddy", "reason", "note",
                  "constraints", "requiredCapabilities", "source", "routingBasis", *ROUTING_FACT_KEYS)}
@@ -2210,18 +2214,20 @@ def workflow_view(entry: dict) -> dict:
         "currentTurn": ({**turns[0], "summary": turn_summary(entry["attempts"][-1]),
                          "remaining": []} if turns else None),
         "activeRequest": entry["activeRequest"],
-        "requests": [{key: record[key] for key in ("requestId", "kind", "state", "createdAt", "decidedAt",
-                                                       "childTaskId", "routing", "reason") if key in record}
+        "requests": [{key: record[key] for key in ("requestId", "state", "createdAt", "decidedAt",
+                                                       "decisionId", "routing", "reason") if key in record}
                      | ({"inputFailure": record["inputFailure"]} if "inputFailure" in record else {})
                      for record in request_records(entry)],
         "delegationAuthority": entry["delegationAuthority"],
         "counts": {"turns": len(turns),
                                                             "openRequests": 1 if entry["activeRequest"] else 0,
-                                                            "children": len(children),
+                                                            "ownedMicroTasks": len(owned),
                                                             "artifacts": len(entry["artifacts"])},
-        "children": children, "artifacts": artifact_views(entry), "integrations": entry["integrations"],
+        "ownedMicroTasks": owned, "workspaceConflicts": [
+            {"conflictId": "conflict-a2", "action": "adopt", "actor": host_actor(), "note": None}
+        ] if entry["runId"] == "preview-run-a2" else [], "artifacts": artifact_views(entry), "integrations": entry["integrations"],
         "shutdown": shutdown_view(entry),
-        "truncated": {"turns": 0, "requests": 0, "children": 0, "artifacts": 0, "pendingRequests": 0},
+        "truncated": {"turns": 0, "requests": 0, "ownedMicroTasks": 0, "artifacts": 0, "pendingRequests": 0},
         "workspace": ({"kind": "none", "path": entry["cwd"],
                        "projectId": PROJECTS[entry["project"]]["id"], "projectKind": PROJECTS[entry["project"]]["kind"],
                        "access": entry["access"], "integrator": False,
@@ -2254,12 +2260,12 @@ def task_first_line(task_text: str) -> str | None:
 PREVIEW_FIXES = {"preview-run-a2": "preview-run-a1", "preview-run-a3": "preview-run-a1"}
 
 
-def timeline_row(entry: dict, depth: int) -> dict:
+def timeline_row(entry: dict) -> dict:
     attempts = entry["attempts"]
     confirmed = sum(1 for item in attempts if item["state"] == "finished" and item["shutdownConfirmed"])
     buddy = entry["buddy"]
     row = {
-        "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
+        "runId": entry["runId"], "rootRunId": entry["rootRunId"],
         "rootLeadRunId": entry["lineage"]["rootLeadRunId"],
         "leadOwnership": entry["lineage"]["leadOwnership"],
         "delegationAuthority": entry["delegationAuthority"],
@@ -2267,7 +2273,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "taskSummary": task_first_line(entry["task"]),
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "conclusionStatus": entry["hostConclusion"]["executionStatus"] if entry["hostConclusion"] else None,
-        "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
+        "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed,
         "kind": entry["kind"],
         "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
                           if buddy else None),
@@ -2287,27 +2293,25 @@ def timeline_row(entry: dict, depth: int) -> dict:
 
 def macro_task_summary(group: str, matching: set[str], state: PreviewState | None = None) -> dict:
     entries = [projected_run(FIXTURES["runs"][run_id], state) for run_id in FIXTURES["groups"][group]]
-    counts = {"roots": 0, "helpers": 0, "accepted": 0, "failed": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
+    counts = {"roots": 0, "accepted": 0, "failed": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
               "unfinished": 0, "delivered": 0}
     for entry in entries:
         counts[entry["category"]] += 1
-        counts["helpers" if entry["parentRunId"] else "roots"] += 1
+        counts["roots"] += 1
         if entry["state"] not in ("accepted", "concluded", "delivered"):
             counts["unfinished"] += 1
         if entry["state"] == "delivered":
             counts["delivered"] += 1
-        # 0.15.1 Host correction: accepted counts accepted ROOTS only; helpers
-        # count through their root's acceptance, and the denominator is roots.
-        if entry["parentRunId"] is None and entry["acceptedAt"] is not None:
+        if entry["acceptedAt"] is not None:
             counts["accepted"] += 1
-        if entry["parentRunId"] is None and (entry["hostConclusion"] or {}).get("executionStatus") == "failed":
+        if (entry["hostConclusion"] or {}).get("executionStatus") == "failed":
             counts["failed"] += 1
     category_state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group.startswith("macro-"):
         meta = MACRO_TASKS[group]
         title, title_source, project = meta["title"], "macro-task", meta["project"]
         created, kind = meta["createdAt"], "macro-task"
-        roots = [entry["runId"] for entry in entries if entry["parentRunId"] is None]
+        roots = [entry["runId"] for entry in entries]
     else:
         root = FIXTURES["runs"][group[len("run:"):]]
         title, title_source, project = root["title"], root["titleSource"], root["project"]
@@ -2415,8 +2419,8 @@ def matches(entry: dict, applied: dict) -> bool:
         return entry["category"] == "host"
     if name == "active":
         return entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed") or \
-            entry["state"] in ("executing", "awaiting-host", "waiting-helpers", "waiting-owned") or \
-            entry["parentRunId"] is None and entry["state"] in ("failed", "cancelled")
+            entry["state"] in ("executing", "awaiting-host", "waiting-owned") or \
+            entry["state"] in ("failed", "cancelled")
     return entry["category"] == "review"
 
 
@@ -2448,7 +2452,7 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
                "title": f"合成分页任务 {index + 1}",
                "createdAt": instant(0, index + 1), "lastActivityAt": instant(0, index + 1),
                "lastActivitySeq": index + 1, "state": "ended", "matchingRuns": 1,
-               "rootRunIds": [], "counts": {**template["counts"], "roots": 1, "helpers": 0,
+               "rootRunIds": [], "counts": {**template["counts"], "roots": 1,
                                             "accepted": 1, "failed": 0, "active": 0, "host": 0,
                                             "review": 0, "ended": 1, "unfinished": 0, "delivered": 0}}
         if applied.get("query") and applied["query"].casefold() not in (row["title"] + " " + row["project"]["path"]).casefold():
@@ -2509,26 +2513,6 @@ def macro_task_page(params: dict, state: PreviewState | None = None) -> dict:
     }
 
 
-def tree_order(entries: list[dict]) -> list[tuple[dict, int]]:
-    known = {entry["runId"] for entry in entries}
-    children: dict[str | None, list[dict]] = {}
-    for entry in entries:
-        parent = entry["parentRunId"] if entry["parentRunId"] in known else None
-        children.setdefault(parent, []).append(entry)
-    for group in children.values():
-        group.sort(key=lambda entry: (entry["createdAt"], entry["runId"]))
-    ordered: list[tuple[dict, int]] = []
-
-    def visit(entry: dict, depth: int) -> None:
-        ordered.append((entry, depth))
-        for child in children.get(entry["runId"], ()):
-            visit(child, depth + 1)
-
-    for root in children.get(None, ()):
-        visit(root, 0)
-    return ordered
-
-
 CAPS = {"normal": (200, 800, 800), "error": (200, 800, 800), "readme": (200, 800, 800),
         "truncated": (3, 3, 3)}
 
@@ -2541,12 +2525,13 @@ def macro_task_timeline(params: dict, scenario: str, state: PreviewState | None 
     applied = applied_filters(params)
     entries = [projected_run(FIXTURES["runs"][run_id], state) for run_id in FIXTURES["groups"][group]]
     matching = group_matching(group, applied, state)
-    selected = [(entry, depth) for entry, depth in tree_order(entries) if entry["runId"] in matching]
+    selected = sorted((entry for entry in entries if entry["runId"] in matching),
+                      key=lambda entry: (entry["createdAt"], entry["runId"]))
     row_cap, span_cap, event_cap = CAPS[scenario]
     shown = selected[:min(limit, row_cap)]
-    spans = sorted((item for entry, _depth in shown for item in span_views(entry)),
+    spans = sorted((item for entry in shown for item in span_views(entry)),
                    key=lambda item: (item["startAt"] or "", item["runId"], item["spanId"]))
-    markers = marker_views([entry["runId"] for entry, _depth in shown])
+    markers = marker_views([entry["runId"] for entry in shown])
     span_total, marker_total = len(spans), len(markers)
     spans, markers = spans[:span_cap], markers[:event_cap]
     truncated = {"rows": len(selected) > len(shown), "spans": span_total > len(spans),
@@ -2555,7 +2540,7 @@ def macro_task_timeline(params: dict, scenario: str, state: PreviewState | None 
         "macroTask": {**macro_task_summary(group, matching, state),
                       "goal": MACRO_TASKS[group]["goal"] if group.startswith("macro-") else None},
         "observedAt": OBSERVED_AT,
-        "cursor": state.cursor if state is not None else FIXTURES["head"], "rows": [timeline_row(entry, depth) for entry, depth in shown],
+        "cursor": state.cursor if state is not None else FIXTURES["head"], "rows": [timeline_row(entry) for entry in shown],
         "spans": spans, "events": markers,
         "totals": {"rows": len(selected), "spans": span_total, "events": marker_total,
                    "allRows": len(entries)},
@@ -2747,7 +2732,7 @@ def pending_root_count(state: PreviewState | None = None) -> int:
     deduplicated by ``rootRunId`` exactly like the service computes it.
     """
     roots = {entry["lineage"]["rootRunId"] for entry in FIXTURES["runs"].values()
-             if entry["kind"] in ("micro-task", "helper") and entry["category"] == "host"
+             if entry["kind"] == "micro-task" and entry["category"] == "host"
              and (state is None or entry["runId"] not in state.removed_runs)}
     return len(roots)
 
@@ -3037,11 +3022,7 @@ def audit_view(entry: dict) -> dict:
         "turns": [{**turn_view(entry, item), "summary": turn_summary(item), "remaining": []}
                   for item in entry["attempts"]],
         "requests": [{**record, "attempted": record.get("attempted"), "turnId": None, "attemptId": None,
-                      "decision": ({"decision": {"approved": "approve", "declined": "decline"}.get(record["state"]),
-                                    "note": "合成预览：Host 的决定理由", "actor": host_actor()}
-                                   if record["state"] in ("approved", "declined") else None),
-                      "payload": {"source": "routing", "decisionId": entry["routing"]["decisionId"]}
-                      if record["routing"] and entry["routing"] else {}}
+                      "resolution": PREVIEW_RESOLUTIONS.get(record["requestId"]), "payload": {}}
                      for record in request_records(entry)],
         "continuations": entry["continuations"],
         "reservations": [], "suggestions": [],
@@ -3590,16 +3571,16 @@ REQUIRED_KEYS = {
     "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "project",
                          "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "paused", "counts", "matchingRuns", "rootRunIds"},
-    "MacroTaskCounts": {"roots", "helpers", "accepted", "failed", "active", "host", "review", "ended",
+    "MacroTaskCounts": {"roots", "accepted", "failed", "active", "host", "review", "ended",
                         "unfinished", "delivered"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew", "expectedSeconds", "reminders", "inquiries"},
-    "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership", "delegationAuthority",
+    "TimelineRow": {"runId", "rootRunId", "rootLeadRunId", "leadOwnership", "delegationAuthority",
                     "title", "titleSource", "taskSummary",
-                    "createdAt", "state", "status", "conclusionStatus", "category", "shutdownConfirmed", "depth", "kind",
+                    "createdAt", "state", "status", "conclusionStatus", "category", "shutdownConfirmed", "kind",
                     "buddy", "acceptedAt", "reviewRejectedAt", "reviewRejectionNote"},
-    "TimelineEvent": {"seq", "runId", "kind", "at", "decision", "verdict", "state", "strategy", "note", "actor", "attemptId",
+    "TimelineEvent": {"seq", "runId", "kind", "at", "verdict", "state", "strategy", "note", "actor", "attemptId",
                       "requestId", "artifactId"},
     "MacroTaskTimeline": {"macroTask", "observedAt", "cursor", "rows", "spans", "events", "totals",
                           "truncated", "filtered", "scopeComplete"},
@@ -3715,7 +3696,7 @@ def validate_fixtures() -> list[str]:
     for _run_id, event in FIXTURES["markers"]:
         if (REQUIRED_KEYS["TimelineEvent"] - set(event) or {"label", "summary"} & set(event)
                 or any(event[key] is not None and not isinstance(event[key], str)
-                       for key in ("decision", "verdict", "state", "strategy", "note"))):
+                       for key in ("verdict", "state", "strategy", "note"))):
             problems.append("TimelineEvent must carry facts and notes without localized labels or summaries")
         actor = event["actor"]
         if actor is not None and (not isinstance(actor, dict) or actor.get("role") not in {"host", "lead", "console"}
@@ -3811,7 +3792,7 @@ def validate_fixtures() -> list[str]:
     if not any(not row["delegationAuthority"] and row["rootLeadRunId"] is None and row["kind"] == "micro-task"
                for row in beta_rows):
         problems.append("Lead lanes must include an ordinary independent micro task")
-    no_children = timeline_row(FIXTURES["runs"]["preview-run-d1"], 0)
+    no_children = timeline_row(FIXTURES["runs"]["preview-run-d1"])
     if not no_children["delegationAuthority"] or any(entry["leadOwner"] and entry["leadOwner"][0] == no_children["runId"]
                                                     for entry in FIXTURES["runs"].values()):
         problems.append("a Lead without owned micro tasks must retain its explicit authority")
@@ -3850,8 +3831,7 @@ def validate_fixtures() -> list[str]:
                for key in ("accepted", "failed")):
         problems.append("root outcome counts must be present on every summary")
     accepted_a = sum(1 for run_id in FIXTURES["groups"][MACRO_A]
-                     if FIXTURES["runs"][run_id]["parentRunId"] is None
-                     and FIXTURES["runs"][run_id]["acceptedAt"] is not None)
+                     if FIXTURES["runs"][run_id]["acceptedAt"] is not None)
     for item in listed:
         if item["counts"]["accepted"] > item["counts"]["roots"]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
@@ -3862,8 +3842,7 @@ def validate_fixtures() -> list[str]:
         if item["counts"]["unfinished"] != expected_unfinished:
             problems.append(f"{item['macroTaskId']}: unfinished does not match end scope")
         expected_failed = sum(1 for run_id in FIXTURES["groups"][item["macroTaskId"]]
-                              if FIXTURES["runs"][run_id]["parentRunId"] is None
-                              and (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed")
+                              if (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed")
         if item["counts"]["failed"] != expected_failed:
             problems.append(f"{item['macroTaskId']}: failed does not match failed root turns")
     if summary_a["counts"]["accepted"] != accepted_a:
@@ -3924,8 +3903,8 @@ def validate_fixtures() -> list[str]:
         problems.append("taskSummary must be the first nonempty task line")
     standalone_rows = macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, "normal")["rows"]
     if not any(row["taskSummary"] is None for row in standalone_rows):
-        problems.append("the blank-task helper must keep a null taskSummary")
-    categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["kind"] in ("micro-task", "helper")}
+        problems.append("the untitled Lead-owned micro task must keep a null taskSummary")
+    categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["kind"] == "micro-task"}
     if categories != {"host", "active", "review", "ended"}:
         problems.append(f"fixture categories are {sorted(categories)}")
     kinds = {item["kind"] for _run_id, item in FIXTURES["markers"]}
@@ -4395,7 +4374,7 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
     print("fixture groups:")
     for group in FIXTURES["groups"]:
         summary = macro_task_summary(group, set(FIXTURES["groups"][group]))
-        members = summary["counts"]["roots"] + summary["counts"]["helpers"]
+        members = summary["counts"]["roots"]
         print(f"  {group}  state={summary['state']} members={members} project={summary['project']['label']}")
     print("session fixtures (taskId / attemptId):")
     for label, pair in (("Codex, ended, >100 events", SESSION_LONG),

@@ -134,7 +134,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
 
     test("offers the same controls for a standalone micro task", async ({ page }) => {
       // The fixture's accepted root has no unfinished work. Project one newly
-      // unfinished helper into this list read to exercise its End entry.
+      // unfinished micro task into this list read to exercise its End entry.
       await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
         const response = await route.fetch();
         const data = await response.json();

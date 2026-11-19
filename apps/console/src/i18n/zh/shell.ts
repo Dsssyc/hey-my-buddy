@@ -96,7 +96,6 @@ export default {
     "state": {
       "queued": "排队",
       "executing": "执行中",
-      "waiting-helpers": "等待协助任务",
       "waiting-owned": "等待名下微任务",
       "awaiting-host": "等待 Host",
       "delivered": "待验收",
@@ -110,8 +109,8 @@ export default {
   actor: {
     unknownOrigin: "未记录发起者", microTask: "微任务 {{id}}",
     events: {
-      dispatch: "{{time}} {{role}} 派发「{{title}}」", approved: "{{time}} {{role}} 批准了「{{title}}」的请求",
-      declined: "{{time}} {{role}} 拒绝了「{{title}}」的请求", decide: "{{time}} {{role}} 批准 / 拒绝了「{{title}}」的请求",
+      dispatch: "{{time}} {{role}} 派发「{{title}}」",
+      decide: "{{time}} {{role}} 处置了「{{title}}」的工作区冲突",
       continue: "{{time}} {{role}} 续接「{{title}}」", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
       accept: "{{time}} {{role}} 验收通过「{{title}}」", reject: "{{time}} {{role}} 对「{{title}}」提出验收问题",
       stop: "{{time}} {{role}} 停止了「{{title}}」", console: "{{time}} 控制台停止了「{{title}}」",

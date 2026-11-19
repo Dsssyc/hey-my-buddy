@@ -61,7 +61,7 @@ function pane(step: Step, ctx: Context, tabs?: ContentTabs) {
 
 /** Where a micro task's elapsed time ends: now while it is open, else when its last word was said. */
 function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): number {
-  if (workflow && ["executing", "awaiting-host", "waiting-helpers", "waiting-owned", "delivered"].includes(workflow.state)) return nowMs;
+  if (workflow && ["executing", "awaiting-host", "waiting-owned", "delivered"].includes(workflow.state)) return nowMs;
   if (!workflow && ["queued", "running", "cancelling"].includes(view.task.state)) return nowMs;
   const ended = Date.parse(view.task.acceptedAt ?? view.updatedAt);
   return Number.isFinite(ended) ? ended : nowMs;
@@ -88,11 +88,14 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   const items = useMemo(() => timeline ? linkedItems(timeline, runId) : new Set<string>(), [timeline, runId]);
   const steps: Steps | null = useMemo(() => {
     if (view === null) return null;
-    return timelineLoading ? null : buildSteps(timeline, runId, now);
-  }, [view, timeline, timelineLoading, runId, now]);
+    return timelineLoading ? null : buildSteps(timeline, runId, now, read.audit?.continuations);
+  }, [view, timeline, timelineLoading, runId, now, read.audit?.continuations]);
   const asked = useMemo(() => (steps && read.inquiries ? placeInquiries(read.inquiries.items, steps, now) : {}), [steps, read.inquiries, now]);
 
-  const chosen = steps === null ? null : step !== null && step <= steps.steps.length ? step - 1
+  // A superseded wait may name its response only through the audit's continuation record.
+  const waitingForResponse = step === null && !read.audit && !read.error && timeline?.spans.some(span =>
+    origin === `span:${span.spanId}` && span.kind === "host" && span.state === "superseded");
+  const chosen = steps === null || waitingForResponse ? null : step !== null && step <= steps.steps.length ? step - 1
     : (origin !== null ? stepForItem(steps, origin, timeline) : null) ?? defaultStep(steps);
   // Compare with the committed selection so StrictMode's repeated render sees
   // the same direction; the first loaded step belongs to the stage's entrance.

@@ -34,12 +34,12 @@ async function refineFixture(page: import("@playwright/test").Page, clustered = 
       span(handoff!.runId, "execution:att-a1-2", 40, 48),
       { ...span(failed!.runId, "failed-narrow", 22, 22 + 1 / 60, { ...failed!.buddy!, harness: "codex" }), resultStatus: "failed" },
       span(settled!.runId, "settled", 5, 12),
-      { ...span(settled!.runId, "host-settled", 12, 100), kind: "host", state: "approved", buddy: null, inquiries: null },
+      { ...span(settled!.runId, "host-settled", 12, 100), kind: "host", state: "resolved", buddy: null, inquiries: null },
       span(waiting!.runId, "waiting", 130, 135),
     ];
     const event = (seq: number, kind: string, minutes: number, extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
       ...timeline.events[0]!, seq, kind, at: at(minutes), runId: handoff!.runId,
-      note: null, verdict: null, decision: null, strategy: null, state: null,
+      note: null, verdict: null, strategy: null, state: null,
       artifactId: null, integrationId: null, continuationId: null, eventKind: `workflow.${kind}`, ...extra,
     });
     timeline.events = [

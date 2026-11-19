@@ -82,8 +82,8 @@ describe("console grouping and recorded attribution", () => {
     const task = { runId: "micro-task", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as unknown as Task;
     expect(taskProject(task)).toBeNull();
     expect(workflowOwnerText(task)).toBe("Host");
-    task.lineage = { kind: "helper",
-      parentRunId: "parent", rootRunId: "root", rootLeadRunId: null, routingTask: null,
+    task.lineage = { kind: "micro-task",
+      parentRunId: null, rootRunId: task.runId, rootLeadRunId: null, routingTask: null,
       project: { kind: "git", id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
     expect(taskProject(task)).toEqual(task.lineage.project);
     expect(workflowOwnerText(task)).toBe("Host");

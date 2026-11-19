@@ -3,9 +3,9 @@ import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import { timelineScaleInput } from "./scale";
 import { visibleTimeline } from "./visibleTimeline";
 
-it("keeps existing row categories, helper identities and every continuation, with only their time facts", () => {
+it("keeps existing row categories, micro task identities and every continuation, with only their time facts", () => {
   const timeline = macroTaskTimelineFixture();
-  // A helper awaiting its owner is host work even when an accepted root is hidden.
+  // An open boundary stays visible when an accepted micro task is hidden.
   timeline.rows.find(row => row.runId === "r3")!.category = "host";
   const shown = visibleTimeline(timeline, true);
   expect(shown.rows.map(row => row.runId)).toEqual(["r3", "r4", "r6"]);

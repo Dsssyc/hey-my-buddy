@@ -2,7 +2,6 @@ import { expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { open, openLegend, test } from "./preview";
-import type { MacroTaskTimeline } from "../src/macro-task-types";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -13,36 +12,23 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: `${captures}/${name}.png` });
 }
 
-test("keeps the Lead's own helper and the owned helper's depth in both views", async ({ page }) => {
+test("groups Lead-owned micro tasks in both views", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
-  await page.route(`**/api/macro-tasks/${B}/timeline*`, async route => {
-    const response = await route.fetch();
-    const timeline = await response.json() as MacroTaskTimeline;
-    const own = timeline.rows.find(row => row.runId === "preview-run-b1-h1")!;
-    const parent = timeline.rows.find(row => row.runId === "preview-run-b4")!;
-    timeline.rows.splice(timeline.rows.indexOf(parent) + 1, 0, { ...own, runId: "owned-helper", parentRunId: parent.runId, rootRunId: parent.runId,
-      rootLeadRunId: parent.rootLeadRunId, depth: 1, title: "Owned helper", titleSource: "title" });
-    timeline.spans.push(...timeline.spans.filter(span => span.runId === own.runId).map(span => ({ ...span, runId: "owned-helper", spanId: `owned-helper:${span.spanId}` })));
-    timeline.totals.rows++; timeline.totals.allRows++;
-    timeline.macroTask.counts.helpers++; timeline.macroTask.matchingRuns++;
-    await route.fulfill({ response, json: timeline });
-  });
   await open(page, `#tasks/${B}`);
   const assertHierarchy = async (view: "timeline" | "detail") => {
     const groupSlot = view === "timeline" ? "timeline-lane" : "detail-lane";
     const ownLane = page.locator(`[data-slot=${groupSlot}]`).filter({ has: page.locator('[data-key="row:preview-run-b1"]') });
     await expect(ownLane.locator('[data-key="row:preview-run-b1-h1"]')).toBeVisible();
     const root = view === "timeline" ? page.locator('[data-slot=timeline-tracks]') : page.locator('[data-slot=task-names]');
-    for (const [id, level, helper] of [["preview-run-b1-h1", 1, true], ["preview-run-b4", 1, false], ["owned-helper", 2, true]] as const) {
+    for (const id of ["preview-run-b1-h1", "preview-run-b4"]) {
       const row = root.locator(`[data-key="row:${id}"]`);
-      await expect(row).toHaveCSS("padding-left", `${13 + level * 18}px`);
-      await expect(row.locator('[data-slot=lane-guide]')).toHaveCount(level);
-      await expect(row.getByText("└", { exact: true })).toHaveCount(helper ? 1 : 0);
+      await expect(row).toHaveCSS("padding-left", "31px");
+      await expect(row.locator('[data-slot=lane-guide]')).toHaveCount(1);
       const edge = (await row.locator('[data-slot=row-state-edge]').boundingBox())!;
       const guide = (await row.locator('[data-slot=lane-guide]').last().boundingBox())!;
       expect(edge.x + edge.width / 2).toBeCloseTo(guide.x + guide.width / 2, 1);
-      expect(edge.x + edge.width / 2 - (await row.boundingBox())!.x).toBe(14 + (level - 1) * 18);
+      expect(edge.x + edge.width / 2 - (await row.boundingBox())!.x).toBe(14);
     }
   };
   await assertHierarchy("timeline");

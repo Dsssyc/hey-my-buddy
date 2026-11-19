@@ -1,5 +1,6 @@
 import { parseTimelineInstant } from "../timeline/instant";
 import { acceptanceWaitMs, spanOutcome } from "../macro-task-display";
+import type { Continuation } from "./types";
 import type { SpanOutcome } from "../macro-task-display";
 import type { MacroTaskTimeline, TimelineBuddy, TimelineEvent, TimelineSpan } from "../macro-task-types";
 
@@ -38,6 +39,7 @@ export type Step = {
   events: TimelineEvent[];
   /** The step has not happened yet: an open Host decision, or the acceptance of a delivered micro task. */
   pending: boolean;
+  requestId: string | null;
   /** Turns only: the turn's number. */
   turnIndex: number | null;
   outcome: SpanOutcome | null;
@@ -63,7 +65,7 @@ export const SETTLING_EVENTS = ["accept", "reject", "conclude"];
 const AFTER_DELIVERY = ["delivered", "accepted", "concluded"];
 /** Order of steps that start at the same instant. */
 const RANK: Record<StepKind, number> = {
-  delegation: 0, decision: 1, continue: 1, cancel: 1, takeover: 1, routing: 2, handoff: 3, turn: 4, acceptance: 5,
+  delegation: 0, decision: 1, continue: 2, cancel: 2, takeover: 2, routing: 3, handoff: 4, turn: 5, acceptance: 6,
 };
 
 /** A change of buddy needs both sides recorded: a missing buddy is not a different one. */
@@ -74,11 +76,11 @@ const changed = (left: TimelineBuddy | null, right: TimelineBuddy | null) =>
 const ms = parseTimelineInstant;
 
 function blank(kind: StepKind, key: string, at: number | null): Step {
-  return { key, kind, at, ms: null, span: null, events: [], pending: false, turnIndex: null, outcome: null, from: null, to: null, waits: [] };
+  return { key, kind, at, ms: null, span: null, events: [], pending: false, requestId: null, turnIndex: null, outcome: null, from: null, to: null, waits: [] };
 }
 
 /** The steps of the micro task `runId` in the macro task's timeline. */
-export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, nowMs: number): Steps {
+export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, nowMs: number, continuations: readonly Continuation[] = []): Steps {
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
   if (!timeline || !row) return { steps: [{ ...blank("delegation", "delegation", null) }], tail: [], complete: false };
   const spans = timeline.spans.filter(span => span.runId === runId)
@@ -105,14 +107,24 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
     }
   }
   for (const event of events) {
-    if (event.kind === "decide") steps.push({ ...blank("decision", `event:${event.seq}`, ms(event.at)), events: [event] });
-    else if (event.kind === "continue") steps.push({ ...blank("continue", `event:${event.seq}`, ms(event.at)), events: [event] });
+    if (event.kind === "decide") {
+      steps.push({ ...blank("decision", `event:${event.seq}`, ms(event.at)), events: [event], requestId: event.requestId });
+    } else if (event.kind === "continue") {
+      const continuation = continuations.find(item => item.continuationId === event.continuationId);
+      steps.push({ ...blank("continue", `event:${event.seq}`, ms(event.at)), events: [event], requestId: continuation?.requestId ?? null });
+    }
     else if (event.kind === "cancel") steps.push({ ...blank("cancel", `event:${event.seq}`, ms(event.at)), events: [event] });
     else if (event.kind === "takeover") steps.push({ ...blank("takeover", `event:${event.seq}`, ms(event.at)), events: [event] });
   }
+  // A retained resolution can outlive its timeline event.
+  for (const span of spans) {
+    if (span.kind === "host" && span.state === "resolved" && !steps.some(step => step.kind === "decision" && step.requestId === span.requestId)) {
+      steps.push({ ...blank("decision", `span:${span.spanId}`, ms(span.endAt)), span, requestId: span.requestId });
+    }
+  }
   // A Host request that is still open ends in a decision nobody has made.
   const open = spans.find(span => span.kind === "host" && span.state === "open" && span.endAt === null);
-  if (open) steps.push({ ...blank("decision", `span:${open.spanId}`, null), span: open, pending: true });
+  if (open) steps.push({ ...blank("decision", `span:${open.spanId}`, null), span: open, pending: true, requestId: open.requestId });
 
   const when = (step: Step) => step.at ?? Number.POSITIVE_INFINITY;
   steps.sort((left, right) => (when(left) === when(right) ? 0 : when(left) < when(right) ? -1 : 1) || RANK[left.kind] - RANK[right.kind]);
@@ -136,7 +148,7 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
   }
 
   // The lines between the steps: a wait leads to the step that ends it. A Host wait ends in the decision made on its own
-  // request, or in the continuation that came at its end; any other wait in the first step that starts once it has ended.
+  // request or in its recorded continuation. Other lines follow chronological order.
   const lines: { wait: Wait; start: number; end: number | null }[] = [];
   for (const span of spans) {
     const start = ms(span.startAt);
@@ -148,16 +160,15 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
       requestId: span.kind === "host" ? span.requestId : null } });
   }
   const tail: Wait[] = [];
-  const taken = new Set<Step>();
   for (const { wait, start, end } of lines.sort((left, right) => left.start - right.start)) {
     const byRequest = wait.requestId === null ? undefined
-      : steps.find(step => step.kind === "decision" && step.events[0]?.requestId === wait.requestId);
-    const byContinue = end === null || wait.requestId === null ? undefined
-      : steps.find(step => step.kind === "continue" && !taken.has(step) && step.at === end);
+      : steps.find(step => step.kind === "decision" && step.requestId === wait.requestId)
+        ?? steps.find(step => step.kind === "continue" && step.requestId === wait.requestId);
     const target = wait.open
       ? (wait.kind === "queue" ? undefined : steps.find(step => step.pending && step.kind === "decision"))
-      : byRequest ?? byContinue ?? steps.find(step => step.at !== null && (end !== null ? step.at >= end : step.at > start));
-    if (target && target === byContinue) taken.add(target);
+      : byRequest ?? steps.find(step => step.at !== null
+        && (wait.requestId === null || step.kind !== "continue" && step.kind !== "decision")
+        && (end !== null ? step.at >= end : step.at > start));
     (target ? target.waits : tail).push(wait);
   }
   // From delivery to the acceptance: still waiting, or the wait that ended in a verdict.

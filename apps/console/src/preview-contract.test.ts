@@ -163,7 +163,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = {
         turns: audit.turns.map(turn => ({ turnId: turn.turnId, summary: turn.summary })),
         continuations: audit.continuations.map(item => ({ turnId: item.turnId, input: item.input })),
-        requests: audit.requests.map(request => ({ requestId: request.requestId, state: request.state, decision: request.decision?.decision ?? null })),
+        requests: audit.requests.map(request => ({ requestId: request.requestId, state: request.state, resolution: request.resolution?.conflictId ?? null })),
         routing: routing.map(entry => ({ decisionId: entry.decisionId, source: entry.source, routerBuddy: entry.routerBuddy })),
       };
     } else if (entry.kind === "message-list") {

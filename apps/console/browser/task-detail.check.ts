@@ -15,13 +15,13 @@ const languages = [
     locale: "zh-CN", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, delegate: "委派", acceptance: "验收",
     running: "进行中", stuck: "疑似停滞", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
     answered: "已答复", unavailable: "问询已结束", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
-    integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", helperDone: "已完成", ask: "上一轮停下了吗？",
+    integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", ask: "上一轮停下了吗？",
   },
   {
     locale: "en-US", refresh: "Read again", turn: (n: number) => `Turn ${n}`, delegate: "Delegate", acceptance: "Acceptance",
     running: "Running", stuck: "Possibly stalled", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
     answered: "Answered", unavailable: "Inquiry ended", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
-    integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", helperDone: "Done", ask: "上一轮停下了吗？",
+    integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", ask: "上一轮停下了吗？",
   },
 ];
 
@@ -178,7 +178,7 @@ for (const { locale } of languages) for (const theme of ["dark", "light"]) for (
   });
 }
 
-for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
+for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, ask } of languages)
   for (const width of [1440, 1280, 390]) {
     test.describe(`the detail of a micro task in ${locale} at ${width}px`, () => {
       // Colours are read at rest: under reduced motion the page makes no transitions.
@@ -220,7 +220,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("opens a step by its address, the first choice when the address names none, and a failed read when it names no micro task", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/4`);
-        await expect(pane(page)).toContainText(locale === "zh-CN" ? "批准" : "Approved");
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "已恢复" : "Restored");
         // No step in the address: the detail settles on the last turn and writes it into the address.
         await go(page, `#tasks/${A}/preview-run-a1`);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
@@ -263,21 +263,12 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expectDetailWhole(page, { skipTitle: true });
       });
 
-      test("the delegation step: the task, its source, its helpers and its fixes", async ({ page }) => {
+      test("the delegation step: the task, its source and its fixes", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/1`);
         await expect(pane(page).getByRole("heading", { name: delegate })).toBeVisible();
         await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toHaveCount(0);
-        await expect(pane(page).getByRole("button", { name: /schema/ })).toBeVisible();
         await expect(pane(page).getByText("↩")).toBeVisible();
-        // A helper is written in the fixed words with a mark, not as the board names its state.
-        const helper = pane(page).getByRole("button", { name: /schema/ }).locator("xpath=ancestor::li");
-        await expect(helper).toContainText(helperDone);
-        await expect(helper.locator("[data-slot=state-mark]")).toHaveCount(1);
-        await expect(helper).not.toContainText(/delivered|succeeded|active/);
         await expectDetailWhole(page, { skipTitle: true });
-        // A helper opens at its own address, inside the same macro task.
-        await pane(page).getByRole("button", { name: /schema/ }).click();
-        await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1-h1(/\\d+)?$`));
       });
 
       test("the route step: the Router, its mode and what it chose", async ({ page }) => {
@@ -367,18 +358,16 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         const selected = chosen(page);
         await expect(selected).toHaveAccessibleName(new RegExp(waitingHost));
         await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "决定" : "Decision");
-        await expect(pane(page).locator("[data-slot=request-kind]")).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
+        await expect(pane(page).locator("[data-slot=request-kind]")).toContainText(locale === "zh-CN" ? "需要决定" : "Decision needed");
         await expect(pane(page).getByText(waitingHost).first()).toBeVisible();
         const dashed = await strip(page).locator("[data-slot=host-wait]").last().evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(dashed).toBe("5 4");
         await expectDetailWhole(page, { skipTitle: true });
-        // A decision that was made says what, by whom and when.
-        // Enlarge the shared scale until the decision and its nearby continuation are separate marks.
-        for (let count = 0; count < 5 && await step(page, locale === "zh-CN" ? "决定" : "Decision").count() === 0; count++) {
-          await strip(page).locator('[data-slot=zoom-ruler]:visible').press("+");
-        }
-        await step(page, locale === "zh-CN" ? "决定" : "Decision").first().click();
-        await expect(pane(page)).toContainText(locale === "zh-CN" ? "拒绝" : "Declined");
+        // The resolution and its continuation have the same recorded instant.
+        await go(page, `#tasks/${A}/preview-run-a2/5`);
+        await expect(pane(page).locator("[data-slot=workspace-resolution]")).toContainText(locale === "zh-CN" ? "已采纳" : "Adopted");
+        await go(page, `#tasks/${A}/preview-run-a2/6`);
+        await expect(pane(page).locator("[data-slot=host-response]")).toContainText("工作区已采纳");
         await expectDetailWhole(page, { skipTitle: true });
       });
 

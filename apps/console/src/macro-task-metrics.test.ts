@@ -38,7 +38,7 @@ describe("macroTask metrics", () => {
       { ...macroTaskTimelineFixture().spans[3]!, spanId: "r", runId: "r1", kind: "routing",
         startAt: "2026-09-26T01:05:00Z", endAt: "2026-09-26T01:08:00Z", state: "finished", decisionTaskId: "d1" },
       { ...macroTaskTimelineFixture().spans[5]!, spanId: "w", runId: "r1", kind: "host",
-        startAt: "2026-09-26T01:08:00Z", endAt: "2026-09-26T01:20:00Z", state: "approved", requestId: "req-1" },
+        startAt: "2026-09-26T01:08:00Z", endAt: "2026-09-26T01:20:00Z", state: "superseded", requestId: "req-1" },
       { ...macroTaskTimelineFixture().spans[2]!, spanId: "e", runId: "r1", kind: "execution",
         startAt: "2026-09-26T01:00:00Z", endAt: "2026-09-26T01:04:00Z", shutdownConfirmed: true, state: "finished" },
     ]);
@@ -131,7 +131,7 @@ describe("macroTask metrics", () => {
   it("falls back to the macroTask creation time when no span has a usable start", () => {
     const timeline = withSpans([], { macroTask: macroTaskDetail({ createdAt: "2026-09-26T01:12:00Z" }) });
     timeline.events = [{
-      seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T02:00:00Z", decision: null, verdict: null, state: null, strategy: null, note: null, actor: null,
+      seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T02:00:00Z", verdict: null, state: null, strategy: null, note: null, actor: null,
       attemptId: null, requestId: null, artifactId: null,
     }];
     const metrics = macroTaskMetrics(timeline);

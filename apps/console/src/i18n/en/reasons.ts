@@ -74,7 +74,6 @@ export default {
   "harness.shutdown-unverified": "The harness process's stop has not been confirmed.",
   "harness.timeout": "The harness response timed out.",
   "harness.version-unknown": "The harness version is unknown; check the CLI and check again.",
-  "helpers-settled": "The authorized helpers reached a boundary; the Host decides the next action.",
   "history.reason-unavailable": "The reason for historical record {{recordId}} could not be recovered.",
   "interrupted-before-delivery": "The execution was interrupted before delivering its result.",
   "inquiry-answer-empty": "The inquiry bridge reported an answer without usable text.",
