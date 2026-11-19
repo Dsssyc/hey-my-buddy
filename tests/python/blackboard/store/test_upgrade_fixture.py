@@ -1454,16 +1454,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
         # The legacy resolution form admits exactly the actor's own vocabulary.
         legacy_request = ids['abandonBlocked']['requestId']
-        conflict = ids['abandonBlocked']['conflictId']
-        def legacy(action, state):
-            return _json({'legacy': True, 'resolution': {
-                'action': action, 'actor': {'role': 'host'}, 'conflictId': conflict, 'state': state}})
-        for action, state in (('keep', 'abandoned'), ('abandon', 'pending')):
-            with self.subTest(legacy=(action, state)), self.assertRaises(sqlite3.IntegrityError):
+        legacy, refused = self.legacy_resolution_forms(ids['abandonBlocked']['conflictId'])
+        for document in refused:
+            with self.subTest(legacy=document), self.assertRaises(sqlite3.IntegrityError):
                 db.execute("UPDATE workflow_requests SET state='resolved',response_kind=NULL,response_id=NULL,"
-                           'resolution_json=? WHERE request_id=?', (legacy(action, state), legacy_request))
+                           'resolution_json=? WHERE request_id=?', (legacy(document), legacy_request))
         db.execute("UPDATE workflow_requests SET state='resolved',response_kind=NULL,response_id=NULL,"
-                   'resolution_json=? WHERE request_id=?', (legacy('abandon', 'abandoned'), legacy_request))
+                   "resolution_json=? WHERE request_id=?",
+                   (legacy({'action': 'abandon', 'state': 'abandoned'}), legacy_request))
         self.assertEqual(json.loads(db.execute('SELECT resolution_json FROM workflow_requests WHERE request_id=?',
                                                (legacy_request,)).fetchone()[0])['resolution']['action'], 'abandon')
         db.rollback()
@@ -1495,6 +1493,41 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual((trigger['runId'], trigger['kind']), (case['ownedRunId'], 'workflow.turn_returned'))
             self.assertEqual(event['task_id'], trigger['runId'])
         self.assertEqual(event['kind'], trigger['kind'])
+
+    def legacy_resolution_forms(self, conflict):
+        """The legacy resolution documents the Schema 42 CHECK must refuse."""
+        def legacy(document):
+            return _json({'legacy': True, 'resolution': {
+                'actor': {'role': 'host'}, 'conflictId': conflict, **document}})
+        return legacy, (
+            {'action': 'keep', 'state': 'abandoned'},
+            {'action': 'abandon', 'state': 'pending'},
+            # A missing or JSON null field must never relax the CHECK to NULL.
+            {'state': 'abandoned'},
+            {'action': 'abandon'},
+            {'action': None, 'state': 'abandoned'},
+            {'action': 'abandon', 'state': None},
+        )
+
+    def test_fresh_board_refuses_incomplete_legacy_resolutions(self):
+        """A fresh Schema 42 board rejects the same incomplete legacy forms."""
+        fresh = Database(self.root / 'fresh-legacy-resolution')
+        try:
+            fresh.initialize()
+            legacy, refused = self.legacy_resolution_forms('wsc-fresh-legacy')
+            timestamp = '2026-02-01T00:00:00.000Z'
+            with sqlite3.connect(fresh.path) as created:
+                created.execute(
+                    "INSERT INTO workflow_requests(request_id,run_id,summary,payload_json,state,resolution_json,"
+                    "created_at,updated_at) VALUES('req-fresh-legacy','run-fresh','Fixture legacy resolution',"
+                    "'{}','resolved',?,?,?)",
+                    (legacy({'action': 'abandon', 'state': 'abandoned'}), timestamp, timestamp))
+                for document in refused:
+                    with self.subTest(legacy=document), self.assertRaises(sqlite3.IntegrityError):
+                        created.execute('UPDATE workflow_requests SET resolution_json=? '
+                                        "WHERE request_id='req-fresh-legacy'", (legacy(document),))
+        finally:
+            fresh.close()
 
     def test_helper_offline_stock_keeps_note_less_decisions_and_a_recorded_wakeup(self):
         fixture, db = self.helper_stock_board('offline-helpers', load_helper_offline_stock)

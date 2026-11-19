@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
                 AND json_type(resolution_json,'$.resolution') IS 'object'
                 AND json_type(resolution_json,'$.resolution.conflictId') IS 'text'
                 AND length(json_extract(resolution_json,'$.resolution.conflictId')) > 0
+                AND json_type(resolution_json,'$.resolution.action') IS 'text'
                 AND json_extract(resolution_json,'$.resolution.action') IN ('restore','adopt','abandon')
+                AND json_type(resolution_json,'$.resolution.state') IS 'text'
                 AND json_extract(resolution_json,'$.resolution.state') IN ('open','restored','adopted','abandoned')
                 AND json_type(resolution_json,'$.resolution.actor') IS 'object'
                 AND json_type(resolution_json,'$.parameters') IS NULL
