@@ -711,3 +711,44 @@ class ExecutionDeliveryTests(unittest.TestCase):
             self.assertTrue(self.execution.run())
         deliver.assert_called_once()
         self.assertFalse(native_path(budget).exists())
+
+    def test_cancellation_during_router_input_wait_clears_hint_before_receipt_delivery(self):
+        for stage in ('prepare', 'collect'):
+            with self.subTest(stage=stage):
+                claim = {
+                    'task': dict(CLAIM['task']),
+                    'attempt': {**CLAIM['attempt'], 'attemptId': f'attempt-wait-cancel-{stage}'},
+                }
+                client = mock.Mock()
+                execution = entry.Execution(claim, self.state, 'n' * 64, client=client)
+                native_path(execution.directory).mkdir(parents=True, exist_ok=True)
+                control = execution.control
+                def cancel_while_waiting(_timeout):
+                    control.cancel_view = {'cancelRequested': True}
+                handle = SimpleNamespace(wait=lambda timeout=None: 0, grace_deadline=None,
+                                         force_stop_requested=False, result=None)
+                unknown_err = BoardError('router-input-unknown', 'cannot read Router input')
+                prepare_result = (SimpleNamespace(available=True, error=unknown_err) if stage == 'prepare'
+                                  else SimpleNamespace(available=True, error=None))
+                holder = {'preflightControl': control}
+                with mock.patch.object(control, 'wait', side_effect=cancel_while_waiting), \
+                     mock.patch.object(entry.role_seam, 'worker_executor', return_value=object()), \
+                     mock.patch.object(entry.role_seam, 'prepare_worker_run', return_value=prepare_result), \
+                     mock.patch.object(entry.role_seam, 'worker_start', return_value=handle), \
+                     mock.patch.object(entry.role_seam, 'worker_collect', side_effect=unknown_err), \
+                     mock.patch('hey_my_buddy.install.runtime.resolve_runtime', return_value=object()):
+                    with self.assertRaises(BoardError) as caught:
+                        execution._execute_selected(
+                            claim, claim['task'], claim['task']['spec'], claim['attempt'], execution.directory, holder)
+                self.assertEqual(caught.exception.code, 'ATTEMPT_FINISHED')
+                # The ended wait was cleared on the exceptional exit so receipt
+                # delivery never publishes router-input-unknown after cancellation.
+                self.assertEqual(execution._hints, {'waitingReason': None})
+                receipt = execution.receipt(claim, {'status': 'cancelled', 'shutdownConfirmed': True},
+                                            execution.directory)
+                self.assertTrue(deliver_receipt(
+                    client, receipt, execution.directory, nonce='n' * 64,
+                    flush_hints=execution._flush_delivery_hints))
+                self.assertEqual(client.progress.call_count, 1)
+                self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': None})
+                client.submit_result.assert_called_once()

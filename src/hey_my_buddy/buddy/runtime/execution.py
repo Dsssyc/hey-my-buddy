@@ -741,16 +741,20 @@ class Execution:
         control = holder['preflightControl']
         preparation = role_seam.prepare_worker_run(implementation, context)
         unknown_reads = 0
-        while preparation.error is not None and preparation.error.code == 'router-input-unknown':
-            control.raise_fatal()
-            self._wait_control_observation(claim, control, unknown_reads)
-            unknown_reads += 1
-            preparation = role_seam.prepare_worker_run(implementation, context)
-        if unknown_reads:
-            # Leaving the wait loop clears its hint even on the failure and retry
-            # exits below, so a later flush cannot re-report a finished wait.
-            with self._flush_lock:
-                self.hint(waitingReason=None)
+        waited = False
+        try:
+            while preparation.error is not None and preparation.error.code == 'router-input-unknown':
+                control.raise_fatal()
+                waited = True
+                self._wait_control_observation(claim, control, unknown_reads)
+                unknown_reads += 1
+                preparation = role_seam.prepare_worker_run(implementation, context)
+        finally:
+            if waited:
+                # Leaving the wait loop — normally or on cancellation/error — clears
+                # its hint so receipt delivery cannot flush an already-ended wait.
+                with self._flush_lock:
+                    self.hint(waitingReason=None)
         if not preparation.available:
             return self.receipt(
                 claim,
@@ -825,21 +829,25 @@ class Execution:
                 self.log("Host stop grace reached; forcing the owned run to stop")
                 role_seam.worker_cancel(implementation, handle)
         unknown_reads = 0
-        while True:
-            try:
-                outcome = role_seam.worker_collect(implementation, handle, context)
-                break
-            except BoardError as error:
-                if error.code != 'router-input-unknown':
-                    raise
-                holder['confirmed_stopped'] = True
-                self._wait_control_observation(claim, control, unknown_reads)
-                unknown_reads += 1
-        if unknown_reads:
-            # Same clearing as the prepare loop: an exception on the exits below
-            # must not leave the recorded wait as a pending hint.
-            with self._flush_lock:
-                self.hint(waitingReason=None)
+        waited = False
+        try:
+            while True:
+                try:
+                    outcome = role_seam.worker_collect(implementation, handle, context)
+                    break
+                except BoardError as error:
+                    if error.code != 'router-input-unknown':
+                        raise
+                    holder['confirmed_stopped'] = True
+                    waited = True
+                    self._wait_control_observation(claim, control, unknown_reads)
+                    unknown_reads += 1
+        finally:
+            if waited:
+                # Same clearing as the prepare loop: cancellation or any other
+                # exit must not leave the ended wait queued for receipt delivery.
+                with self._flush_lock:
+                    self.hint(waitingReason=None)
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
         if result is not None and result.activity is not None:
@@ -925,8 +933,10 @@ class Execution:
 
     def _wait_control_observation(self, claim, control, retry):
         control.raise_fatal()
-        attempt = claim['attempt']
-        self.hint(waitingReason=make_reason('router-input-unknown'))
+        if control.cancel_view is not None or self.stop_requested():
+            raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
+        with self._flush_lock:
+            self.hint(waitingReason=make_reason('router-input-unknown'))
         control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
         control.raise_fatal()
         if control.cancel_view is not None or self.stop_requested():

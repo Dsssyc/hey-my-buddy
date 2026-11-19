@@ -112,28 +112,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON atte
 def upgrade(connection):
     # The stopped-board installer runs this step on idle stock: every attempt is
     # finished with confirmed shutdown, so no live connection reason, probe flag
-    # or Router wait survives. The new columns start empty and the task rows
-    # carry only their queued writers' reasons.
-    task_rows = [dict(row) for row in connection.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')]
+    # or Router wait survives. Copying inside SQLite via TEMP tables avoids
+    # loading task specs and attempt reports into Python memory and avoids
+    # renaming referenced tables (which would rewrite child foreign keys).
+    connection.execute('CREATE TEMP TABLE _tasks_41 AS SELECT rowid AS _rowid, * FROM "tasks"')
     connection.execute('DROP TABLE "tasks"')
     connection.execute(TASKS_DDL)
-    columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info("tasks")'))]
-    connection.executemany(
-        f'INSERT INTO "tasks"({",".join(columns)}) VALUES({",".join("?" for _ in columns)})',
-        ([row[column] for column in columns] for row in task_rows))
+    task_columns = [row[1] for row in connection.execute('PRAGMA table_info("tasks")')]
+    connection.execute(
+        f'INSERT INTO "tasks"(rowid,{",".join(task_columns)})'
+        f' SELECT _rowid,{",".join(task_columns)} FROM _tasks_41 ORDER BY _rowid')
+    connection.execute('DROP TABLE _tasks_41')
     for statement in TASKS_INDEXES.split(';'):
         if statement.strip():
             connection.execute(statement)
-    attempt_rows = [dict(row) for row in connection.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
+    connection.execute('CREATE TEMP TABLE _attempts_41 AS SELECT rowid AS _rowid, * FROM attempts')
     connection.execute('DROP TABLE attempts')
     connection.execute(ATTEMPTS_DDL)
-    columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(attempts)'))]
+    attempt_columns = [row[1] for row in connection.execute('PRAGMA table_info(attempts)')]
     # Idle stock has no live waiting fact: the new columns start empty and the
     # probe flag starts clear.
-    empty = {'connection_reason': None, 'probe_unknown': 0, 'waiting_reason': None}
-    connection.executemany(
-        f'INSERT INTO attempts({",".join(columns)}) VALUES({",".join("?" for _ in columns)})',
-        ([empty.get(column, row.get(column)) for column in columns] for row in attempt_rows))
+    defaults = {'connection_reason': 'NULL', 'probe_unknown': '0', 'waiting_reason': 'NULL'}
+    select_columns = [defaults.get(column, column) for column in attempt_columns]
+    connection.execute(
+        f'INSERT INTO attempts(rowid,{",".join(attempt_columns)})'
+        f' SELECT _rowid,{",".join(select_columns)} FROM _attempts_41 ORDER BY _rowid')
+    connection.execute('DROP TABLE _attempts_41')
     for statement in ATTEMPTS_INDEXES.split(';'):
         if statement.strip():
             connection.execute(statement)

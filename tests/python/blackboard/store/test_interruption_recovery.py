@@ -1068,23 +1068,43 @@ class ReleaseReasonContinuationTests(WorkflowTestCase):
 class QueueReasonProjectionTests(WorkflowTestCase):
     """Every task queueReason entry point reads one identical attempt projection."""
 
-    def views(self, board, run_id):
+    def views(self, board, run_id, *, lead_id=None):
         from hey_my_buddy.blackboard.store.store import task_queue_reason
         from hey_my_buddy.blackboard.tasks import macro_tasks
         with board.store.db.read() as connection:
             task_row = board.store._task_row(connection, {"runId": run_id})
             direct = task_queue_reason(connection, task_row)
-            timeline = macro_tasks.macro_task_timeline(board.store, {"macroTaskId": f"run:{run_id}"})["rows"]
-        return {
+            group_id = f"run:{lead_id}" if lead_id is not None else f"run:{run_id}"
+            timeline = [row for row in macro_tasks.macro_task_timeline(board.store, {"macroTaskId": group_id})["rows"]
+                        if row["runId"] == run_id]
+            owned = (board.store.workflow._owned_turn_context(connection, lead_id, None)["ownedMicroTasks"]
+                     if lead_id is not None else [])
+        result = {
             "task_get": board.call("task_get", {"runId": run_id})["task"]["queueReason"],
             "direct": direct,
             "workflow_get": board.call("workflow_get", {"runId": run_id})["queueReason"],
             "timeline": timeline[0]["queueReason"] if timeline else None,
         }
+        if lead_id is not None:
+            matched = [item for item in owned if item["runId"] == run_id]
+            self.assertEqual(len(matched), 1)
+            result["lead_owned_sql"] = matched[0]["queueReason"]
+        return result
 
-    def assert_views(self, board, run_id, expected):
-        views = self.views(board, run_id)
+    def assert_views(self, board, run_id, expected, *, lead_id=None):
+        views = self.views(board, run_id, lead_id=lead_id)
         self.assertEqual(views, {entry: expected for entry in views})
+
+    def attach_to_lead(self, board, run_id, *, suffix):
+        lead_id = self.submit(board, request_id=f"req-lead-{suffix}", cwd=str(self.workdir(f"lead-{suffix}")))["runId"]
+        lead_claim = self.claim(board, claim_request_id=f"c-lead-{suffix}", run_id=lead_id)
+        self.finish_turn(board, lead_claim, disposition="completed")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id, lead_run_id, lead_turn_id, created_at) VALUES(?,?,?,?)",
+                (run_id, lead_id, lead_claim["claim"]["turn"]["turnId"], board.store.now()),
+            )
+        return lead_id
 
     def test_every_entry_point_projects_the_active_attempt_identically(self):
         from support import publish_result_receipt
@@ -1092,30 +1112,32 @@ class QueueReasonProjectionTests(WorkflowTestCase):
         waiting = {"code": "router-input-unknown", "params": {}}
         board = self.board()
         run_id = self.submit(board)["runId"]
+        lead_id = self.attach_to_lead(board, run_id, suffix="live")
         claim = self.claim(board, run_id=run_id)["claim"]
         actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
                  "nonce": "n" * 16}
         # An unknown probe shows until a recorded wait outranks it.
         with board.store.db.write() as connection:
             connection.execute("UPDATE attempts SET probe_unknown=1 WHERE attempt_id=?", (actor["attemptId"],))
-        self.assert_views(board, run_id, "harness-probe-unknown")
+        self.assert_views(board, run_id, "harness-probe-unknown", lead_id=lead_id)
         board.call("execution_progress", {**actor, "data": {"waitingReason": waiting}})
-        self.assert_views(board, run_id, "router-input-unknown")
+        self.assert_views(board, run_id, "router-input-unknown", lead_id=lead_id)
         # A disconnect outranks both while it lasts and returns to the wait.
         self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=False))
-        self.assert_views(board, run_id, "execution-connection-unknown")
+        self.assert_views(board, run_id, "execution-connection-unknown", lead_id=lead_id)
         self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=True))
-        self.assert_views(board, run_id, "router-input-unknown")
+        self.assert_views(board, run_id, "router-input-unknown", lead_id=lead_id)
         # Receipt reception settles every wait at every entry point.
         reference = publish_result_receipt(board.directory, {
             **actor, "status": "ok", "shutdownConfirmed": True, "result": {"text": "done"}})
         self.assertEqual(board.call("execution_result", reference), {"received": True})
-        self.assert_views(board, run_id, None)
+        self.assert_views(board, run_id, None, lead_id=lead_id)
 
         # A committed result reads as no reason even while the attempt is still
         # uncertain with no confirmed stop.
         board = self.board()
         run_id = self.submit(board, request_id="req-result", cwd=str(self.workdir("result")))["runId"]
+        lead_id = self.attach_to_lead(board, run_id, suffix="result")
         claim = self.claim(board, claim_request_id="c-result", run_id=run_id)["claim"]
         actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
                  "nonce": "n" * 16}
@@ -1128,4 +1150,4 @@ class QueueReasonProjectionTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             row = board.store._attempt_row(connection, actor["attemptId"])
         self.assertEqual((row["execution_state"], row["result_form"] is not None), ("uncertain", True))
-        self.assert_views(board, run_id, None)
+        self.assert_views(board, run_id, None, lead_id=lead_id)

@@ -750,6 +750,85 @@ class LifecycleTests(WorkflowTestCase):
                 "SELECT active_attempt_id, queue_reason FROM tasks WHERE task_id=?", (run_id,)).fetchone()),
                 (parent_attempt, None))
 
+    def test_closing_kept_helper_boundary_restores_queued_continuation_and_delivered_parent(self):
+        # Ordering 1: helper requests assistance while the parent's keep
+        # continuation is still queued; answering it must restore executing so
+        # admission can claim turn 2 instead of stranding in waiting-helpers.
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, request_id="req-keep-queued", cwd=str(self.workdir("p-queued")))
+        run_id = submitted["runId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="p-q-1", run_id=run_id), disposition="assistance")
+        view = board.call("workflow_get", {"runId": run_id})
+        approved = self.decide(
+            board, view, view["activeRequest"]["requestId"],
+            helpers=[
+                {"title": "helper-1", "task": "helper one", "cwd": str(self.workdir("hq1")),
+                 "workspace": {"kind": "worktree", "access": "write"}},
+                {"title": "helper-2", "task": "helper two", "cwd": str(self.workdir("hq2")),
+                 "workspace": {"kind": "worktree", "access": "write"}},
+            ],
+        )
+        h1, h2 = [item["taskId"] for item in approved["children"]]
+        continued = self.continue_run(board, approved, helper_policy="keep")
+        self.assertEqual(continued["state"], "executing")
+        self.finish_turn(board, self.claim(board, claim_request_id="hq1-c", run_id=h1), disposition="assistance")
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["state"], "awaiting-host")
+        self.assertEqual(parent["queueReason"], "helper-attention")
+        self.decide(board, parent, parent["activeRequest"]["requestId"], decision="decline")
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["state"], "executing")
+        self.assertEqual(parent["queueReason"], "awaiting-workspace-preparation")
+        turn2 = self.claim(board, claim_request_id="p-q-2", run_id=run_id)
+        self.assertEqual(turn2["claim"]["turn"]["turnIndex"], 2)
+
+        # Ordering 2: while turn 2 executes, helper-2 opens its boundary, then
+        # the parent delivers its final artifact before the boundary is answered;
+        # answering it must restore delivered so acceptance accepts that artifact.
+        self.finish_turn(board, self.claim(board, claim_request_id="hq2-c", run_id=h2), disposition="assistance")
+        parent_before_delivery = board.call("workflow_get", {"runId": run_id})
+        proxy_id = parent_before_delivery["activeRequest"]["requestId"]
+        self.finish_turn(board, turn2, disposition="completed")
+        delivered_parent = board.call("workflow_get", {"runId": run_id})
+        artifact_id = delivered_parent["finalArtifactId"]
+        self.assertIsNotNone(artifact_id)
+        self.decide(board, delivered_parent, proxy_id, decision="decline")
+        restored = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(restored["state"], "delivered")
+        self.assertIsNone(restored["queueReason"])
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "artifactId": artifact_id, "notRequired": "verified", "note": "accept after helper close",
+        })
+        self.assertEqual(accepted["state"], "accepted")
+
+        # Ordering 3: parent delivers first, then a kept helper opens and closes
+        # its boundary; parent must still return to delivered and accept cleanly.
+        submitted2 = self.submit(board, request_id="req-keep-delivered", cwd=str(self.workdir("p-deliv")))
+        run2 = submitted2["runId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="p-d-1", run_id=run2), disposition="assistance")
+        view2 = board.call("workflow_get", {"runId": run2})
+        approved2 = self.decide(
+            board, view2, view2["activeRequest"]["requestId"],
+            helpers=[{"title": "helper-3", "task": "helper three", "cwd": str(self.workdir("hd1")),
+                      "workspace": {"kind": "worktree", "access": "write"}}],
+        )
+        h3 = approved2["children"][0]["taskId"]
+        self.continue_run(board, approved2, helper_policy="keep")
+        self.finish_turn(board, self.claim(board, claim_request_id="p-d-2", run_id=run2), disposition="completed")
+        art2 = board.call("workflow_get", {"runId": run2})["finalArtifactId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="hd1-c", run_id=h3), disposition="assistance")
+        with_proxy = board.call("workflow_get", {"runId": run2})
+        self.assertEqual(with_proxy["state"], "awaiting-host")
+        self.decide(board, with_proxy, with_proxy["activeRequest"]["requestId"], decision="decline")
+        restored2 = board.call("workflow_get", {"runId": run2})
+        self.assertEqual(restored2["state"], "delivered")
+        self.assertIsNone(restored2["queueReason"])
+        accepted2 = board.call("workflow_accept", {
+            "runId": run2, "artifactId": art2, "notRequired": "verified", "note": "accept after post-delivery helper",
+        })
+        self.assertEqual(accepted2["state"], "accepted")
+
     def test_manual_continue_invalidates_auto_and_cancels_helpers(self):
         board = self.board()
         self.register(board)
