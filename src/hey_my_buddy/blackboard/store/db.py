@@ -28,7 +28,7 @@ ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
 , exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)
 , profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT);"""
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -167,7 +167,11 @@ CREATE TABLE IF NOT EXISTS "tasks" (
     review_rejection_note   TEXT,
     CHECK ((adapter='decision' AND json_extract(spec_json,'$.expectedSeconds') IS NULL)
         OR (adapter!='decision' AND json_type(spec_json,'$.expectedSeconds') IS 'integer'
-            AND json_extract(spec_json,'$.expectedSeconds') > 0))
+            AND json_extract(spec_json,'$.expectedSeconds') > 0)),
+    -- A running task's reason lives on its active attempt row; the task's own
+    -- reason is the queued writer's fact and never coexists with an attempt.
+    CHECK (active_attempt_id IS NULL OR queue_reason IS NULL),
+    CHECK (queue_reason IS NULL OR queue_reason NOT IN ('attempt-uncertain-after-restart','execution-connection-unknown','harness-probe-unknown','router-input-unknown'))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 
@@ -179,6 +183,14 @@ CREATE TABLE IF NOT EXISTS attempts (
     execution_state     TEXT NOT NULL
         CHECK (execution_state IN ('starting','executing','finalizing','uncertain','finished')),
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
+    -- The attempt's own waiting facts, each owned by exactly one writer: the
+    -- connection reason while the execution's liveness is unresolved, an unknown
+    -- harness probe observed before or without a reconnect, and the Router's
+    -- control wait. A restart-marked uncertain attempt and a live-session
+    -- disconnect are distinguished by the reason itself.
+    connection_reason TEXT CHECK (connection_reason IN ('attempt-uncertain-after-restart','execution-connection-unknown')),
+    probe_unknown     INTEGER NOT NULL DEFAULT 0 CHECK (probe_unknown IN (0,1)),
+    waiting_reason    TEXT CHECK (waiting_reason IN ('router-input-unknown')),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
     -- Frozen model-service identity (harness/provider/model, no effort dimension).
@@ -208,6 +220,14 @@ CREATE TABLE IF NOT EXISTS attempts (
     revision            INTEGER NOT NULL DEFAULT 1,
     CHECK ((result_json IS NULL AND result_form IS NULL)
         OR (result_json IS NOT NULL AND result_form IS NOT NULL)),
+    -- The connection reason names why the attempt is uncertain: it is bound to
+    -- execution_state, not ownership, because a finished attempt may keep its
+    -- historical uncertain ownership while holding no live reason.
+    CHECK ((execution_state='uncertain' AND connection_reason IS NOT NULL)
+        OR (execution_state!='uncertain' AND connection_reason IS NULL)),
+    -- Receiving a receipt settles every wait: no probe flag or Router wait may
+    -- survive into finalizing or finished.
+    CHECK (execution_state NOT IN ('finalizing','finished') OR (probe_unknown = 0 AND waiting_reason IS NULL)),
     UNIQUE(task_id, generation)
 );
 -- Relational guarantee of the documented invariant: at most one effective active

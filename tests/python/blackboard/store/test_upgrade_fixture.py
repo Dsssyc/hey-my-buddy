@@ -933,7 +933,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?',
                                      (fixture['stableIds']['accepted'],)).fetchone()[0]
-        connection.execute("UPDATE attempts SET execution_state='uncertain',shutdown_confirmed=0 WHERE attempt_id=?", (attempt,))
+        connection.execute("UPDATE attempts SET execution_state='uncertain',connection_reason='attempt-uncertain-after-restart',shutdown_confirmed=0 WHERE attempt_id=?", (attempt,))
         connection.commit()
         self.assertEqual(tuple(connection.execute('SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?', (attempt,)).fetchone()), ('uncertain', 0))
         with self.assertRaises(BoardError) as caught:

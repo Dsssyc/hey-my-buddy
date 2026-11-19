@@ -390,7 +390,8 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.new_run(expectedSeconds=30)
         self.new_run(expectedSeconds=10)
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain' WHERE task_id=?", (active["runId"],))
+            db.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain',"
+                       " connection_reason='execution-connection-unknown' WHERE task_id=?", (active["runId"],))
         load = self.facts()[0]["load"]
         self.assertEqual(load, {"active": 2, "limit": 2, "queued": 2,
                                "wait": {"seconds": 80, "atLeast": False, "overdue": 0}})

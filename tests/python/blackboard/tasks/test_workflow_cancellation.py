@@ -300,7 +300,8 @@ class WorkflowCancellationTests(WorkflowTestCase):
         board, _, parent, child = self.parent_and_child()
         helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain' WHERE task_id=?", (child,))
+            connection.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain',"
+                               " connection_reason='execution-connection-unknown' WHERE task_id=?", (child,))
         self.cancel(board, parent)
         self.finish_turn(board, helper, runner_status="cancelled", shutdown=False, seal=False)
         self.assertEqual(self.summary(board, parent["runId"])["unconfirmedRunIds"], [child])
@@ -349,7 +350,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
                     "created_at,updated_at) VALUES(?,?,?,'active',?,?)",
                     (run_id, parent["runId"], "fixture-" + run_id, now, now),
                 )
-                connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,created_at,updated_at) VALUES(?,?,1,'fixture','dsh','uncertain',?,?)", (attempt_id, run_id, now, now))
+                connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,connection_reason,created_at,updated_at) VALUES(?,?,1,'fixture','dsh','uncertain','execution-connection-unknown',?,?)", (attempt_id, run_id, now, now))
                 connection.execute("UPDATE tasks SET selected_attempt_id=? WHERE task_id=?", (attempt_id, run_id))
         summary = self.summary(board, parent["runId"])
         self.assertTrue(summary["selfConfirmed"])
@@ -361,7 +362,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
     def test_shutdown_summary_does_not_hide_unresolved_attempt_behind_old_selected_result(self):
         board, _, parent, _ = self.parent_and_child()
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,created_at,updated_at) VALUES(?,?,2,'fixture','dsh','uncertain',?,?)", (str(uuid.uuid4()), parent['runId'], board.store.now(), board.store.now()))
+            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,connection_reason,created_at,updated_at) VALUES(?,?,2,'fixture','dsh','uncertain','execution-connection-unknown',?,?)", (str(uuid.uuid4()), parent['runId'], board.store.now(), board.store.now()))
         summary = self.summary(board, parent["runId"])
         self.assertFalse(summary["selfConfirmed"])
         self.assertTrue(summary["descendantsConfirmed"])

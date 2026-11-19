@@ -547,16 +547,27 @@ class BoardService(_BaseResource):
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
                 response = {'harness': record, 'retry': retry}
-                _, _, waiting_seq, waiting_code = self.store._attempt_waiting_facts(
-                    db, attempt['task_id'], attempt['attempt_id'])
+                # The probe outcome is the attempt row's own fact: unknown means
+                # no preflight could prove the harness ready, and a later ready
+                # record clears it. A receipt-bound attempt no longer shows one.
+                probe_unknown = 1 if (record.get('status') == 'unknown'
+                                      or (record.get('lastProbe') or {}).get('status') == 'unknown') else 0
+                if (attempt['execution_state'] not in ('finalizing', 'finished')
+                        and int(attempt['probe_unknown']) != probe_unknown):
+                    cursor = db.execute(
+                        "UPDATE attempts SET probe_unknown=?, updated_at=?, revision=revision+1"
+                        " WHERE attempt_id=? AND revision=?",
+                        (probe_unknown, self.store.now(), attempt['attempt_id'], attempt['revision']))
+                    if cursor.rowcount != 1:
+                        raise BoardError('REVISION_CONFLICT', 'The attempt changed concurrently; re-read it and retry')
+                    db.execute("UPDATE tasks SET updated_at=? WHERE task_id=? AND state IN ('running','cancelling')",
+                               (self.store.now(), attempt['task_id']))
                 self.store._append_event(
                     db,
                     'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected',
                     task_id=attempt['task_id'],
-                    payload={'attemptId': attempt['attempt_id'], 'harness': record,
-                             'waitingReason': waiting_code, 'waitingSeq': waiting_seq},
+                    payload={'attemptId': attempt['attempt_id'], 'harness': record},
                 )
-                self.store._sync_attempt_queue_reason(db, attempt['attempt_id'])
                 self.store._store_receipt(db, command_id, 'harness.prepare', request, response, subject=subject, task_id=attempt['task_id'])
                 head = self.store._head_of(db)
             self.store._notify(head)

@@ -75,7 +75,7 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_frozen_schema_steps_import_only_the_standard_library(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy" / "blackboard" / "store"
-        for name in ("schema_30_31.py", "schema_31_32.py", "schema_32_33.py", "schema_33_34.py", "schema_34_35.py", "schema_35_36.py", "schema_36_37.py", "schema_37_38.py", "schema_38_39.py", "schema_39_40.py", "schema_40_41.py"):
+        for name in ("schema_30_31.py", "schema_31_32.py", "schema_32_33.py", "schema_33_34.py", "schema_34_35.py", "schema_35_36.py", "schema_36_37.py", "schema_37_38.py", "schema_38_39.py", "schema_39_40.py", "schema_40_41.py", "schema_41_42.py"):
             tree = ast.parse((source / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -142,7 +142,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
-        self.assertEqual(SCHEMA_VERSION, 41)
+        self.assertEqual(SCHEMA_VERSION, 42)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -197,6 +197,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/schema_38_39.py", "UPDATE meta SET value='39' WHERE key='schema_version'"),
             ("blackboard/store/schema_39_40.py", "UPDATE meta SET value='40' WHERE key='schema_version'"),
             ("blackboard/store/schema_40_41.py", "UPDATE meta SET value='41' WHERE key='schema_version'"),
+            ("blackboard/store/schema_41_42.py", "UPDATE meta SET value='42' WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:

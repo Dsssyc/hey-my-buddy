@@ -64,8 +64,10 @@ class HarnessServiceTests(BoardTestCase):
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-after-router'))
+            # The recorded Router wait stays the visible reason: an unknown probe
+            # is the attempt row's own secondary fact, not a shadow of the wait.
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
-                             'harness-probe-unknown')
+                             'router-input-unknown')
             before_clear = self.board.head()
             self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
@@ -85,19 +87,19 @@ class HarnessServiceTests(BoardTestCase):
             return sum(1 for event in self.board.events_wait(
                 {'after': 0, 'runId': task['runId'], 'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting')
 
-        # 1. Replaying router-input-unknown after a newer harness probe must not
-        # overwrite harness-probe-unknown, duplicate attempt.waiting or bump revision.
+        # 1. A Router wait recorded before an unknown probe stays the visible
+        # reason; replaying it must not duplicate attempt.waiting or bump revision.
         with patch.object(self.service.harnesses, 'refresh',
                           side_effect=[unknown, ready, unknown, ready, unknown, ready]):
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': router_wait}))
-            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-supersedes-router'))
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-after-router'))
             before_replay_count = waiting_count()
             before_replay_rev = self.board.task_get({'runId': task['runId']})['task']['selectedAttempt']['revision']
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': router_wait}))
             after_replay = self.board.task_get({'runId': task['runId']})['task']
-            self.assertEqual(after_replay['queueReason'], 'harness-probe-unknown')
+            self.assertEqual(after_replay['queueReason'], 'router-input-unknown')
             self.assertEqual(waiting_count(), before_replay_count)
             self.assertEqual(after_replay['selectedAttempt']['revision'], before_replay_rev)
 

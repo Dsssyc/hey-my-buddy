@@ -746,6 +746,11 @@ class Execution:
             self._wait_control_observation(claim, control, unknown_reads)
             unknown_reads += 1
             preparation = role_seam.prepare_worker_run(implementation, context)
+        if unknown_reads:
+            # Leaving the wait loop clears its hint even on the failure and retry
+            # exits below, so a later flush cannot re-report a finished wait.
+            with self._flush_lock:
+                self.hint(waitingReason=None)
         if not preparation.available:
             return self.receipt(
                 claim,
@@ -830,6 +835,11 @@ class Execution:
                 holder['confirmed_stopped'] = True
                 self._wait_control_observation(claim, control, unknown_reads)
                 unknown_reads += 1
+        if unknown_reads:
+            # Same clearing as the prepare loop: an exception on the exits below
+            # must not leave the recorded wait as a pending hint.
+            with self._flush_lock:
+                self.hint(waitingReason=None)
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
         if result is not None and result.activity is not None:

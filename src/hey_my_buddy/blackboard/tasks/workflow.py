@@ -887,12 +887,13 @@ class WorkflowCoordinator:
         micro_task, micro_task_fingerprint = self._micro_task(connection, run_row["run_id"])
         state = run_row["state"]
         from ..routing.quota_routing import cooling
+        from ..store.store import task_queue_reason
         view = {
             "runId": run_row["run_id"],
             "state": state,
             "cancellation": self._cancellation(connection, run_row, host_conclusion),
             "status": task_row["state"],
-            "queueReason": task_row["queue_reason"],
+            "queueReason": task_queue_reason(connection, task_row),
             "awaitingHost": state == "awaiting-host",
             "microTask": self._micro_task_view(micro_task, micro_task_fingerprint),
             "continuationCount": run_row["continuation_count"],
@@ -5985,7 +5986,15 @@ class WorkflowCoordinator:
         previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else None
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
         rows = connection.execute(
-            "SELECT r.*,t.request_id,t.state AS execution_state,t.queue_reason FROM workflow_lead_tasks l"
+            # The active attempt carries a running task's waiting projection:
+            # its connection reason, else its Router wait, else an unknown probe.
+            "SELECT r.*,t.request_id,t.state AS execution_state,"
+            " CASE WHEN t.active_attempt_id IS NULL THEN t.queue_reason ELSE ("
+            "  SELECT CASE WHEN a.execution_state IN ('finalizing','finished') THEN NULL"
+            "   ELSE COALESCE(a.connection_reason,a.waiting_reason,"
+            "    CASE WHEN a.probe_unknown=1 THEN 'harness-probe-unknown' ELSE NULL END) END"
+            "  FROM attempts a WHERE a.attempt_id=t.active_attempt_id) END AS queue_reason"
+            " FROM workflow_lead_tasks l"
             " JOIN workflow_runs r ON r.run_id=l.owned_run_id JOIN tasks t ON t.task_id=r.run_id"
             " WHERE l.lead_run_id=?" + (" AND r.activity_seq>?" if previous_cursor is not None else "")
             + " ORDER BY r.activity_seq DESC,r.run_id", (run_id, previous_cursor) if previous_cursor is not None else (run_id,),

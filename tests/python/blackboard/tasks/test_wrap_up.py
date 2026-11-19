@@ -140,7 +140,8 @@ class WrapUpStopTests(WorkflowTestCase):
         run = self.submit(board)
         claim = self.claim(board)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?",
+            connection.execute("UPDATE attempts SET execution_state='uncertain',"
+                               " connection_reason='execution-connection-unknown' WHERE attempt_id=?",
                                (claim["claim"]["attempt"]["attemptId"],))
         board.call("workflow_cancel", {"runId": run["runId"]})
         uncertain = self.attempt(board, claim)

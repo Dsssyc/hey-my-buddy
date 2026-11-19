@@ -906,6 +906,7 @@ def _tree_order(runs: list) -> list:
 
 
 def _timeline_row(connection, row, depth: int) -> dict:
+    from ..store.store import task_queue_reason
     metadata = micro_task.metadata_from_row(connection, row)
     title, title_source = _run_title(connection, row["task_id"])
     fix_relation = fixes.view(connection, row["task_id"])
@@ -935,7 +936,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],
-        "queueReason": row["queue_reason"],
+        "queueReason": task_queue_reason(connection, row),
         "conclusionStatus": row["conclusion_status"],
         "category": _state(row),
         "shutdownConfirmed": attempts == confirmed and not unproven,

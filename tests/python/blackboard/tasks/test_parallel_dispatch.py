@@ -99,8 +99,8 @@ class ModelServiceAdmissionTests(BoardTestCase):
         claimed = board.store.admit_execution("a" * 32, task_id=first["runId"])["claim"]
         attempt_id = claimed["attempt"]["attemptId"]
         with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET execution_state='uncertain', ownership='uncertain' "
-                               "WHERE attempt_id=?", (attempt_id,))
+            connection.execute("UPDATE attempts SET execution_state='uncertain', ownership='uncertain', "
+                               "connection_reason='execution-connection-unknown' WHERE attempt_id=?", (attempt_id,))
             connection.execute("UPDATE resource_claims SET state='retained' WHERE attempt_id=?", (attempt_id,))
         second = board.store.decisions.request_select({"requestId": "deep-second", "task": "choose again"})
         blocked = board.store.admit_execution("b" * 32, task_id=second["runId"])

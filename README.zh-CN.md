@@ -69,7 +69,7 @@ uvx hey-my-buddy@0.69.7 install
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.70.2-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.71.0-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>

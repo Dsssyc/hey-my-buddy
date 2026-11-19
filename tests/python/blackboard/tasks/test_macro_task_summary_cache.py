@@ -293,6 +293,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             task=connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",(root,)).fetchone()
             selected=task[0]
             result=connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",(selected,)).fetchone()[0]
+            root_reason=connection.execute("SELECT queue_reason FROM tasks WHERE task_id=?",(root,)).fetchone()[0]
         self.sql("UPDATE workflow_runs SET state='delivered' WHERE run_id=?",(root,))
         self.sql("UPDATE tasks SET state='completed',accepted_at=NULL,active_attempt_id=NULL WHERE task_id=?",(root,))
         initial=self.rows()[group]
@@ -304,9 +305,9 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE tasks SET state='completed' WHERE task_id=?",(root,))
             self.rows(); counter.reset_mock()
             for statement,params,restore,restore_params in (
-                ("UPDATE tasks SET active_attempt_id='fictional-dangling-active' WHERE task_id=?",(root,),"UPDATE tasks SET active_attempt_id=NULL WHERE task_id=?",(root,)),
+                ("UPDATE tasks SET active_attempt_id='fictional-dangling-active',queue_reason=NULL WHERE task_id=?",(root,),"UPDATE tasks SET active_attempt_id=NULL,queue_reason=? WHERE task_id=?",(root_reason,root)),
                 ("UPDATE tasks SET selected_attempt_id='fictional-dangling-selected' WHERE task_id=?",(root,),"UPDATE tasks SET selected_attempt_id=? WHERE task_id=?",(selected,root)),
-                ("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?",(selected,),"UPDATE attempts SET execution_state='finished' WHERE attempt_id=?",(selected,)),
+                ("UPDATE attempts SET execution_state='uncertain',connection_reason='attempt-uncertain-after-restart' WHERE attempt_id=?",(selected,),"UPDATE attempts SET execution_state='finished',connection_reason=NULL WHERE attempt_id=?",(selected,)),
                 ("UPDATE attempts SET result_json=NULL,result_form=NULL WHERE attempt_id=?",(selected,),"UPDATE attempts SET result_json=?,result_form='current-report-v2' WHERE attempt_id=?",(result,selected)),
             ):
                 with self.subTest(statement=statement):
@@ -391,7 +392,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.read(), initial)
             self.assert_recomputed(counter, [])
             before_other, before_attempts = facts()
-            self.sql("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?", (selected,))
+            self.sql("UPDATE attempts SET execution_state='uncertain',"
+                     " connection_reason='attempt-uncertain-after-restart' WHERE attempt_id=?", (selected,))
             after_other, after_attempts = facts()
             self.assertEqual(after_other, before_other)  # Includes task/run revisions and all JSON/events.
             expected_attempts = copy.deepcopy(before_attempts)
@@ -399,6 +401,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(target["execution_state"], "finished")
             self.assertEqual(target["shutdown_confirmed"], 0)
             target["execution_state"] = "uncertain"
+            target["connection_reason"] = "attempt-uncertain-after-restart"
             self.assertEqual(after_attempts, expected_attempts)
 
             changed = self.read()
