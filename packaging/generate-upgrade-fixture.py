@@ -36,6 +36,14 @@ SCHEMA33_WRITER_COMMIT = "e3459d8a3b03c06d2af192382a788e051ced9a64"
 SCHEMA36_STATISTICS_COMMIT = "de833698f8a59e6ff0cba6b01c4a98ee8bd20594"
 SCHEMA36_STATISTICS_PATH = "src/hey_my_buddy/blackboard/routing/statistics.py"
 SCHEMA36_MAINTENANCE_PATH = "src/hey_my_buddy/blackboard/routing/maintenance_data.py"
+# The historical writer of every helper-retirement stock row: the last Schema 41
+# mainline commit (0.69.11). No row in these supplements is hand-written SQL.
+HELPER_WRITER_COMMIT = "64cf3f323918407a67746ea8ccda69c0fdd6a91c"
+HELPER_WRITER_VERSION = "0.69.11"
+HELPER_STOCK_SCHEMA = 41
+HELPER_AT = "2026-02-01T00:00:00.000Z"
+HELPER_NONCE = "fixture-helper-writer-nonce-00000000"
+HELPER_BUDDY = "codex / openai / fixture-alpha / high"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
 THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
@@ -2385,6 +2393,1207 @@ def derive_schema36_model_stock(args):
                              encoding="utf-8")
 
 
+def populate_helper_retirement(args):
+    """Run every helper-retirement scenario through the pinned 0.69.11 writers.
+
+    This body runs in the archived Schema 41 source (PYTHONPATH), against the
+    private schema-41 copy prepared by ``derive_helper_retirement_stock``. No
+    model, daemon or native harness runs: receipts, session display records and
+    stop evidence are synthetic inputs to the real service writers, exactly like
+    the frozen floor generation. Synthetic failures exercise the original
+    rescheduling and dispatch rejection paths.
+    """
+    import hey_my_buddy
+    from unittest.mock import patch
+
+    work = args.work_dir.resolve()
+    state = work / "state"
+    assert Path(hey_my_buddy.__file__).resolve().is_relative_to(work / "schema41-source"), \
+        "The helper writer must be imported from the archived Schema 41 source"
+    from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+    from hey_my_buddy.blackboard.service.service import BoardService, call_operation
+    from hey_my_buddy.blackboard.store.store import BoardStore
+    from hey_my_buddy.blackboard.tasks import workspace
+    from hey_my_buddy.blackboard.tasks.workflow import make_reason
+    from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+    from hey_my_buddy.errors import BoardError
+    from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
+    from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, read_execution_receipt, receipt_reference
+    from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
+    from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+
+    fixture_root = state / "f"
+    repository = fixture_root / "repository"
+    preimages = {}
+    preimage_phase = {}
+    phase = ["reject"]
+    native_sha256 = hashlib.sha256
+    # The floor's own identities came from a counter starting at 1; every
+    # supplement id here starts far above that range so the two never collide.
+    counter = itertools.count(9_000_000_000_000)
+
+    def recorded_sha256(data=b"", **kwargs):
+        result = native_sha256(data, **kwargs)
+        caller = sys._getframe(1)
+        ascii_json = caller.f_globals.get("__name__") == "hey_my_buddy.blackboard.tasks.workspace"
+        preimages[result.hexdigest()] = (bytes(data).decode("utf-8"), ascii_json)
+        preimage_phase.setdefault(result.hexdigest(), phase[0])
+        return result
+
+    def checkout_dir(label):
+        target = fixture_root / "checkouts" / label
+        if not target.exists():
+            run(["git", "-C", str(repository), "worktree", "add", "--quiet", "--detach",
+                 str(target), WORKSPACE_INPUT])
+        return target
+
+    store = BoardStore(state, clock=lambda: HELPER_AT)
+    service = BoardService(store, token="fixture-service-token", control={},
+                           on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
+    service.register_console_authority("fixture-console", "f" * 24)
+    scenario_ids = {}
+
+    def call(name, params, *, human=False):
+        authority = {"consoleAuthority": {"sessionId": "fixture-console"}} if human else {}
+        return call_operation(service, name, {**params, **authority})
+
+    def view(run_id):
+        return call("workflow_get", {"runId": run_id})
+
+    def active_request(run_id):
+        current = view(run_id)
+        assert current["activeRequest"] is not None, current
+        return current, current["activeRequest"]
+
+    def submit(label, *, task=None, title=None, access="read", write_scope=None, checkout="existing",
+               inputs=(), buddy=HELPER_BUDDY, macro="standalone", credential=None, cwd=None,
+               delegation=False):
+        params = {"cwd": str(cwd or checkout_dir(label)),
+                  "title": title or ("Helper retirement fixture " + label),
+                  "task": task or ("Fixture helper-retirement scenario " + label),
+                  "buddy": buddy, "checkout": checkout, "access": access,
+                  "expectedSeconds": 600}
+        if credential is None:
+            params["macroTaskId"] = macro
+        if delegation:
+            params["delegationAuthority"] = True
+        if checkout != "none":
+            params["inputs"] = list(inputs)
+            if access in ("write", "full"):
+                params["writeScope"] = list(write_scope or ["README.md"])
+        if access == "full":
+            params["accessNote"] = "Fixture helper-retirement full access"
+        if credential is not None:
+            params["credential"] = credential
+        response = call("workflow_submit", params)
+        return response["runId"]
+
+    def helper_packet(label, *, access="write", cwd=None, checkout="existing", write_scope=("README.md",)):
+        packet = {"title": "Helper retirement helper " + label,
+                  "task": "Fixture helper task " + label,
+                  "cwd": str(cwd or checkout_dir("helper-" + label)),
+                  "buddy": HELPER_BUDDY, "checkout": checkout, "access": access,
+                  "expectedSeconds": 600, "inputs": []}
+        if access in ("write", "full"):
+            packet["writeScope"] = list(write_scope)
+        if access == "full":
+            packet["accessNote"] = "Fixture helper full access"
+        return packet
+
+    def admit(run_id):
+        response = service.admit_execution(HELPER_NONCE, task_id=run_id)
+        assert response["claim"] is not None, response
+        claim = response["claim"]
+        if claim.get("sessionRecordPath") is not None:
+            record = SessionRecord(Path(claim["sessionRecordPath"]), claim["attempt"]["attemptId"])
+            record.append(MessageChunk(session_update="agent_message_chunk",
+                                       content=TextContent(text="Synthetic Schema 41 display record; no native execution.")))
+            record.close()
+            assert record.failure is None, record.failure
+        return claim
+
+    def turn_record(claim, disposition, label, *, request=None):
+        attempt, turn = claim["attempt"], claim["turn"]
+        turn_input = turn.get("input") or {}
+        previous = turn_input.get("previousSessionId")
+        # A reconstructed continuation must not reuse the previous session id;
+        # every other turn gets its own id derived from the service turn.
+        session = previous if turn.get("resumeMode") == "native-session" and previous else (
+            "fixture-41-" + label + "-" + turn["turnId"])
+        if disposition in ("completed", "waiting"):
+            outcome = {"disposition": disposition, "summary": "Fixture Schema 41 turn " + label,
+                       "remaining": [], "decisions": [], "artifacts": [], "request": None}
+        else:
+            outcome = {"disposition": disposition, "summary": "Need the Host for " + label,
+                       "remaining": ["Finish the " + label + " fixture"], "decisions": [], "artifacts": [],
+                       "request": {"summary": "Please review " + label,
+                                   "attempted": "Tried the obvious fixture step",
+                                   "neededWork": ["Decide the fixture approach"],
+                                   "expectedArtifacts": ["A reviewed fixture design"],
+                                   "acceptance": "The fixture design is approved",
+                                   **(request or {})}}
+        return {"version": 1, "taskId": attempt["taskId"], "attemptId": attempt["attemptId"],
+                "generation": attempt["generation"], "turnId": turn["turnId"],
+                "resumeMode": turn["resumeMode"], "previousSessionId": turn_input.get("previousSessionId"),
+                "sessionId": session, "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
+                "outcome": outcome,
+                "provenance": {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
+                               "finalMessageCompleted": True, "nativeTurnStarted": True,
+                               "nativeTurnCompleted": True, "nativeThreadId": session,
+                               "nativeTurnId": "fixture-41-turn-" + label, "finalItemId": "fixture-41-item-" + label,
+                               "eventSeq": 2}}
+
+    def seal(claim):
+        manifest = turn_manifest(state, claim["turn"]["input"])
+        sealed = workspace.seal(state, manifest, claim["attempt"]["taskId"], claim["attempt"]["attemptId"])
+        original = claim["turn"]["input"]["context"]["microTaskInputCommit"]
+        workspace.cumulative_patch(manifest, sealed, original)
+        return record_reference(state, sealed)
+
+    def report(claim, *, status="ok", result=None, error=None):
+        attempt = claim["attempt"]
+        with store.db.read() as connection:
+            row = connection.execute("SELECT adapter, model_harness FROM attempts WHERE attempt_id=?",
+                                     (attempt["attemptId"],)).fetchone()
+        directory = attempt_root(state, row["model_harness"] if row["adapter"] == "decision" else row["adapter"],
+                                 attempt["taskId"], attempt["attemptId"])
+        ensure_private_dir(directory)
+        body = {"status": status, "result": result, "shutdownConfirmed": True,
+                "exitCode": 0 if status == "ok" else 1}
+        if error is not None:
+            body["error"] = error
+        fsync_json(directory / RECEIPT, {"version": 2, "taskId": attempt["taskId"],
+                                         "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+                                         "report": body, "createdAt": HELPER_AT})
+        recorded_sha256((directory / RECEIPT).read_bytes())
+        call("execution_result", {"attemptId": attempt["attemptId"], "generation": attempt["generation"],
+                                  "nonce": HELPER_NONCE, "receipt": receipt_reference(directory)})
+        receipt = read_execution_receipt(directory)
+        settled = store.finalize_execution_receipt(attempt["attemptId"], receipt,
+                                                   {"kind": "process-reaped", "native": "receipt"})
+        if status == "ok" and settled.get("task", {}).get("state") not in ("queued", "completed", "concluded"):
+            stored = one("SELECT result_json FROM attempts WHERE attempt_id=?", attempt["attemptId"])
+            raise AssertionError(("unexpected settlement", status, settled.get("task", {}).get("state"),
+                                  stored["result_json"][:600] if stored["result_json"] else None))
+        store.complete_execution_cleanup(attempt["attemptId"])
+        return settled
+
+    def finish_route(run_id, *, selected_buddy_id):
+        from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
+        decision_row = one("SELECT decision_id,task_id FROM decision_requests WHERE request_id LIKE ?",
+                           "workflow:" + run_id + ":%")
+        claim = admit(decision_row["task_id"])
+        if "decisionInput" not in claim:
+            raise AssertionError(("router claim shape", sorted(claim), claim.get("task", {}).get("spec", {}).get("adapter")))
+        document = claim["decisionInput"]
+        identity = {"sessionId": "fixture-41-router-" + claim["attempt"]["attemptId"]}
+        evidence = ToolEventEvidence({"harness": document["buddy"]["harness"],
+                                      "taskId": decision_row["task_id"],
+                                      "attemptId": claim["attempt"]["attemptId"],
+                                      "generation": claim["attempt"]["generation"]},
+                                     state_dir=state).finish([identity], True)
+        report(claim, status="ok", result={"status": "ok", "operation": "select",
+               "nativeIdentity": [identity], "toolEvidence": evidence,
+               "usage": {"elapsedMs": 100, "toolCalls": evidence["toolCalls"]},
+               "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+               "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-41-snapshot",
+                                     "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
+               "decision": {"buddyId": selected_buddy_id, "domainNodeId": None, "taskType": "review",
+                            "note": "Fixture Router recommendation", "evidence": []}})
+        return decision_row, claim["attempt"]["attemptId"]
+
+    def finish_turn(run_id, disposition, label, *, request=None, seal_turn=True, runner_status="ok", edits=None):
+        claim = admit(run_id)
+        manifest = turn_manifest(state, claim["turn"]["input"])
+        if edits:
+            checkout = Path(manifest["path"])
+            for name, content in edits.items():
+                (checkout / name).write_bytes(content)
+        result = {"status": runner_status, "turn": turn_record(claim, disposition, label, request=request),
+                  "processState": {"shutdownConfirmed": True}}
+        if seal_turn and runner_status == "ok" and manifest.get("kind") != "none":
+            result["workspaceSeal"] = seal(claim)
+        return report(claim, status=runner_status, result=result)
+
+    def accept(run_id, artifact_id=None, *, note, target_run_id=None):
+        current = view(run_id if target_run_id is None else target_run_id)
+        selected = artifact_id or current["finalArtifactId"]
+        if selected is None:
+            events = all_rows("SELECT kind,payload_json FROM events WHERE task_id=? ORDER BY seq DESC LIMIT 4",
+                              current["runId"])
+            raise AssertionError((current["runId"], current["state"], current["currentTurn"]["state"],
+                                  [item["kind"] for item in current["artifacts"]],
+                                  [(row["kind"], row["payload_json"][:400]) for row in events]))
+        params = {"runId": run_id, "artifactId": selected,
+                  "note": note, "notRequired": "Fixture helper-retirement stock has no separate target"}
+        if target_run_id is not None:
+            params["targetRunId"] = target_run_id
+        return call("workflow_accept", params)
+
+    def one(sql, *args):
+        with store.db.read() as connection:
+            return connection.execute(sql, args).fetchone()
+
+    def all_rows(sql, *args):
+        with store.db.read() as connection:
+            return connection.execute(sql, args).fetchall()
+
+    def continuation_of(run_id, **match):
+        rows = [row for row in all_rows("SELECT * FROM workflow_continuations WHERE run_id=?", run_id)
+                if all(row[key] == value for key, value in match.items())]
+        assert len(rows) == 1, (run_id, match, [dict(row) for row in rows])
+        return rows[0]
+
+    def decide(run_id, request_id, *, decision="approve", helpers=None, auto_continue=None, human=False):
+        params = {"runId": run_id, "requestId": request_id, "decision": decision}
+        if helpers is not None:
+            params["helpers"] = helpers
+            params["autoContinue"] = auto_continue
+        return call("workflow_continue", params, human=human)
+
+    def continue_run(run_id, text, *, request_id=None, artifact_id=None, turn_id=None,
+                     helper_policy=None, human=False):
+        params = {"runId": run_id, "input": text}
+        if request_id is not None:
+            params["requestId"] = request_id
+        elif artifact_id is not None:
+            params["artifactId"] = artifact_id
+        elif turn_id is not None:
+            params["turnId"] = turn_id
+        else:
+            current = view(run_id)
+            partial = next((item for item in reversed(current.get("artifacts", []))
+                            if item["kind"] in ("partial-output", "output")
+                            and item.get("turnId") == current["currentTurn"]["turnId"]), None)
+            if current.get("activeRequest"):
+                params["requestId"] = current["activeRequest"]["requestId"]
+            elif current.get("finalArtifactId"):
+                params["artifactId"] = current["finalArtifactId"]
+            elif partial is not None:
+                params["artifactId"] = partial["artifactId"]
+            else:
+                params["turnId"] = current["currentTurn"]["turnId"]
+        if helper_policy is not None:
+            params["helperPolicy"] = helper_policy
+        return call("workflow_continue", params, human=human)
+
+    def resolve(run_id, request_id, conflict, *, action, paths=None, note=None, input_text=None,
+                target_run_id=None):
+        params = {"runId": run_id, "requestId": request_id, "resolution": action,
+                  "observedFingerprint": conflict["observedFingerprint"]}
+        if target_run_id is not None:
+            params["targetRunId"] = target_run_id
+        if paths is not None:
+            params["paths"] = paths
+        if note is not None:
+            params["note"] = note
+        if input_text is not None:
+            params["input"] = input_text
+        return call("workflow_continue", params)
+
+    def scope_failure(run_id, *, outside, in_scope=None):
+        """Fail one turn with recorded out-of-scope changes; return the open conflict request.
+
+        The seal attempt is what records the durable failure-site evidence, so
+        the failed report can persist it as the Host's conflict boundary.
+        """
+        claim = admit(run_id)
+        manifest = turn_manifest(state, claim["turn"]["input"])
+        checkout = Path(manifest["path"])
+        for name, content in (in_scope or {}).items():
+            (checkout / name).write_bytes(content)
+        for name, content in outside.items():
+            (checkout / name).write_bytes(content)
+        try:
+            workspace.seal(state, manifest, claim["attempt"]["taskId"], claim["attempt"]["attemptId"])
+        except BoardError as error:
+            assert error.code == "WORKSPACE_SCOPE_VIOLATION", error
+        else:
+            raise AssertionError("Expected the fixture out-of-scope site to fail the seal")
+        report(claim, status="failed", result={"status": "failed"}, error="WORKSPACE_SCOPE_VIOLATION: fixture site")
+        current, request = active_request(run_id)
+        assert request["reason"]["code"] == "workspace-scope-violation", request
+        conflict = next(item for item in current["workspaceConflicts"] if item["state"] == "open")
+        return request, conflict
+
+    def conclude(run_id, note, *, artifact_id=None, human=False):
+        params = {"runId": run_id, "note": note}
+        if artifact_id is not None:
+            params["artifactId"] = artifact_id
+        return call("workflow_conclude", params, human=human)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(hashlib, "sha256", recorded_sha256))
+        stack.enter_context(patch("uuid.uuid4", side_effect=lambda: uuid.UUID(int=next(counter))))
+        stack.enter_context(patch("secrets.token_hex", side_effect=lambda n=32: "cd" * n))
+        import shutil
+        board = state / "board.sqlite3"
+        with store.db.read() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+
+        def snapshot():
+            with store.db.read() as connection:
+                return {table: {row["rowid"]: dict(row) for row in
+                                connection.execute(f'SELECT rowid AS rowid,* FROM "{table}"')}
+                        for table in tables}
+
+        # Real attempt settlement also advances the frozen aggregate tables the
+        # floor already carries; a supplement records those UPDATEs beside its
+        # INSERTs so each stock applies standalone to the same preparation.
+        updatable = {"kind_statistics", "kind_statistics_buckets", "buddy_infrastructure_failures",
+                     "buddies", "evaluation_preferences"}
+
+        def added_rows(before, after, *, label, changes):
+            stock = {}
+            for table in tables:
+                # Admitting work also expires old provider cooling. The
+                # supplement retains the floor's unrelated cooling evidence.
+                if table != "provider_cooling":
+                    assert before[table].keys() <= after[table].keys(), (label, table)
+                changed = sorted(key for key in before[table].keys() & after[table].keys()
+                                 if before[table][key] != after[table][key])
+                if changed:
+                    assert table in updatable, (label, table, changed[:4])
+                    changes[table] = [(key, {name: after[table][key][name] for name in after[table][key]
+                                             if before[table][key][name] != after[table][key][name]})
+                                      for key in changed]
+                rows = [after[table][key] for key in sorted(after[table].keys() - before[table].keys())]
+                if rows:
+                    stock[table] = rows
+            return stock
+
+        def update_statements(changes):
+            statements = []
+            with sqlite3.connect(":memory:") as connection:
+                for table in sorted(changes):
+                    for rowid_value, changed in changes[table]:
+                        assignments = []
+                        for name, value in changed.items():
+                            if isinstance(value, str):
+                                value = path_template(value)
+                            literal = connection.execute("SELECT quote(?)", (value,)).fetchone()[0]
+                            assignments.append(f'"{name}"={literal}')
+                        statements.append(f'UPDATE "{table}" SET ' + ",".join(assignments)
+                                          + f' WHERE rowid={rowid_value};')
+            return "".join(statement + "\n" for statement in statements)
+
+        def reset_board():
+            nonlocal store, service
+            store.db.close()
+            shutil.copyfile(base_board, board)
+            for suffix in ("-wal", "-shm"):
+                Path(str(board) + suffix).unlink(missing_ok=True)
+            store = BoardStore(state, clock=lambda: HELPER_AT)
+            service = BoardService(store, token="fixture-service-token", control={},
+                                   on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
+            service.register_console_authority("fixture-console", "f" * 24)
+
+        def approve_one_helper(parent, *, helper_label, auto_continue, access="write", cwd=None):
+            current, request = active_request(parent)
+            assert request["kind"] == "assistance", request
+            decide(parent, request["requestId"], helpers=[helper_packet(helper_label, access=access, cwd=cwd)],
+                   auto_continue=auto_continue)
+            child = next(item["taskId"] for item in view(parent)["children"])
+            return request["requestId"], child
+
+        def parked_lead_wakeup(lead_label, lead_claim, owned):
+            """Park the Lead first, then let the owned run's completion ring it.
+
+            The owned run is submitted while the Lead turn is live and carries no
+            message boundary of its own, so parking stays quiet; its completed
+            turn is the one wake trigger, and only the rescheduling attempt is
+            made to fail (the historical code catches it and records the report).
+            """
+            report(lead_claim, status="ok", result={"status": "ok",
+                   "turn": turn_record(lead_claim, "waiting", lead_label),
+                   "processState": {"shutdownConfirmed": True}})
+            lead_id = lead_claim["attempt"]["taskId"]
+            assert one("SELECT state FROM workflow_runs WHERE run_id=?", lead_id)["state"] == "waiting-owned"
+            with patch.object(store.workflow, "_requeue",
+                              side_effect=BoardError("SHUTDOWN_UNCONFIRMED", "fixture injected rescheduling failure")):
+                finish_turn(owned, "completed", lead_label + "-owned")
+            current, request = active_request(lead_id)
+            assert request["kind"] == "helper-report", request
+            assert request["reason"]["code"] == "SHUTDOWN_UNCONFIRMED" and request["helperOutcomes"] == [], request
+            return request, continuation_of(lead_id, kind="lead-wakeup", state="recorded")
+
+        def path_template(text):
+            return text.replace(str(work), FIXTURE_ROOT_TOKEN)
+
+        def template_stock(stock):
+            return {table: [{name: path_template(value) if isinstance(value, str) else value
+                             for name, value in row.items()} for row in rows]
+                    for table, rows in stock.items()}
+
+        def physical():
+            files = {}
+            for folder in ("workspaces", "harnesses", "sessions"):
+                for path in sorted((state / folder).rglob("*")):
+                    if path.is_file() and path.suffix in {".json", ".jsonl", ".patch"}:
+                        files[path.relative_to(state).as_posix()] = path.read_text(encoding="utf-8")
+            refs = dict(line.split(" ") for line in subprocess.check_output(
+                ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)",
+                 "refs/hey-my-buddy/"], text=True, encoding="utf-8").splitlines())
+            labels = sorted(path.name for path in (fixture_root / "checkouts").iterdir()) \
+                if (fixture_root / "checkouts").exists() else []
+            return files, refs, labels
+
+        def objects_of(refs):
+            if not refs:
+                return set()
+            return {line.split(" ")[0] for line in subprocess.check_output(
+                ["git", "-C", str(repository), "rev-list", "--objects", *refs.values()],
+                text=True, encoding="utf-8").splitlines()}
+
+        def checkout_facts(paths):
+            facts = {}
+            for path in paths:
+                head = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"],
+                                               text=True, encoding="utf-8").strip()
+                files = {}
+                for item in sorted(path.rglob("*")):
+                    if item.is_file() and ".git" not in item.relative_to(path).parts:
+                        files[item.relative_to(path).as_posix()] = item.read_text(encoding="utf-8")
+                facts[path_template(str(path))] = {"commit": head, "files": files}
+            return facts
+
+        def hash_recipes(stocks_phase):
+            selected = {}
+            recipes = []
+            pending = {key: value for key, value in preimages.items()
+                       if preimage_phase.get(key) == stocks_phase}
+            while True:
+                ready = [(key, value) for key, value in pending.items()
+                         if str(work) in value[0] or any(old in value[0] for old in selected)]
+                if not ready:
+                    break
+                for key, (payload, ascii_json) in ready:
+                    selected[key] = None
+                    recipes.append({"oldSha256": key, "template": path_template(payload), "asciiJson": ascii_json})
+                    pending.pop(key)
+            by_hash = {recipe["oldSha256"]: recipe for recipe in recipes}
+            ordered, visited = [], set()
+
+            def visit(key):
+                if key in visited:
+                    return
+                recipe = by_hash[key]
+                for other in re.findall(r"[0-9a-f]{64}", recipe["template"]):
+                    if other in by_hash:
+                        visit(other)
+                visited.add(key)
+                ordered.append(recipe)
+
+            for key in by_hash:
+                visit(key)
+            return ordered
+
+        def resources_delta(files_before, files_after, refs_before, refs_after, paths, stocks_phase):
+            fresh_refs = {key: value for key, value in refs_after.items()
+                          if refs_before.get(key) != value}
+            objects = []
+            for oid in sorted(objects_of(fresh_refs) - base_objects):
+                kind = subprocess.check_output(["git", "-C", str(repository), "cat-file", "-t", oid],
+                                               text=True, encoding="utf-8").strip()
+                data = subprocess.check_output(["git", "-C", str(repository), "cat-file", kind, oid])
+                objects.append({"oid": oid, "type": kind, "hex": data.hex()})
+            return {"format": 1, "gitObjects": objects, "refs": fresh_refs,
+                    "files": {key: path_template(value) for key, value in files_after.items()
+                              if key not in files_before},
+                    "hashBindings": hash_recipes(stocks_phase), "checkouts": checkout_facts(paths)}
+
+        # ---- independent reject cases, each on the pristine schema-41 base ----
+        base_board = work / "board-schema41-base.sqlite3"
+        with store.db.read() as connection:
+            connection.execute("SELECT 1").fetchone()
+        store.db.close()
+        shutil.copyfile(board, base_board)
+        _, base_refs, _ = physical()
+        base_objects = objects_of(base_refs)
+        reject_cases = {}
+        reject_ids = {}
+        reject_resources = {}
+        managed_checkouts = []
+
+        def checkout_paths(labels):
+            return [fixture_root / "checkouts" / label for label in labels]
+
+        def reject_case(name, *, restore_checkout=False):
+            def decorator(scenario):
+                reset_board()
+                case_changes = {}
+                before = snapshot()
+                if restore_checkout:
+                    phase[0] = name
+                    files_before, refs_before, labels_before = physical()
+                ids = scenario()
+                if restore_checkout:
+                    files_after, refs_after, labels_after = physical()
+                    paths = checkout_paths(set(labels_after) - set(labels_before))
+                    reject_resources[name] = resources_delta(files_before, files_after, refs_before, refs_after,
+                                                             [*sorted(paths), *managed_checkouts], name)
+                    phase[0] = "reject"
+                after = snapshot()
+                stock = added_rows(before, after, label=name, changes=case_changes)
+                assert stock, name
+                with sqlite3.connect(":memory:") as connection:
+                    reject_cases[name] = (insert_stock(connection, template_stock(stock))
+                                          + update_statements(case_changes))
+                reject_ids[name] = ids
+            return decorator
+
+        @reject_case("waiting-helpers-children")
+        def _():
+            parent = submit("reject-waiting")
+            finish_turn(parent, "assistance", "reject-waiting")
+            current, request = active_request(parent)
+            decide(parent, request["requestId"], helpers=[helper_packet("reject-waiting-idle"),
+                                                          helper_packet("reject-waiting-done")],
+                   auto_continue=True)
+            children = view(parent)["children"]
+            assert len(children) == 2, children
+            idle, done = (children[0]["taskId"], children[1]["taskId"])
+            finish_turn(done, "completed", "reject-waiting-done", edits={"README.md": b"fixture reject waiting helper\n"})
+            assert one("SELECT state FROM workflow_runs WHERE run_id=?", parent)["state"] == "waiting-helpers"
+            assert one("SELECT state FROM workflow_children WHERE child_task_id=?", idle)["state"] == "active"
+            assert one("SELECT state FROM workflow_runs WHERE run_id=?", done)["state"] == "delivered"
+            pending = continuation_of(parent, kind="helper", state="recorded")
+            return {"parentRunId": parent, "activeChildRunId": idle, "deliveredChildRunId": done,
+                    "continuationId": pending["continuation_id"]}
+
+        @reject_case("transferred-reservations")
+        def _():
+            checkout = checkout_dir("reject-transfer")
+            parent = submit("reject-transfer", access="write", cwd=checkout)
+            finish_turn(parent, "assistance", "reject-transfer")
+            _, child = approve_one_helper(parent, helper_label="reject-transfer-helper", auto_continue=False,
+                                          cwd=checkout)
+            states = {row["state"] for row in all_rows(
+                "SELECT state FROM workspace_reservations WHERE holder_task_id IN (?,?)", parent, child)}
+            assert states == {"transferred", "held"}, states
+            return {"parentRunId": parent, "childRunId": child}
+
+        @reject_case("lead-tree-child")
+        def _():
+            lead = submit("reject-lead", checkout="none", access="full", delegation=True)
+            lead_claim = admit(lead)
+            owned = submit("reject-lead-owned", checkout="none", access="read",
+                           credential=lead_claim["agentCredential"], cwd=checkout_dir("reject-lead-owned-cwd"))
+            finish_turn(owned, "assistance", "reject-lead-owned")
+            current, request = active_request(owned)
+            decide(owned, request["requestId"], helpers=[helper_packet("reject-lead-helper")],
+                   auto_continue=False, human=True)
+            child = next(item["taskId"] for item in view(owned)["children"])
+            report(lead_claim, status="ok", result={"status": "ok",
+                   "turn": turn_record(lead_claim, "waiting", "reject-lead"),
+                   "processState": {"shutdownConfirmed": True}})
+            assert one("SELECT state FROM workflow_children WHERE child_task_id=?", child)["state"] == "active"
+            assert one("SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=? AND lead_run_id=?",
+                       owned, lead) is not None
+            return {"leadRunId": lead, "ownedRunId": owned, "childRunId": child}
+
+        @reject_case("terminal-parent-children")
+        def _():
+            parent = submit("reject-terminal")
+            finish_turn(parent, "assistance", "reject-terminal")
+            current, request = active_request(parent)
+            decide(parent, request["requestId"], helpers=[helper_packet("reject-terminal-failed"),
+                                                          helper_packet("reject-terminal-queued")],
+                   auto_continue=False)
+            failed, cancelled = (item["taskId"] for item in view(parent)["children"])
+            claim = admit(failed)
+            report(claim, status="failed", result={"status": "failed"}, error="fixture terminal-child failure")
+            call("workflow_cancel", {"runId": parent, "note": "Close the fixture tree"})
+            conclude(parent, "Conclude the fixture tree over its settled children")
+            assert one("SELECT state FROM workflow_runs WHERE run_id=?", parent)["state"] == "concluded"
+            assert one("SELECT state FROM workflow_children WHERE child_task_id=?", failed)["state"] == "failed"
+            return {"parentRunId": parent, "failedChildRunId": failed, "cancelledChildRunId": cancelled}
+
+        @reject_case("helper-tree-pause")
+        def _():
+            parent = submit("reject-pause")
+            finish_turn(parent, "assistance", "reject-pause")
+            _, child = approve_one_helper(parent, helper_label="reject-pause-helper", auto_continue=False)
+            call("macro_task_pause", {"macroTaskId": "run:" + parent, "commandId": "fixture-reject-pause",
+                                      "note": "Fixture pause over an old helper tree"}, human=True)
+            assert one("SELECT run_id FROM work_pauses WHERE run_id=?", parent) is not None
+            return {"parentRunId": parent, "childRunId": child}
+
+        @reject_case("open-helper-report")
+        def _():
+            parent = submit("reject-report")
+            finish_turn(parent, "assistance", "reject-report")
+            _, child = approve_one_helper(parent, helper_label="reject-report-helper", auto_continue=False)
+            finish_turn(child, "completed", "reject-report-helper", edits={"README.md": b"fixture reject report helper\n"})
+            current, request = active_request(parent)
+            assert request["kind"] == "helper-report" and request["reason"]["code"] == "helpers-settled", request
+            return {"parentRunId": parent, "childRunId": child, "requestId": request["requestId"]}
+
+        @reject_case("open-helper-attention")
+        def _():
+            parent = submit("reject-attention")
+            finish_turn(parent, "assistance", "reject-attention")
+            _, child = approve_one_helper(parent, helper_label="reject-attention-helper", auto_continue=False)
+            finish_turn(child, "attention", "reject-attention-helper")
+            _, proxy = active_request(parent)
+            assert proxy["kind"] == "helper-attention" and proxy["childTaskId"] == child, proxy
+            return {"parentRunId": parent, "childRunId": child, "requestId": proxy["requestId"]}
+
+        @reject_case("unreclaimed-helper-checkout", restore_checkout=True)
+        def _():
+            parent = submit("reject-unreclaimed")
+            finish_turn(parent, "assistance", "reject-unreclaimed")
+            _, request = active_request(parent)
+            decide(parent, request["requestId"], helpers=[helper_packet("reject-unreclaimed-helper",
+                                                                      checkout="worktree")],
+                   auto_continue=False)
+            child = view(parent)["children"][0]["taskId"]
+            finish_turn(child, "completed", "reject-unreclaimed-helper")
+            accept(parent, note="Accept the helper before reclaiming its checkout", target_run_id=child)
+            continue_run(parent, "Continue once the helper is accepted")
+            finish_turn(parent, "completed", "reject-unreclaimed")
+            accept(parent, note="Accept the parent while the managed helper checkout is retained")
+            turn = one("SELECT input_json FROM workflow_turns WHERE run_id=?", child)
+            manifest = turn_manifest(state, json.loads(turn["input_json"]))
+            checkout = Path(manifest["checkoutRoot"])
+            assert manifest["kind"] == "worktree" and checkout.is_dir(), manifest
+            managed_checkouts.append(checkout)
+            return {"parentRunId": parent, "childRunId": child, "workspaceId": manifest["workspaceId"]}
+
+        @reject_case("queued-helper-policy")
+        def _():
+            parent = submit("reject-policy")
+            finish_turn(parent, "assistance", "reject-policy")
+            _, child = approve_one_helper(parent, helper_label="reject-policy-helper", auto_continue=False)
+            continue_run(parent, "Continue the fixture while keeping the helper", helper_policy="keep")
+            row = continuation_of(parent, kind="manual", state="queued")
+            assert row["helper_policy"] == "keep" and json.loads(row["helper_outcomes_json"])
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("queued-cross-run")
+        def _():
+            parent = submit("reject-cross-run")
+            finish_turn(parent, "assistance", "reject-cross-run")
+            approve_one_helper(parent, helper_label="reject-cross-run-helper", auto_continue=False)
+            child = next(item["taskId"] for item in view(parent)["children"])
+            request, conflict = scope_failure(child,
+                                              outside={"outside-reject.txt": b"fixture reject cross-run\n"})
+            current, proxy = active_request(parent)
+            assert proxy["kind"] == "helper-attention" and proxy["childTaskId"] == child
+            resolve(parent, proxy["requestId"], conflict, action="restore", paths=conflict["blockingPaths"],
+                    note="Restore the fixture helper site from the parent",
+                    input_text="Continue the fixture helper after the restore", target_run_id=child)
+            row = continuation_of(child, kind="manual", state="queued")
+            assert row["controlling_run_id"] == parent
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("queued-helper-outcomes")
+        def _():
+            parent = submit("reject-outcomes")
+            finish_turn(parent, "assistance", "reject-outcomes")
+            approve_one_helper(parent, helper_label="reject-outcomes-helper", auto_continue=True)
+            child = next(item["taskId"] for item in view(parent)["children"])
+            finish_turn(child, "completed", "reject-outcomes-helper", edits={"README.md": b"fixture reject outcomes helper\n"})
+            row = continuation_of(parent, kind="helper", state="queued")
+            assert json.loads(row["helper_outcomes_json"])
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("queued-proxy-source")
+        def _():
+            parent = submit("reject-proxy-source")
+            finish_turn(parent, "assistance", "reject-proxy-source")
+            approve_one_helper(parent, helper_label="reject-proxy-helper", auto_continue=False)
+            child = next(item["taskId"] for item in view(parent)["children"])
+            finish_turn(child, "attention", "reject-proxy-helper")
+            current, proxy = active_request(parent)
+            assert proxy["kind"] == "helper-attention", proxy
+            call("workflow_continue", {"runId": parent, "requestId": proxy["requestId"], "targetRunId": child,
+                                       "input": "Answer the fixture helper boundary from the parent"})
+            row = continuation_of(child, kind="manual", state="queued")
+            assert one("SELECT kind FROM workflow_requests WHERE request_id=?",
+                       row["request_id"])["kind"] == "helper-attention"
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("run-with-children-continuation")
+        def _():
+            parent = submit("reject-children-run")
+            finish_turn(parent, "assistance", "reject-children-run")
+            _, child = approve_one_helper(parent, helper_label="reject-children-helper", auto_continue=False)
+            finish_turn(child, "completed", "reject-children-helper", edits={"README.md": b"fixture reject children helper\n"})
+            accept(parent, note="Accept the settled fixture helper", target_run_id=child)
+            continue_run(parent, "Continue the fixture parent over its historical children")
+            row = continuation_of(parent, kind="manual", state="queued")
+            assert one("SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=?", parent)["count"] == 1
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("cancelled-replayable-continuation")
+        def _():
+            parent = submit("reject-replay")
+            finish_turn(parent, "assistance", "reject-replay")
+            approve_one_helper(parent, helper_label="reject-replay-helper", auto_continue=False)
+            child = next(item["taskId"] for item in view(parent)["children"])
+            request, conflict = scope_failure(child,
+                                              outside={"outside-replay.txt": b"fixture reject replay\n"})
+            current, proxy = active_request(parent)
+            resolve(parent, proxy["requestId"], conflict, action="restore", paths=conflict["blockingPaths"],
+                    note="Restore the fixture replay site", input_text="Continue the replayed fixture helper",
+                    target_run_id=child)
+            row = continuation_of(child, kind="manual", state="queued")
+            call("workflow_cancel", {"runId": parent, "targetRunId": child, "note": "Cancel the replayed fixture helper"})
+            settled = one("SELECT state,attempt_id FROM workflow_continuations WHERE continuation_id=?",
+                          row["continuation_id"])
+            assert settled["state"] == "cancelled" and settled["attempt_id"] is None
+            return {"parentRunId": parent, "childRunId": child, "continuationId": row["continuation_id"]}
+
+        @reject_case("helper-tree-deletion-mark")
+        def _():
+            parent = submit("reject-delete")
+            finish_turn(parent, "assistance", "reject-delete")
+            _, child = approve_one_helper(parent, helper_label="reject-delete-helper", auto_continue=False)
+            finish_turn(child, "completed", "reject-delete-helper", edits={"README.md": b"fixture reject delete helper\n"})
+            accept(parent, note="Accept the fixture helper before deleting the tree", target_run_id=child)
+            continue_run(parent, "Continue the fixture parent before deleting the tree")
+            finish_turn(parent, "completed", "reject-delete")
+            accept(parent, note="Accept the fixture parent before deleting the tree")
+            # A symlinked private root cannot be proven owned, so the real
+            # deletion writer records the skipped object and keeps its mark;
+            # the mark and its rows are the reject stock, physical state is not.
+            micro_root = state / "harnesses" / "codex" / "micro-tasks" / hashlib.sha256(parent.encode()).hexdigest()
+            micro_root.rename(str(micro_root) + "-owned")
+            micro_root.symlink_to(micro_root.name + "-owned", target_is_directory=True)
+            call("macro_task_delete", {"macroTaskId": "run:" + parent, "confirm": True, "microTaskCount": 2},
+                 human=True)
+            row = one("SELECT * FROM macro_task_deletions WHERE target_kind='micro-task-tree' AND target_id=?",
+                      "run:" + parent)
+            assert row is not None, "the fixture deletion mark must stay unfinished"
+            return {"parentRunId": parent, "childRunId": child, "deletionId": row["deletion_id"]}
+
+        files_mid, refs_mid, labels_mid = physical()
+
+        # ---- stock A: every task idle or stopped for a cross-contract install ----
+        phase[0] = "a"
+        reset_board()
+        stock_a_changes = {}
+        before_a = snapshot()
+
+        run_id = submit("restore-partial", access="write")
+        request, conflict = scope_failure(run_id,
+                                          outside={"outside-a.txt": b"fixture out-of-scope a\n",
+                                                   "outside-b.txt": b"fixture out-of-scope b\n"})
+        response = resolve(run_id, request["requestId"], conflict, action="restore", paths=["outside-a.txt"],
+                           note="Restore only the first fixture path")
+        assert response["resolutionState"] == "open", response
+        stored = one("SELECT rowid,state,response_kind,response_id,decision_json FROM workflow_requests WHERE request_id=?",
+                     request["requestId"])
+        decision = json.loads(stored["decision_json"])
+        assert (stored["state"], stored["response_kind"], stored["response_id"]) == \
+            ("approved", "resolution", conflict["conflictId"]), dict(stored)
+        assert decision["result"]["state"] == "open" and decision["result"]["artifactId"] is None, decision
+        assert decision["parameters"]["paths"] == ["outside-a.txt"], decision
+        scenario_ids["partialRestore"] = {"runId": run_id, "requestId": request["requestId"],
+                                          "requestRowid": stored["rowid"], "conflictId": conflict["conflictId"]}
+        # An open conflict can never be sealed by a conclusion; the cancelled run
+        # with its residual open site is exactly the historical residue form.
+        call("workflow_cancel", {"runId": run_id, "note": "Close the partially restored fixture site"})
+
+        checkout = checkout_dir("abandon-blocked")
+        (checkout / "cache.bin").write_bytes(b"fixture excluded cache\n")
+        run_id = submit("abandon-blocked", access="write", inputs=[])
+        claim = admit(run_id)
+        (checkout / "cache.bin").write_bytes(b"fixture modified excluded cache\n")
+        try:
+            workspace.seal(state, turn_manifest(state, claim["turn"]["input"]),
+                           claim["attempt"]["taskId"], claim["attempt"]["attemptId"])
+        except BoardError as error:
+            assert error.code == "WORKSPACE_SCOPE_VIOLATION", error
+        else:
+            raise AssertionError("Expected the modified excluded cache to fail the seal")
+        report(claim, status="failed", result={"status": "failed"}, error="WORKSPACE_SCOPE_VIOLATION: fixture excluded site")
+        current, request = active_request(run_id)
+        conflict = next(item for item in current["workspaceConflicts"] if item["state"] == "open")
+        assert conflict["blockingPaths"] == ["cache.bin"], conflict
+        response = resolve(run_id, request["requestId"], conflict, action="abandon",
+                           note="Abandon the whole excluded fixture site",
+                           input_text="Continue after abandoning the site")
+        assert response["resolutionState"] == "open" and response.get("continuationBlocked") is True, response
+        stored = one("SELECT rowid,state,response_kind,response_id,decision_json FROM workflow_requests WHERE request_id=?",
+                     request["requestId"])
+        decision = json.loads(stored["decision_json"])
+        assert (stored["state"], stored["response_kind"], stored["response_id"]) == \
+            ("approved", "resolution", conflict["conflictId"]), dict(stored)
+        assert decision["result"]["state"] == "open" and decision["result"]["artifactId"], decision
+        assert decision["parameters"]["input"] == "Continue after abandoning the site", decision
+        scenario_ids["abandonBlocked"] = {"runId": run_id, "requestId": request["requestId"],
+                                          "requestRowid": stored["rowid"], "conflictId": conflict["conflictId"],
+                                          "artifactId": decision["result"]["artifactId"]}
+        call("workflow_cancel", {"runId": run_id, "note": "Close the abandoned fixture site"})
+
+        # One standalone family: approve without a note, a helper conflict resolved
+        # from the parent with input (the cross-run proxy continuation whose
+        # response id is shared by the real request and the ancestor proxy).
+        # Route the parent first so the same legacy session group contains
+        # executions owned by the parent, the helper, and the Router.
+        # The floor pins one buddy, which alone keeps selection program-side;
+        # the policy writer pins a second catalog buddy so this submission
+        # dispatches a real Router task.
+        call("user_policy_publish", {"commandId": "fixture-enable-second-candidate",
+                                     "buddySettings": [{"buddyId": "codex:openai:fixture-beta:high",
+                                                        "enabled": True}],
+                                     "preferenceChanges": [{"buddyId": "codex:openai:fixture-beta:high",
+                                                            "mode": "pin",
+                                                            "note": "Fixture second routing candidate"}]},
+             human=True)
+        parent = submit("proxy-family", buddy="route")
+        route_decision, route_attempt = finish_route(parent, selected_buddy_id="codex:openai:fixture-alpha:high")
+
+        finish_turn(parent, "assistance", "proxy-family")
+        assistance_id, child = approve_one_helper(parent, helper_label="proxy-family-helper", auto_continue=False)
+        child_request, conflict = scope_failure(child,
+                                                outside={"outside-family.txt": b"fixture family out-of-scope\n"},
+                                                in_scope={"README.md": b"fixture family helper change\n"})
+        # System boundaries can be open alongside the conflict. Use the
+        # stored writer so continuing the conflict supersedes both real rows.
+        with store.db.write() as connection:
+            extra_request = store.workflow._record_system_request(
+                connection, store.workflow._run_row(connection, child),
+                make_reason("SHUTDOWN_UNCONFIRMED"), {}, HELPER_AT)
+        proxy = next(row for row in all_rows(
+            "SELECT request_id FROM workflow_requests WHERE run_id=? AND child_task_id=?"
+            " AND state='open' AND reason_code='workspace-scope-violation'", parent, child))
+        resolve(parent, proxy["request_id"], conflict, action="restore", paths=conflict["blockingPaths"],
+                note="Restore the fixture helper site from the parent",
+                input_text="Continue the fixture helper with the restored site", target_run_id=child)
+        shared = continuation_of(child, kind="manual", state="queued")
+        assert shared["controlling_run_id"] == parent and shared["request_id"] == proxy["request_id"]
+        sharers = all_rows("SELECT request_id,run_id,decision_json FROM workflow_requests"
+                           " WHERE response_kind='continue' AND response_id=?", shared["continuation_id"])
+        assert {row["request_id"] for row in sharers if row["run_id"] == child} == {
+            child_request["requestId"], extra_request}, [dict(row) for row in sharers]
+        assert any(row["request_id"] == proxy["request_id"] for row in sharers), [dict(row) for row in sharers]
+        assert all(json.loads(row["decision_json"])["result"]["conflictId"] == conflict["conflictId"] for row in sharers)
+        scenario_ids["proxyFamily"] = {"parentRunId": parent, "childRunId": child,
+                                       "assistanceRequestId": assistance_id, "proxyRequestId": proxy["request_id"],
+                                       "childRequestId": child_request["requestId"], "siblingRequestId": extra_request,
+                                       "conflictId": conflict["conflictId"], "continuationId": shared["continuation_id"],
+                                       "routerTaskId": route_decision["task_id"], "routerAttemptId": route_attempt}
+        finish_turn(child, "completed", "proxy-family-helper-resumed", edits={"README.md": b"fixture resumed helper change\n"})
+        assert one("SELECT state FROM workflow_continuations WHERE continuation_id=?",
+                   shared["continuation_id"])["state"] == "consumed"
+        accept(parent, note="Accept the resumed fixture helper from the parent", target_run_id=child)
+        continue_run(parent, "Continue the fixture parent after the helper was accepted")
+        finish_turn(parent, "completed", "proxy-family-parent")
+        accept(parent, note="Accept the fixture family parent")
+
+        # The automatic helper continuation cannot be rescheduled; the writer
+        # records the failure as a pure helper-report, which the Host answers.
+        parent = submit("reported-family")
+        finish_turn(parent, "assistance", "reported-family")
+        approve_one_helper(parent, helper_label="reported-helper", auto_continue=True)
+        child = next(item["taskId"] for item in view(parent)["children"])
+        with patch.object(store.workflow, "_requeue",
+                          side_effect=BoardError("SHUTDOWN_UNCONFIRMED", "fixture injected rescheduling failure")):
+            finish_turn(child, "completed", "reported-helper", edits={"README.md": b"fixture reported helper change\n"})
+        current, report_request = active_request(parent)
+        assert report_request["kind"] == "helper-report", report_request
+        assert report_request["reason"]["code"] == "SHUTDOWN_UNCONFIRMED", report_request
+        assert report_request["helperOutcomes"][0]["taskId"] == child, report_request
+        invalid = continuation_of(parent, kind="helper", state="recorded")
+        continue_run(parent, "Continue the fixture parent from the reported helper outcomes",
+                     request_id=report_request["requestId"])
+        assert one("SELECT state FROM workflow_continuations WHERE continuation_id=?",
+                   invalid["continuation_id"])["state"] == "invalidated"
+        answered = continuation_of(parent, kind="manual", state="queued")
+        scenario_ids["reportedHelper"] = {"parentRunId": parent, "childRunId": child,
+                                          "reportRequestId": report_request["requestId"],
+                                          "invalidatedContinuationId": invalid["continuation_id"],
+                                          "continuationId": answered["continuation_id"]}
+        finish_turn(parent, "completed", "reported-family-parent")
+        accept(parent, note="Accept the reported fixture helper", target_run_id=child)
+        accept(parent, note="Accept the fixture parent after its reported helper")
+
+        # A consumed kind='helper' auto continuation carrying its outcomes.
+        parent = submit("auto-family")
+        finish_turn(parent, "assistance", "auto-family")
+        approve_one_helper(parent, helper_label="auto-helper", auto_continue=True)
+        child = next(item["taskId"] for item in view(parent)["children"])
+        finish_turn(child, "completed", "auto-helper", edits={"README.md": b"fixture auto helper change\n"})
+        auto = continuation_of(parent, kind="helper", state="queued")
+        assert json.loads(auto["helper_outcomes_json"]), dict(auto)
+        finish_turn(parent, "completed", "auto-family-parent")
+        consumed = one("SELECT state,attempt_id,helper_outcomes_json FROM workflow_continuations WHERE continuation_id=?",
+                       auto["continuation_id"])
+        assert consumed["state"] == "consumed" and consumed["attempt_id"] and json.loads(consumed["helper_outcomes_json"])
+        scenario_ids["autoContinued"] = {"parentRunId": parent, "childRunId": child,
+                                         "continuationId": auto["continuation_id"]}
+        accept(parent, note="Accept the automatic fixture helper", target_run_id=child)
+        accept(parent, note="Accept the fixture parent after its automatic continuation")
+
+        # A manual continuation that cancels its live helper.
+        parent = submit("cancel-family")
+        finish_turn(parent, "assistance", "cancel-family")
+        _, child = approve_one_helper(parent, helper_label="cancelled-helper", auto_continue=False)
+        continue_run(parent, "Continue the fixture while cancelling the helper", helper_policy="cancel")
+        cancelled = continuation_of(parent, kind="manual", state="queued")
+        assert cancelled["helper_policy"] == "cancel", dict(cancelled)
+        assert any(item["taskId"] == child for item in json.loads(cancelled["helper_outcomes_json"])), dict(cancelled)
+        scenario_ids["cancelPolicy"] = {"parentRunId": parent, "childRunId": child,
+                                        "continuationId": cancelled["continuation_id"]}
+        finish_turn(parent, "attention", "cancel-family-parent")
+        call("workflow_cancel", {"runId": parent, "note": "Stop the fixture parent with its cancelled helper"})
+
+        # A decline without a note whose auto continuation is consumed.
+        parent = submit("decline-family")
+        finish_turn(parent, "assistance", "decline-family")
+        current, request = active_request(parent)
+        decide(parent, request["requestId"], decision="decline")
+        declined = continuation_of(parent, kind="helper", state="queued")
+        assert declined["note"] is None and declined["helper_policy"] is None, dict(declined)
+        stored = one("SELECT state,response_kind,response_id,decision_json FROM workflow_requests WHERE request_id=?",
+                     request["requestId"])
+        assert stored["state"] == "declined" and stored["response_kind"] == "decision", dict(stored)
+        assert "note" not in json.loads(stored["decision_json"]), stored["decision_json"]
+        scenario_ids["declined"] = {"parentRunId": parent, "requestId": request["requestId"],
+                                    "continuationId": declined["continuation_id"]}
+        finish_turn(parent, "completed", "decline-family-parent")
+        accept(parent, note="Accept the fixture parent after the decline")
+
+        # An old assistance request opened directly with a suggested buddy.
+        run_id = submit("suggest-assistance", checkout="none", access="read")
+        finish_turn(run_id, "assistance", "suggest-assistance",
+                   request={"suggestedBuddyId": "codex:openai:fixture-beta:high"})
+        current, request = active_request(run_id)
+        assert request["suggestedBuddyId"] == "codex:openai:fixture-beta:high", request
+        stored = one("SELECT payload_json FROM workflow_requests WHERE request_id=?", request["requestId"])
+        assert json.loads(stored["payload_json"])["suggestedBuddyId"] == "codex:openai:fixture-beta:high"
+        scenario_ids["suggestedAssistance"] = {"runId": run_id, "requestId": request["requestId"]}
+
+        # A routing dispatch failure request with both reason and decision fields.
+        run_id = submit("routing-refused", checkout="none", access="read", buddy="route")
+        decision_row, _ = finish_route(run_id, selected_buddy_id="codex:openai:fixture-alpha:high")
+        with patch.object(store.workflow, "_validated_buddy",
+                          side_effect=BoardError("CATALOG_UNAVAILABLE", "Fixture catalog drift before dispatch")):
+            store.workflow.prepare_dispatch({"runId": run_id})
+        _, request = active_request(run_id)
+        stored = one("SELECT reason_code,decision_id,payload_json FROM workflow_requests WHERE request_id=?",
+                     request["requestId"])
+        assert stored["reason_code"] == "dispatch.buddy-rejected", dict(stored)
+        assert stored["decision_id"] == decision_row["decision_id"], dict(stored)
+        assert json.loads(stored["payload_json"]) == {"source": "routing"}, dict(stored)
+        scenario_ids["routingRefused"] = {"runId": run_id, "requestId": request["requestId"],
+                                          "decisionId": decision_row["decision_id"],
+                                          "decisionTaskId": decision_row["task_id"]}
+
+        # A Lead wakeup rescheduling failure answered by the Host with input.
+        lead = submit("lead-family", checkout="none", access="full", delegation=True)
+        lead_claim = admit(lead)
+        owned = submit("lead-family-owned", checkout="none", access="read",
+                       credential=lead_claim["agentCredential"], cwd=checkout_dir("lead-family-owned-cwd"))
+        wakeup, pending_wakeup = parked_lead_wakeup("lead-family", lead_claim, owned)
+        continue_run(lead, "Answer the fixture Lead wakeup failure with input", request_id=wakeup["requestId"])
+        assert one("SELECT state FROM workflow_continuations WHERE continuation_id=?",
+                   pending_wakeup["continuation_id"])["state"] == "invalidated"
+        answered = continuation_of(lead, kind="manual", state="queued")
+        conclude(owned, "Conclude the fixture owned run before the Lead completes",
+                 artifact_id=view(owned)["finalArtifactId"], human=True)
+        finish_turn(lead, "completed", "lead-family")
+        accept(lead, note="Accept the fixture Lead after its answered wakeup")
+        scenario_ids["leadWakeupAnswered"] = {"leadRunId": lead, "ownedRunId": owned,
+                                              "requestId": wakeup["requestId"],
+                                              "wakeupContinuationId": pending_wakeup["continuation_id"],
+                                              "continuationId": answered["continuation_id"]}
+
+        after_a = snapshot()
+        stock_a_rows = added_rows(before_a, after_a, label="stock-a", changes=stock_a_changes)
+        stock_a_updates = update_statements(stock_a_changes)
+        files_a, refs_a, labels_a = physical()
+
+        # ---- stock B: idle-check refusals the single-step migration converts ----
+        # B is derived from the same pristine base as A, never on top of A, so
+        # each stock applies standalone and its aggregates stay self-consistent.
+        phase[0] = "b"
+        reset_board()
+        stock_b_changes = {}
+        before_b = snapshot()
+        run_id = submit("offline-decline", checkout="none", access="read")
+        finish_turn(run_id, "assistance", "offline-decline")
+        current, request = active_request(run_id)
+        decide(run_id, request["requestId"], decision="decline")
+        offline = continuation_of(run_id, kind="helper", state="queued")
+        assert offline["note"] is None and offline["helper_policy"] is None, dict(offline)
+        stored = one("SELECT decision_json FROM workflow_requests WHERE request_id=?", request["requestId"])
+        assert json.loads(stored["decision_json"])["decision"] == "decline", stored["decision_json"]
+        scenario_ids["offlineDecline"] = {"runId": run_id, "requestId": request["requestId"],
+                                          "continuationId": offline["continuation_id"]}
+
+        run_id = submit("offline-approve", checkout="none", access="read")
+        finish_turn(run_id, "assistance", "offline-approve")
+        _, request = active_request(run_id)
+        decide(run_id, request["requestId"])
+        offline = continuation_of(run_id, kind="helper", state="queued")
+        assert offline["note"] is None and offline["helper_policy"] is None, dict(offline)
+        scenario_ids["offlineApprove"] = {"runId": run_id, "requestId": request["requestId"],
+                                         "continuationId": offline["continuation_id"]}
+
+        lead = submit("offline-lead", checkout="none", access="full", delegation=True)
+        lead_claim = admit(lead)
+        owned = submit("offline-lead-owned", checkout="none", access="read",
+                       credential=lead_claim["agentCredential"], cwd=checkout_dir("offline-lead-owned-cwd"))
+        wakeup, open_wakeup = parked_lead_wakeup("offline-lead", lead_claim, owned)
+        scenario_ids["leadWakeupOpen"] = {"leadRunId": lead, "ownedRunId": owned,
+                                          "requestId": wakeup["requestId"],
+                                          "wakeupContinuationId": open_wakeup["continuation_id"]}
+        after_b = snapshot()
+        stock_b_rows = added_rows(before_b, after_b, label="stock-b", changes=stock_b_changes)
+        stock_b_updates = update_statements(stock_b_changes)
+        files_b, refs_b, labels_b = physical()
+
+        # ---- serialize rows, physical resources and provenance ----
+        def serialize(stock):
+            with sqlite3.connect(":memory:") as connection:
+                return insert_stock(connection, template_stock(stock))
+
+        stock_a_sql = ("-- Installable Schema 41 helper-retirement stock from the pinned 0.69.11 writers.\n"
+                       "-- Every task is idle or stopped: no recorded or queued continuation survives and every\n"
+                       "-- attempt is finished with confirmed shutdown. Restore with the physical resources file.\n"
+                       + serialize(stock_a_rows) + stock_a_updates)
+        stock_b_sql = ("-- Offline-only Schema 41 helper-retirement stock from the pinned 0.69.11 writers.\n"
+                       "-- The cross-contract installer refuses these idle-check failures; the single-step\n"
+                       "-- 41 -> 42 migration converts them. No task has an unstopped execution.\n"
+                       + serialize(stock_b_rows) + stock_b_updates)
+        resources_a = resources_delta(files_mid, files_a, refs_mid, refs_a,
+                                      checkout_paths(label for label in labels_a if label not in labels_mid), "a")
+        resources_b = resources_delta(files_a, files_b, refs_a, refs_b,
+                                      checkout_paths(label for label in labels_b if label not in labels_a), "b")
+        with sqlite3.connect(base_board) as baseline:
+            for name, sql in {"retirement": stock_a_sql, "offline": stock_b_sql, **reject_cases}.items():
+                with sqlite3.connect(":memory:") as restored:
+                    baseline.backup(restored)
+                    restored.executescript(sql)
+                    violations = restored.execute("PRAGMA foreign_key_check").fetchall()
+                    assert not violations, (name, violations)
+                    assert restored.execute("PRAGMA integrity_check").fetchone() == ("ok",), name
+        produced = work / "helper-stock-out"
+        produced.mkdir()
+        (produced / "schema-41-helper-retirement-stock.sql").write_text(stock_a_sql, encoding="utf-8")
+        (produced / "schema-41-helper-retirement-resources.json").write_text(
+            json.dumps(resources_a, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (produced / "schema-41-helper-offline-stock.sql").write_text(stock_b_sql, encoding="utf-8")
+        (produced / "schema-41-helper-offline-resources.json").write_text(
+            json.dumps(resources_b, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (produced / "schema-41-helper-reject-stock.json").write_text(
+            json.dumps({"format": 1, "cases": reject_cases, "resources": reject_resources},
+                       ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+        derivation = (
+            "Derived on a private schema-41 copy of the fixed floor (frozen 30 -> 41 chain, schema-31 maintenance"
+            " stock and idle cleanup preparation) by the pinned 0.69.11 writers: workspace resolutions (partial"
+            " restore and abandon over a leftover excluded site), a standalone helper family with a parent-side"
+            " restore-and-continue (cross-run proxy continuation, shared response id), an injected automatic-"
+            "rescheduling failure whose helper-report the Host answers, a consumed helper auto continuation with"
+            " outcomes, a cancel-policy manual continuation, note-less approve/decline batches, an open suggested-"
+            "buddy assistance request, a routing dispatch rejection with both reason and decision fields, an answered Lead"
+            " wakeup failure, offline queued approve and decline continuations plus an open Lead wakeup failure, and"
+            " independent reject cases. Synthetic rescheduling and catalog failures mirror the"
+            " historical tests; receipts, session display records and"
+            " stop evidence are synthetic inputs to the real writers.")
+        (produced / "helper-scenarios.json").write_text(
+            json.dumps({"ids": {**scenario_ids, "rejectCases": reject_ids}, "derivation": derivation},
+                       ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def derive_helper_retirement_stock(args):
+    """Generate the Schema 41 helper-retirement stock through the pinned writer.
+
+    The fixed floor export is upgraded on a private copy through the frozen
+    30 -> 41 chain (with the schema-31 maintenance stock and the idle cleanup
+    preparation), then every supplement row is written by the real 0.69.11
+    writers in a subprocess. The base payloads, older supplements and the
+    frozen oracle stay untouched; this mode writes only the helper stock files and their provenance.
+    """
+    import shutil
+
+    scratch = args.work_dir.resolve()
+    if not scratch.is_relative_to(Path(__file__).resolve().parents[1] / "tmp"):
+        raise ValueError("work-dir must be a new directory inside this checkout's ignored tmp/")
+    scratch.mkdir(parents=True, exist_ok=False)
+    try:
+        _derive_helper_retirement_stock(args.helper_retirement_stock_for.resolve(), scratch)
+    finally:
+        shutil.rmtree(scratch)
+
+
+def _derive_helper_retirement_stock(fixed, scratch):
+    import runpy
+    import shutil
+
+    metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
+    if digest((fixed / "board.sql").read_bytes()) != metadata["sqlSha256"]:
+        raise ValueError("Fixed floor SQL digest changed")
+    if digest((fixed / "schema-31-stock.sql").read_bytes()) != metadata["modelStock"]["schema31StockSha256"]:
+        raise ValueError("Schema-31 maintenance stock digest changed")
+    root = Path(__file__).resolve().parents[1]
+    (scratch / "scratch").mkdir()
+    (scratch / "home").mkdir(mode=0o700)
+    loader = runpy.run_path(str(root / "tests/python/blackboard/store/upgrade_fixture.py"))
+    fixture = loader["load_fixture"](scratch / "state", source=fixed)
+    loader["upgrade_fixture_board_to_41"](fixture, source=fixed)
+    archived = scratch / "schema41-source"
+    archived.mkdir()
+    with (scratch / "schema41.tar").open("wb") as stream:
+        run(["git", "archive", HELPER_WRITER_COMMIT], cwd=root, stdout=stream)
+    with tarfile.open(scratch / "schema41.tar") as stream:
+        stream.extractall(archived, filter="data")
+    # The runtime dependency set of the pinned writer matches this checkout, so
+    # the current project environment drives the archived source through
+    # PYTHONPATH, exactly like the schema-33 writer before it.
+    env = private_environment(scratch)
+    env.update(HOME=str(scratch / "home"), CODEX_HOME=str(scratch / "home/codex"),
+               CLAUDE_CONFIG_DIR=str(scratch / "home/claude"), DSH_HOME=str(scratch / "home/dsh"),
+               ZCODE_DATA_BASE_DIR=str(scratch / "home/zcode"), XDG_CONFIG_HOME=str(scratch / "home/config"),
+               XDG_DATA_HOME=str(scratch / "home/data"), XDG_CACHE_HOME=str(scratch / "home/cache"),
+               PYTHONPATH=str(archived / "src"))
+    run([sys.executable, str(Path(__file__).resolve()), "--populate-helper-retirement",
+         "--work-dir", str(scratch)], cwd=root, env=env)
+    produced = scratch / "helper-stock-out"
+    outputs = {
+        "schema-41-helper-retirement-stock.sql": (fixed / "schema-41-helper-retirement-stock.sql"),
+        "schema-41-helper-retirement-resources.json": (fixed / "schema-41-helper-retirement-resources.json"),
+        "schema-41-helper-offline-stock.sql": (fixed / "schema-41-helper-offline-stock.sql"),
+        "schema-41-helper-offline-resources.json": (fixed / "schema-41-helper-offline-resources.json"),
+        "schema-41-helper-reject-stock.json": (fixed / "schema-41-helper-reject-stock.json"),
+    }
+    for name, target in outputs.items():
+        shutil.copyfile(produced / name, target)
+    scenarios = json.loads((produced / "helper-scenarios.json").read_text(encoding="utf-8"))
+    reject_stock = json.loads((fixed / "schema-41-helper-reject-stock.json").read_text(encoding="utf-8"))
+    captured_stock = "\n".join(target.read_text(encoding="utf-8") for target in outputs.values())
+    metadata["helperRetirementStock"] = {
+        "baseBindings": {token: identity for token, identity in fixture["bindings"].items()
+                         if identity in captured_stock},
+        "baseSha256": digest((fixed / "board.sql").read_bytes()),
+        "schema31StockSha256": digest((fixed / "schema-31-stock.sql").read_bytes()),
+        "generatorSha256": digest(Path(__file__).read_bytes()),
+        "schemaVersion": HELPER_STOCK_SCHEMA,
+        "writerCommit": HELPER_WRITER_COMMIT,
+        "writerVersion": HELPER_WRITER_VERSION,
+        "sqlSha256": digest((fixed / "schema-41-helper-retirement-stock.sql").read_bytes()),
+        "resourcesSha256": digest((fixed / "schema-41-helper-retirement-resources.json").read_bytes()),
+        "offlineSqlSha256": digest((fixed / "schema-41-helper-offline-stock.sql").read_bytes()),
+        "offlineResourcesSha256": digest((fixed / "schema-41-helper-offline-resources.json").read_bytes()),
+        "rejectStockSha256": digest((fixed / "schema-41-helper-reject-stock.json").read_bytes()),
+        "rejectCases": {name: digest(sql.encode("utf-8"))
+                        for name, sql in reject_stock["cases"].items()},
+        "scenarios": scenarios["ids"],
+        "generationCommand": ("uv run --frozen python packaging/generate-upgrade-fixture.py"
+                              " --work-dir tmp/<new-private-dir>"
+                              " --helper-retirement-stock-for tests/fixtures/upgrade-floor"),
+        "derivation": scenarios["derivation"],
+    }
+    (fixed / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path)
@@ -2398,6 +3607,8 @@ def main():
     parser.add_argument("--legacy-stock-for", type=Path, help="Derive retained v1/v2 profiles from the fixed floor; never rewrite the base")
     parser.add_argument("--model-stock-for", type=Path, help="Generate schema-36 model stock through historical catalog, policy and maintenance writers")
     parser.add_argument("--alias-stock-for", type=Path, help="Derive schema-39 alias migration cases from the fixed floor stock")
+    parser.add_argument("--helper-retirement-stock-for", type=Path, help="Generate Schema 41 helper-retirement stock through the pinned 0.69.11 writers")
+    parser.add_argument("--populate-helper-retirement", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-model-floor", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-model-maintenance", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-schema33", action="store_true", help=argparse.SUPPRESS)
@@ -2412,12 +3623,16 @@ def main():
     if any(fixed and args.output_dir.resolve() == fixed.resolve()
            for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for, args.alias_stock_for)):
         parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
-    if args.populate_model_floor:
+    if args.populate_helper_retirement:
+        populate_helper_retirement(args)
+    elif args.populate_model_floor:
         populate_model_floor(args)
     elif args.populate_model_maintenance:
         populate_model_maintenance(args)
     elif args.model_stock_for:
         derive_schema36_model_stock(args)
+    elif args.helper_retirement_stock_for:
+        derive_helper_retirement_stock(args)
     elif args.alias_stock_for:
         floor = args.alias_stock_for
         with sqlite3.connect(':memory:') as connection:

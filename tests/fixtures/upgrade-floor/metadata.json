@@ -105,6 +105,199 @@
   },
   "growth33SqlSha256": "b1ff8facb235d09eb5acbcd6ffd83a9340d4e4942fe7c41e85091041b393e670",
   "growth33WriterCommit": "e3459d8a3b03c06d2af192382a788e051ced9a64",
+  "helperRetirementStock": {
+    "baseBindings": {
+      "7d3d9b463613463e4f15428447423586c849132fd3d81f0cce3c34d270a65578": "fe92cfb5de91619b3eaaed9cae8ac9de06ff87daeee2659b3294b5343ff52bbe"
+    },
+    "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
+    "derivation": "Derived on a private schema-41 copy of the fixed floor (frozen 30 -> 41 chain, schema-31 maintenance stock and idle cleanup preparation) by the pinned 0.69.11 writers: workspace resolutions (partial restore and abandon over a leftover excluded site), a standalone helper family with a parent-side restore-and-continue (cross-run proxy continuation, shared response id), an injected automatic-rescheduling failure whose helper-report the Host answers, a consumed helper auto continuation with outcomes, a cancel-policy manual continuation, note-less approve/decline batches, an open suggested-buddy assistance request, a routing dispatch rejection with both reason and decision fields, an answered Lead wakeup failure, offline queued approve and decline continuations plus an open Lead wakeup failure, and independent reject cases. Synthetic rescheduling and catalog failures mirror the historical tests; receipts, session display records and stop evidence are synthetic inputs to the real writers.",
+    "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --helper-retirement-stock-for tests/fixtures/upgrade-floor",
+    "generatorSha256": "6b24d8c167560b0c9d0424397ef3e7708f683729f0f7ddc93f41dff103be7e2d",
+    "offlineResourcesSha256": "8fb9ad52e7f0ad4db4a13cba4eb4929395a9db4e7eecab3e526d6a0cc7a8bad4",
+    "offlineSqlSha256": "40bb201fe1da4c932624c07921d02e86fc2cbe22781f613e27d11b29fa6c512f",
+    "rejectCases": {
+      "cancelled-replayable-continuation": "58222a59e8947a8ce52e3dde9f19c52b33eecb235a4744d98e3a6462301aded4",
+      "helper-tree-deletion-mark": "c3deb56ec8455884ffaa8fa3543a593465362ebf8a848640172c596ef137327e",
+      "helper-tree-pause": "689d53a1e807c6df4388ad9a9f0b28fa2825645621be467a9ea6dcdb02741099",
+      "lead-tree-child": "826d1b60d12372d4b7bcaaeaab37272b5872e76fb85ba68e68207dde352a9693",
+      "open-helper-attention": "271ac9acf047040754f2443de959cb8a4e04dc0811fd7ff5f48c4578d9bbc222",
+      "open-helper-report": "0f43809e6507a3b5db7bbb80698267dfa370db562f7b74fe58f4b1dab5a09136",
+      "queued-cross-run": "8423fec99e7d4f8d6e27be4a25a84d82fdf9a296d446bf224b3c97e3a70837fc",
+      "queued-helper-outcomes": "e9e7a6c673fa461ad6993c70aa130721b10147e96b962f05b54dada20d1a4b9f",
+      "queued-helper-policy": "f562eb5792b7ff2d2fb1563c2dc3ad17a60103b52d5aac6d0796640763c5af55",
+      "queued-proxy-source": "f9368a809e54b1220d1e2afdbf58571e307a9d53490aac7ac9bdbf3f8d4f58aa",
+      "run-with-children-continuation": "f9fd033f71e46afdc32e8be92575f70d4a3b8fae3588913ae8dccc02c135524b",
+      "terminal-parent-children": "4385a91c1470f15f62469aab87915697901710b56e7fe842e4096f06cff0b692",
+      "transferred-reservations": "357dca81a346db793b6cd7e9931f761846a7e82db3176fcb6cdb8affe79edc1f",
+      "unreclaimed-helper-checkout": "a57cb32ee0c47c785199255fb256dd1e31901041a258e9647bfa2bc081edc505",
+      "waiting-helpers-children": "9063ef14cb71bdf9e5db243b744d310cf09e61eae0cf6aea430d8b3144e5785a"
+    },
+    "rejectStockSha256": "f1b3fa86a92a90e9d56668823af63ed9447112e9811330b35322540f3e29b745",
+    "resourcesSha256": "75ffdc695b80670fdd8a08f85eb94439a2e43408d15f6dc0b2a4fbded86806fc",
+    "scenarios": {
+      "abandonBlocked": {
+        "artifactId": "00000000-0000-0000-0000-082f79cd922d",
+        "conflictId": "wsc-00000000-0000-0000-0000-082f79cd9227",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd9228",
+        "requestRowid": 10,
+        "runId": "00000000-0000-0000-0000-082f79cd921e"
+      },
+      "autoContinued": {
+        "childRunId": "00000000-0000-0000-0000-082f79cd92c1",
+        "continuationId": "00000000-0000-0000-0000-082f79cd92c4",
+        "parentRunId": "00000000-0000-0000-0000-082f79cd92b0"
+      },
+      "cancelPolicy": {
+        "childRunId": "00000000-0000-0000-0000-082f79cd92f2",
+        "continuationId": "00000000-0000-0000-0000-082f79cd92f5",
+        "parentRunId": "00000000-0000-0000-0000-082f79cd92e1"
+      },
+      "declined": {
+        "continuationId": "00000000-0000-0000-0000-082f79cd9315",
+        "parentRunId": "00000000-0000-0000-0000-082f79cd9307",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd9314"
+      },
+      "leadWakeupAnswered": {
+        "continuationId": "00000000-0000-0000-0000-082f79cd9344",
+        "leadRunId": "00000000-0000-0000-0000-082f79cd9334",
+        "ownedRunId": "00000000-0000-0000-0000-082f79cd9338",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd9343",
+        "wakeupContinuationId": "00000000-0000-0000-0000-082f79cd9342"
+      },
+      "leadWakeupOpen": {
+        "leadRunId": "00000000-0000-0000-0000-082f79cd935f",
+        "ownedRunId": "00000000-0000-0000-0000-082f79cd9363",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd936e",
+        "wakeupContinuationId": "00000000-0000-0000-0000-082f79cd936d"
+      },
+      "offlineApprove": {
+        "continuationId": "00000000-0000-0000-0000-082f79cd935e",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd935d",
+        "runId": "00000000-0000-0000-0000-082f79cd9356"
+      },
+      "offlineDecline": {
+        "continuationId": "00000000-0000-0000-0000-082f79cd9355",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd9354",
+        "runId": "00000000-0000-0000-0000-082f79cd934d"
+      },
+      "partialRestore": {
+        "conflictId": "wsc-00000000-0000-0000-0000-082f79cd9218",
+        "requestId": "req-00000000-0000-0000-0000-082f79cd9219",
+        "requestRowid": 8,
+        "runId": "00000000-0000-0000-0000-082f79cd920f"
+      },
+      "proxyFamily": {
+        "assistanceRequestId": "req-00000000-0000-0000-0000-082f79cd9245",
+        "childRequestId": "req-00000000-0000-0000-0000-082f79cd9253",
+        "childRunId": "00000000-0000-0000-0000-082f79cd9249",
+        "conflictId": "wsc-00000000-0000-0000-0000-082f79cd9252",
+        "continuationId": "00000000-0000-0000-0000-082f79cd925a",
+        "parentRunId": "00000000-0000-0000-0000-082f79cd9232",
+        "proxyRequestId": "req-proxy-df1a38e62db93f89a9f5aec99cecf69b4c9ddcb90ffb062fa9c9ff1cda6188f0",
+        "routerAttemptId": "00000000-0000-0000-0000-082f79cd9237",
+        "routerTaskId": "00000000-0000-0000-0000-082f79cd9236",
+        "siblingRequestId": "req-00000000-0000-0000-0000-082f79cd9254"
+      },
+      "rejectCases": {
+        "cancelled-replayable-continuation": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd91c6",
+          "continuationId": "00000000-0000-0000-0000-082f79cd91d6",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd91b5"
+        },
+        "helper-tree-deletion-mark": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd91ec",
+          "deletionId": "del-00000000000000000000082f79cd920a",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd91db"
+        },
+        "helper-tree-pause": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd9092",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9081"
+        },
+        "lead-tree-child": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd904e",
+          "leadRunId": "00000000-0000-0000-0000-082f79cd903f",
+          "ownedRunId": "00000000-0000-0000-0000-082f79cd9043"
+        },
+        "open-helper-attention": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd90cb",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd90ba",
+          "requestId": "req-proxy-178b0aedf4d331bc17ad03c30c0fb61baefa1240e64da133643d7867b6a1fafa"
+        },
+        "open-helper-report": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd90a9",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9098",
+          "requestId": "req-00000000-0000-0000-0000-082f79cd90b6"
+        },
+        "queued-cross-run": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd9138",
+          "continuationId": "00000000-0000-0000-0000-082f79cd9148",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9127"
+        },
+        "queued-helper-outcomes": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd915d",
+          "continuationId": "00000000-0000-0000-0000-082f79cd9160",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd914c"
+        },
+        "queued-helper-policy": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd9120",
+          "continuationId": "00000000-0000-0000-0000-082f79cd9123",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd910f"
+        },
+        "queued-proxy-source": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd917f",
+          "continuationId": "00000000-0000-0000-0000-082f79cd918d",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd916e"
+        },
+        "run-with-children-continuation": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd91a2",
+          "continuationId": "00000000-0000-0000-0000-082f79cd91b1",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9191"
+        },
+        "terminal-parent-children": {
+          "cancelledChildRunId": "00000000-0000-0000-0000-082f79cd906e",
+          "failedChildRunId": "00000000-0000-0000-0000-082f79cd906b",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9057"
+        },
+        "transferred-reservations": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd903c",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd902b"
+        },
+        "unreclaimed-helper-checkout": {
+          "childRunId": "00000000-0000-0000-0000-082f79cd90ed",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd90dc",
+          "workspaceId": "ws-5fe1adca07edb6eaf2e3deddd515f89c"
+        },
+        "waiting-helpers-children": {
+          "activeChildRunId": "00000000-0000-0000-0000-082f79cd9017",
+          "continuationId": "00000000-0000-0000-0000-082f79cd901d",
+          "deliveredChildRunId": "00000000-0000-0000-0000-082f79cd901a",
+          "parentRunId": "00000000-0000-0000-0000-082f79cd9003"
+        }
+      },
+      "reportedHelper": {
+        "childRunId": "00000000-0000-0000-0000-082f79cd928e",
+        "continuationId": "00000000-0000-0000-0000-082f79cd929d",
+        "invalidatedContinuationId": "00000000-0000-0000-0000-082f79cd9291",
+        "parentRunId": "00000000-0000-0000-0000-082f79cd927d",
+        "reportRequestId": "req-00000000-0000-0000-0000-082f79cd929c"
+      },
+      "routingRefused": {
+        "decisionId": "dec-00000000-0000-0000-0000-082f79cd932d",
+        "decisionTaskId": "00000000-0000-0000-0000-082f79cd932e",
+        "requestId": "routing-00000000-0000-0000-0000-082f79cd9333",
+        "runId": "00000000-0000-0000-0000-082f79cd932c"
+      },
+      "suggestedAssistance": {
+        "requestId": "req-00000000-0000-0000-0000-082f79cd932b",
+        "runId": "00000000-0000-0000-0000-082f79cd9324"
+      }
+    },
+    "schema31StockSha256": "1ed9b8d8c612fc87bcaeecf0defbdf1f1ed5f9f93f6620cdd245e3a04d4e4655",
+    "schemaVersion": 41,
+    "sqlSha256": "9f07932cf330db6249acd698c6c0a85ca1e051bce7d3a4762c94d4852e1d80d2",
+    "writerCommit": "64cf3f323918407a67746ea8ccda69c0fdd6a91c",
+    "writerVersion": "0.69.11"
+  },
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000c1",
