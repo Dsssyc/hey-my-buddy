@@ -876,7 +876,8 @@ class DecisionCoordinator:
             ancestor = self.board.workflow._terminal_ancestor(connection, route["run_id"])
             cancelled = cancelled or route["run_state"] == "cancelled" or (ancestor is not None and ancestor["state"] == "cancelled")
             if (route["state"] != "pending"
-                    or route["current_routing_id"] != row["decision_id"] or route["run_state"] != "executing"
+                    or route["current_routing_id"] != row["decision_id"]
+                    or not self.board.workflow.routing_run_open(connection, route["run_id"])
                     or ancestor is not None):
                 checked.update(changed=True, code="workflow-routing-fenced")
         if not cancelled and not checked["changed"] and not released:

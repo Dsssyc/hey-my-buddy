@@ -785,7 +785,8 @@ class LifecycleTests(WorkflowTestCase):
 
         # Ordering 2: while turn 2 executes, helper-2 opens its boundary, then
         # the parent delivers its final artifact before the boundary is answered;
-        # answering it must restore delivered so acceptance accepts that artifact.
+        # answering it restores delivered, requeues helper-2 as active, refuses
+        # acceptance while helpers remain live, and accepts once they settle.
         self.finish_turn(board, self.claim(board, claim_request_id="hq2-c", run_id=h2), disposition="assistance")
         parent_before_delivery = board.call("workflow_get", {"runId": run_id})
         proxy_id = parent_before_delivery["activeRequest"]["requestId"]
@@ -797,13 +798,30 @@ class LifecycleTests(WorkflowTestCase):
         restored = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(restored["state"], "delivered")
         self.assertIsNone(restored["queueReason"])
+        with board.store.db.read() as connection:
+            child_states = dict(connection.execute(
+                "SELECT child_task_id, state FROM workflow_children WHERE parent_run_id=?", (run_id,)
+            ).fetchall())
+        self.assertEqual(child_states, {h1: "active", h2: "active"})
+        with self.assertRaises(BoardError) as blocked:
+            board.call("workflow_accept", {
+                "runId": run_id, "artifactId": artifact_id, "notRequired": "verified", "note": "too early",
+            })
+        self.assertEqual(blocked.exception.code, "CONFLICT")
+        self.finish_turn(board, self.claim(board, claim_request_id="hq1-done", run_id=h1), disposition="completed")
+        self.finish_turn(board, self.claim(board, claim_request_id="hq2-done", run_id=h2), disposition="completed")
         accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": artifact_id, "notRequired": "verified", "note": "accept after helper close",
+            "runId": run_id, "artifactId": artifact_id, "notRequired": "verified", "note": "accept after helpers settle",
         })
         self.assertEqual(accepted["state"], "accepted")
+        with board.store.db.read() as connection:
+            self.assertEqual(dict(connection.execute(
+                "SELECT child_task_id, state FROM workflow_children WHERE parent_run_id=?", (run_id,)
+            ).fetchall()), {h1: "succeeded", h2: "succeeded"})
 
         # Ordering 3: parent delivers first, then a kept helper opens and closes
-        # its boundary; parent must still return to delivered and accept cleanly.
+        # its boundary; parent restores delivered, still refuses acceptance until
+        # the requeued helper settles, and then accepts cleanly.
         submitted2 = self.submit(board, request_id="req-keep-delivered", cwd=str(self.workdir("p-deliv")))
         run2 = submitted2["runId"]
         self.finish_turn(board, self.claim(board, claim_request_id="p-d-1", run_id=run2), disposition="assistance")
@@ -824,10 +842,186 @@ class LifecycleTests(WorkflowTestCase):
         restored2 = board.call("workflow_get", {"runId": run2})
         self.assertEqual(restored2["state"], "delivered")
         self.assertIsNone(restored2["queueReason"])
+        with self.assertRaises(BoardError) as blocked2:
+            board.call("workflow_accept", {
+                "runId": run2, "artifactId": art2, "notRequired": "verified", "note": "still live helper",
+            })
+        self.assertEqual(blocked2.exception.code, "CONFLICT")
+        self.finish_turn(board, self.claim(board, claim_request_id="hd1-done", run_id=h3), disposition="completed")
         accepted2 = board.call("workflow_accept", {
             "runId": run2, "artifactId": art2, "notRequired": "verified", "note": "accept after post-delivery helper",
         })
         self.assertEqual(accepted2["state"], "accepted")
+
+    def test_approving_helper_on_stopped_failed_request_enters_waiting_helpers(self):
+        from hey_my_buddy.protocol.reasons import reason as make_reason
+
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, request_id="req-failed-helper", cwd=str(self.workdir("p-failed")))
+        run_id = submitted["runId"]
+        first = self.claim(board, claim_request_id="p-f-1", run_id=run_id)
+        self.finish_turn(board, first, runner_status="failed", disposition="completed")
+        with board.store.db.write() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            board.store.workflow._record_system_request(
+                connection, run, make_reason("workflow.input-rejected", harness="dsh"), {}, board.store.now(),
+            )
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(view["state"], "awaiting-host")
+        approved = self.decide(
+            board, view, view["activeRequest"]["requestId"],
+            helpers=[{"title": "helper-fix", "task": "prepare smaller input", "cwd": str(self.workdir("hf1")),
+                      "workspace": {"kind": "worktree", "access": "write"}}],
+        )
+        self.assertEqual(approved["state"], "waiting-helpers")
+        helper_id = approved["children"][0]["taskId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="hf1-c", run_id=helper_id), disposition="completed")
+        resumed = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(resumed["state"], "executing")
+        turn2 = self.claim(board, claim_request_id="p-f-2", run_id=run_id)
+        self.assertEqual(turn2["claim"]["turn"]["turnIndex"], 2)
+
+    def test_answering_second_assistance_with_kept_helper_waits_for_helper_and_auto_continues(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, request_id="req-second-assist", cwd=str(self.workdir("p-assist2")))
+        run_id = submitted["runId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="p-a-1", run_id=run_id), disposition="assistance")
+        view = board.call("workflow_get", {"runId": run_id})
+        approved = self.decide(
+            board, view, view["activeRequest"]["requestId"],
+            helpers=[{"title": "helper-kept", "task": "long helper", "cwd": str(self.workdir("ha1")),
+                      "workspace": {"kind": "worktree", "access": "write"}}],
+        )
+        helper_id = approved["children"][0]["taskId"]
+        self.continue_run(board, approved, helper_policy="keep")
+        self.finish_turn(board, self.claim(board, claim_request_id="p-a-2", run_id=run_id), disposition="assistance")
+        second = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(second["state"], "awaiting-host")
+        answered = self.decide(board, second, second["activeRequest"]["requestId"], decision="decline")
+        self.assertEqual(answered["state"], "waiting-helpers")
+        self.finish_turn(board, self.claim(board, claim_request_id="ha1-c", run_id=helper_id), disposition="completed")
+        resumed = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(resumed["state"], "executing")
+        turn3 = self.claim(board, claim_request_id="p-a-3", run_id=run_id)
+        self.assertEqual(turn3["claim"]["turn"]["turnIndex"], 3)
+
+    def test_kept_continuation_routing_resolves_while_helper_proxy_is_open(self):
+        board = self.board()
+        self.register(board)
+        enable_fixture_buddy(board.store, BUDDY)
+        enable_fixture_buddy(board.store, {**BUDDY, "model": "second-model"})
+        buddy_id = ":".join(BUDDY[key] for key in ("harness", "provider", "model", "effort"))
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO router_buddies(position, buddy_id) VALUES(0, ?)", (buddy_id,))
+        submitted = self.submit(board, request_id="req-keep-route", cwd=str(self.workdir("p-route")))
+        run_id = submitted["runId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="p-r-1", run_id=run_id), disposition="assistance")
+        view = board.call("workflow_get", {"runId": run_id})
+        approved = self.decide(
+            board, view, view["activeRequest"]["requestId"],
+            helpers=[{"title": "helper-r", "task": "kept helper", "cwd": str(self.workdir("hr1")),
+                      "workspace": {"kind": "worktree", "access": "write"}}],
+        )
+        helper_id = approved["children"][0]["taskId"]
+        # Continue with buddy=route and helperPolicy=keep.
+        continued = self.continue_run(
+            board, approved, helper_policy="keep", input="reroute while keeping helper", buddy="route"
+        )
+        self.assertEqual(continued["state"], "executing")
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        with board.store.db.read() as connection:
+            route = connection.execute(
+                "SELECT r.decision_id, d.task_id FROM workflow_routes r"
+                " JOIN decision_requests d ON d.decision_id=r.decision_id"
+                " WHERE r.run_id=? AND r.state='pending'", (run_id,),
+            ).fetchone()
+        self.assertIsNotNone(route)
+        # Helper opens a proxy on the parent before the Router finishes.
+        self.finish_turn(board, self.claim(board, claim_request_id="hr1-c", run_id=helper_id), disposition="assistance")
+        with_proxy = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(with_proxy["state"], "awaiting-host")
+        self.assertEqual(with_proxy["queueReason"], "helper-attention")
+        # While the proxy is open, the Router task can still be claimed and
+        # settles cleanly through decision.py + routing_settled without fencing.
+        from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
+        router_claim = admit_board(board, {"nonce": NONCE, "taskId": route["task_id"]})["claim"]
+        self.assertIsNotNone(router_claim)
+        doc = router_claim["decisionInput"]
+        board.store.execution_result({
+            "attemptId": router_claim["attempt"]["attemptId"],
+            "generation": router_claim["attempt"]["generation"],
+            "nonce": NONCE,
+            "status": "ok",
+            "shutdownConfirmed": True,
+            "result": {
+                **claim_tool_receipt(router_claim, 0, state_dir=board.directory),
+                "status": "ok",
+                "operation": "select",
+                "usage": {"elapsedMs": 100, "toolCalls": 0},
+                "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
+                                      "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
+                "decision": {"domainNodeId": None, "taskType": "change", "buddyId": buddy_id,
+                             "note": "The frozen legal choice", "evidence": []},
+            },
+        }, stop_evidence={"kind": "identity-absent", "native": "journal"})
+        with board.store.db.read() as connection:
+            settled_route = connection.execute(
+                "SELECT state FROM workflow_routes WHERE decision_id=?", (route["decision_id"],)
+            ).fetchone()["state"]
+        self.assertEqual(settled_route, "resolved")
+        # Closing the helper proxy restores executing with buddy validation queued.
+        self.decide(board, with_proxy, with_proxy["activeRequest"]["requestId"], decision="decline")
+        restored = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(restored["state"], "executing")
+        self.assertEqual(restored["queueReason"], "awaiting-buddy-validation")
+        board.store.workflow.prepare_dispatch({"runId": run_id})
+        turn2 = self.claim(board, claim_request_id="p-r-2", run_id=run_id)
+        self.assertEqual(turn2["claim"]["turn"]["turnIndex"], 2)
+
+    def test_parked_lead_restores_waiting_owned_and_wakes_when_helper_proxy_closes(self):
+        board = self.board()
+        self.register(board)
+        lead_id = self.submit(
+            board, request_id="req-lead-keep", cwd=str(self.workdir("lead-keep")),
+            access="full", accessNote="Lead delegation", delegationAuthority=True,
+        )["runId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="lk-1", run_id=lead_id), disposition="assistance")
+        view = board.call("workflow_get", {"runId": lead_id})
+        approved = self.decide(
+            board, view, view["activeRequest"]["requestId"],
+            helpers=[{"title": "helper-lk", "task": "direct helper", "cwd": str(self.workdir("hlk")),
+                      "workspace": {"kind": "worktree", "access": "write"}}],
+        )
+        helper_id = approved["children"][0]["taskId"]
+        self.continue_run(board, approved, helper_policy="keep")
+        lead_turn2 = self.claim(board, claim_request_id="lk-2", run_id=lead_id)
+        owned_id = self.submit(board, request_id="req-owned-lk", cwd=str(self.workdir("owned-lk")))["runId"]
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id, lead_run_id, lead_turn_id, created_at) VALUES(?,?,?,?)",
+                (owned_id, lead_id, lead_turn2["claim"]["turn"]["turnId"], board.store.now()),
+            )
+        self.finish_turn(
+            board, lead_turn2, disposition="waiting",
+            outcome={"disposition": "waiting", "summary": "waiting on owned micro task",
+                     "artifacts": [], "decisions": [], "remaining": [], "request": None},
+        )
+        self.assertEqual(board.call("workflow_get", {"runId": lead_id})["state"], "waiting-owned")
+        # Kept helper raises assistance -> proxy opens on the parked Lead.
+        self.finish_turn(board, self.claim(board, claim_request_id="hlk-c", run_id=helper_id), disposition="assistance")
+        with_proxy = board.call("workflow_get", {"runId": lead_id})
+        self.assertEqual(with_proxy["state"], "awaiting-host")
+        # Owned micro task delivers while the helper proxy is open.
+        self.finish_turn(board, self.claim(board, claim_request_id="olk-1", run_id=owned_id), disposition="completed")
+        # Closing the helper proxy restores waiting-owned and immediately wakes the Lead.
+        self.decide(board, with_proxy, with_proxy["activeRequest"]["requestId"], decision="decline")
+        woken = board.call("workflow_get", {"runId": lead_id})
+        self.assertEqual(woken["state"], "executing")
+        turn3 = self.claim(board, claim_request_id="lk-3", run_id=lead_id)
+        self.assertEqual(turn3["claim"]["turn"]["turnIndex"], 3)
 
     def test_manual_continue_invalidates_auto_and_cancels_helpers(self):
         board = self.board()

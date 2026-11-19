@@ -1517,8 +1517,10 @@ class WorkflowCoordinator:
         decision = self.board.decisions._row(connection, decision_id)
         if decision["status"] in ("queued", "running"):
             return
+        proxy_only = run["state"] != "executing" and self.routing_run_open(connection, run["run_id"])
         if (run["current_routing_id"] != decision_id
-                or run["state"] != "executing" or self._terminal_ancestor(connection, run["run_id"]) is not None):
+                or (run["state"] != "executing" and not proxy_only)
+                or self._terminal_ancestor(connection, run["run_id"]) is not None):
             connection.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?", (decision_id,))
             return
         selected = json.loads(decision["selected_json"]) if decision["selected_json"] else None
@@ -1536,8 +1538,11 @@ class WorkflowCoordinator:
                     'UPDATE workflow_runs SET buddy_json=?, buddy_revision=buddy_revision+1, validated_buddy_revision=NULL, updated_at=? WHERE run_id=?',
                     (canonical_json(buddy), now, run["run_id"]),
                 )
-                connection.execute("UPDATE tasks SET adapter=?, queue_reason='awaiting-buddy-validation' WHERE task_id=?",
-                                   (buddy["harness"], run["run_id"]))
+                if proxy_only:
+                    connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (buddy["harness"], run["run_id"]))
+                else:
+                    connection.execute("UPDATE tasks SET adapter=?, queue_reason='awaiting-buddy-validation' WHERE task_id=?",
+                                       (buddy["harness"], run["run_id"]))
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
                                          payload={"decisionId": decision_id, "buddy": buddy,
                                                   "buddyId": decision["buddy_id"],
@@ -2257,12 +2262,19 @@ class WorkflowCoordinator:
                         ("none" if source["checkout"]=="none" else "pending",continuation_id,source_id,leaf["request_id"],input_text,params.get("note"),
                          "keep" if self._unfinished_helpers(connection, source_id) else None,now),
                     )
-                self._sync_boundary(connection, source_id, now, default_state="waiting-helpers" if children else "awaiting-host")
+                unfinished_helpers = self._unfinished_helpers(connection, source_id)
+                wait_for_helpers = bool(children) or (continuation_id is not None and unfinished_helpers)
+                self._sync_boundary(connection, source_id, now, default_state="waiting-helpers" if wait_for_helpers else "awaiting-host")
                 source = self._run_row(connection, source_id)
-                if continuation_id and not children and not self._unfinished_helpers(connection, source_id):
+                if self._open_boundary(connection, source) is None:
+                    connection.execute(
+                        "UPDATE workflow_children SET state='active', updated_at=? WHERE child_task_id=? AND state='attention'",
+                        (now, source_id),
+                    )
+                if continuation_id and not children and not unfinished_helpers:
                     self._requeue(connection, task, source, actor=actor, now=now, continuation_id=continuation_id)
                 for intermediate, _ in reversed(chain[:-1]):
-                    self._sync_boundary(connection, intermediate["run_id"], now, default_state="waiting-helpers")
+                    self._sync_boundary(connection, intermediate["run_id"], now, default_state="waiting-helpers", restore_from_proxy=True)
                 self.board._append_event(connection,"workflow.request_" + ("approved" if decision == "approve" else "declined"),
                     task_id=source_id,payload={"requestId":request_id,"decision":decision,"actor":actor,
                                               "helpers":[item["taskId"] for item in children],"autoContinue":params.get("autoContinue",True)})
@@ -2317,30 +2329,62 @@ class WorkflowCoordinator:
             (run_row["run_id"], run_row["active_request_id"]),
         ).fetchone()
 
-    def _sync_boundary(self, connection, run_id, now, *, default_state=None):
+    def routing_run_open(self, connection, run_id: str) -> bool:
+        """True when a run is executing or only overlaid by an open helper proxy."""
+        run = self._run_row(connection, run_id)
+        if run["state"] == "executing":
+            return True
+        if run["state"] != "awaiting-host" or run["active_request_id"] is None:
+            return False
+        if connection.execute(
+            "SELECT 1 FROM workflow_requests WHERE request_id=? AND state='open' AND child_task_id IS NOT NULL",
+            (run["active_request_id"],),
+        ).fetchone() is None:
+            return False
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        return self._own_state_without_proxy(connection, run, task) == "executing"
+
+    def _own_state_without_proxy(self, connection, run, task) -> str:
+        """The run's own state when no open boundary request covers it."""
+        run_id = run["run_id"]
+        if task["active_attempt_id"] is not None:
+            return "executing"
+        if run["final_artifact_id"] is not None:
+            return "delivered"
+        if task["state"] in ("failed", "reconciliation-needed"):
+            return "failed"
+        if task["state"] == "queued":
+            if connection.execute(
+                "SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued' LIMIT 1",
+                (run_id,),
+            ).fetchone() is not None:
+                return "executing"
+            if run["delegation_authority"] and run["current_turn_id"] is not None:
+                waiting_turn = connection.execute(
+                    "SELECT 1 FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+                    " WHERE t.turn_id=? AND t.state='returned'"
+                    " AND json_extract(a.result_json,'$.result.turn.outcome.disposition')='waiting'",
+                    (run["current_turn_id"],),
+                ).fetchone()
+                if waiting_turn is not None:
+                    return "waiting-owned"
+        return "waiting-helpers"
+
+    def _sync_boundary(self, connection, run_id, now, *, default_state=None, restore_from_proxy: bool = False):
         run = self._run_row(connection, run_id)
         if run["state"] in ("cancelled", "accepted", "concluded") or self._terminal_ancestor(connection, run_id) is not None:
             return None
         boundary = self._open_boundary(connection, run)
         if boundary is None and default_state is None:
             return None
-        # When the last helper proxy closes, restore the run's own state rather
-        # than stranding a running, queued-continuation, delivered or failed run
-        # in waiting-helpers; an active attempt always owns its queue reason.
+        # When the last helper proxy closes on an ancestor, restore that run's
+        # own state from durable facts rather than stranding it in waiting-helpers;
+        # an explicit leaf helper approval (restore_from_proxy=False) still moves
+        # even a failed/input-rejected run cleanly into waiting-helpers.
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         active = task["active_attempt_id"] is not None
-        if boundary is None and default_state == "waiting-helpers":
-            if active:
-                default_state = "executing"
-            elif run["final_artifact_id"] is not None:
-                default_state = "delivered"
-            elif task["state"] in ("failed", "reconciliation-needed"):
-                default_state = "failed"
-            elif task["state"] == "queued" and connection.execute(
-                "SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued' LIMIT 1",
-                (run_id,),
-            ).fetchone() is not None:
-                default_state = "executing"
+        if boundary is None and restore_from_proxy:
+            default_state = self._own_state_without_proxy(connection, run, task)
         state = "awaiting-host" if boundary is not None else default_state
         request_id = boundary["request_id"] if boundary is not None else None
         connection.execute(
@@ -2356,6 +2400,8 @@ class WorkflowCoordinator:
                 queue_reason = "helper-attention" if boundary["child_task_id"] else "awaiting-host"
             elif state == "executing":
                 queue_reason = self.claim_blocker(connection, task) or "awaiting-execution"
+            elif state == "waiting-owned":
+                queue_reason = "awaiting-owned"
             elif state in ("delivered", "failed"):
                 queue_reason = None
             else:
@@ -2368,6 +2414,15 @@ class WorkflowCoordinator:
             connection, "workflow.boundary_updated", task_id=run_id, revision=None,
             payload={"activeRequestId": request_id, "state": state},
         )
+        if boundary is None and state == "waiting-owned" and run["current_turn_id"] is not None:
+            turn_row = connection.execute(
+                "SELECT * FROM workflow_turns WHERE turn_id=?", (run["current_turn_id"],)
+            ).fetchone()
+            if turn_row is not None:
+                changed = self._owned_since_input(connection, run_id, turn_row)
+                if changed is not None:
+                    self._wake_lead(connection, self._run_row(connection, run_id), changed["seq"], now,
+                                    owned_run_id=changed["run_id"])
         return boundary
 
     @staticmethod
@@ -2435,7 +2490,7 @@ class WorkflowCoordinator:
                 'UPDATE workflow_requests SET state=?, response_kind=?, response_id=?, decision_json=?, decided_at=?, updated_at=? WHERE request_id=?',
                 (source["state"],source["response_kind"],source["response_id"],source["decision_json"],source["decided_at"],now,proxy_id),
             )
-            self._sync_boundary(connection, proxy["run_id"], now, default_state="waiting-helpers")
+            self._sync_boundary(connection, proxy["run_id"], now, default_state="waiting-helpers", restore_from_proxy=True)
             source = self._request_row(connection, proxy["run_id"], proxy_id)
 
     def _unfinished_helpers(self, connection, run_id):
@@ -2797,7 +2852,7 @@ class WorkflowCoordinator:
         source = self._request_row(connection, chain[-1][0]["run_id"], chain[-1][1]["request_id"])
         self._close_proxy_ancestors(connection, source, now)
         for ancestor, _ in reversed(chain[:-1]):
-            self._sync_boundary(connection,ancestor["run_id"],now,default_state="waiting-helpers")
+            self._sync_boundary(connection,ancestor["run_id"],now,default_state="waiting-helpers",restore_from_proxy=True)
 
     def _record_continuation(self,connection,owner,target,origin,params,buddy,reroute,actor,initiator,now):
         selection=self._validate_continuation(connection,target,params,buddy,reroute)
@@ -3016,6 +3071,10 @@ class WorkflowCoordinator:
         connection.execute(
             "UPDATE workflow_runs SET state='executing', active_request_id=NULL, final_artifact_id=NULL, final_attempt_id=NULL, continuation_count=continuation_count+1, updated_at=? WHERE run_id=?",
             (now,run_row["run_id"],),
+        )
+        connection.execute(
+            "UPDATE workflow_children SET state='active', updated_at=? WHERE child_task_id=? AND state='attention'",
+            (now, run_row["run_id"]),
         )
         if continuation_id is not None:
             connection.execute(
@@ -3825,7 +3884,7 @@ class WorkflowCoordinator:
                 raise BoardError("CONFLICT", "Settle owned helpers before Host completion")
         active_helpers = int(
             connection.execute(
-                "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
+                "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state IN ('active','attention')",
                 (run_id,),
             ).fetchone()["count"]
         )
@@ -5154,7 +5213,8 @@ class WorkflowCoordinator:
                 " JOIN workflow_runs w ON w.run_id=r.run_id WHERE d.task_id=?", (task_row["task_id"],),
             ).fetchone()
             if route is not None and (route["state"] != "pending"
-                                      or route["current_routing_id"] != route["decision_id"] or route["run_state"] != "executing"
+                                      or route["current_routing_id"] != route["decision_id"]
+                                      or not self.routing_run_open(connection, route["run_id"])
                                       or self._terminal_ancestor(connection, route["run_id"]) is not None):
                 return "workflow-routing-fenced"
             return None
