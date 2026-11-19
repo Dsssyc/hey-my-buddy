@@ -714,9 +714,9 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             now = self.board_.store.now()
             db.execute(
-                "INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,"
-                "state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                ("host-boundary-test", first, "assistance", "Review evidence", "{}", "approved",
+                "INSERT INTO workflow_requests(request_id,run_id,summary,payload_json,"
+                "state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                ("host-boundary-test", first, "Review evidence", "{}", "superseded",
                  now, now),
             )
         item = next(item for item in self.packet()["microTasks"] if item["runId"] == first)

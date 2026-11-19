@@ -234,7 +234,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertEqual(cell, facts["byDomain"]["root"])
 
     def test_usage_sums_ability_turns_per_sample_and_reports_medians(self):
-        first, _ = self.end_turn(self.new_run(), disposition="assistance",
+        first, _ = self.end_turn(self.new_run(), disposition="attention",
                                  usage=self.usage(10, 2, 3))
         self.continue_run(self.board_, first)
         first, _ = self.end_turn(first, usage=self.usage(20, 4, 5))
@@ -303,8 +303,8 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.conclude(run)
         self.assertEqual(self.facts()[0]["statistics"]["overall"]["samples"], 0)
 
-    def test_send_back_counts_manual_rounds_but_not_assistance_before_first_delivery(self):
-        run, _ = self.end_turn(self.new_run(), disposition="assistance", seconds=3)
+    def test_send_back_counts_manual_rounds_but_not_attention_before_first_delivery(self):
+        run, _ = self.end_turn(self.new_run(), disposition="attention", seconds=3)
         self.continue_run(self.board_, run)
         run, _ = self.end_turn(run, seconds=10)
         self.continue_run(self.board_, run)
@@ -351,7 +351,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertEqual((stats["samples"], stats["failures"]), (2, 2))
 
     def test_cancellation_without_delivery_is_not_a_sample_but_delivery_counts(self):
-        for disposition in ("assistance", "completed"):
+        for disposition in ("attention", "completed"):
             run, _ = self.end_turn(self.new_run(), disposition=disposition)
             self.board_.call("workflow_cancel", {"runId": run["runId"]})
             self.conclude(run)

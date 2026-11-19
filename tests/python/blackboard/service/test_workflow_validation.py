@@ -58,25 +58,6 @@ class WorkflowValidationTests(WorkflowTestCase):
                 self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
         self.assert_no_effect(board, service)
 
-    def test_invalid_helper_packet_does_not_prepare_a_child(self):
-        board = self.board()
-        self.register(board)
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        service = self.service(board)
-        prepared = len(self.workspace.prepare_calls)
-        helper = {"title": "Helper", "task": "Check fixture", "cwd": str(self.workdir("helper")),
-                  "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "read",
-                  "inputs": [], "expectedSeconds": 600}
-        result = self.call(service, "workflow_continue", {"runId": view["runId"],
-                          "requestId": view["activeRequest"]["requestId"], "decision": "approve",
-                          "helpers": [{**helper, "hostId": "forged"}], "autoContinue": False})
-        self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
-        self.assertEqual(len(self.workspace.prepare_calls), prepared)
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-
     def test_replayed_submit_returns_original_selection_without_workspace_preparation(self):
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)

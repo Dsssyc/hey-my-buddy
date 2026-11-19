@@ -36,7 +36,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | [reference/host.md](reference/host.md) | How any Host waits: one `await` per running micro task, what each outcome asks for, lost replies, finding open work before the turn ends, and the launcher outside the sandbox. |
 | [reference/host-codex.md](reference/host-codex.md) | Codex Host waiting flow: one monitoring-only subagent per micro task, the launcher's sandbox rule and Codex-specific limits |
 | [reference/host-claude-code.md](reference/host-claude-code.md) | Claude Code Host waiting flow: one background `await` per running micro task, the launcher's sandbox settings and the session-wakeup limits |
-| [reference/workflow.md](reference/workflow.md) | Micro task lifecycle: routing boundaries, response ids, helpers and Lead ownership, continuation, future authorization, fixed outputs, cancellation and provider rejections |
+| [reference/workflow.md](reference/workflow.md) | Micro task lifecycle: routing boundaries, response ids, Lead ownership, continuation, future authorization, fixed outputs, cancellation and provider rejections |
 | [reference/workspace-lifecycle.md](reference/workspace-lifecycle.md) | continuation authorization and site resolution, three-way Git integration or fixed-result acceptance, conclusion and automatic managed-checkout cleanup |
 | [reference/codex.md](reference/codex.md) | Codex Worker execution through the App Server of the Codex CLI: plan discovery, structured results and session bindings |
 | [reference/claude-code.md](reference/claude-code.md) | Claude Code Worker execution through the Claude Code CLI: native configuration and login, structured results, native-probe boundaries and provider rejection classification |
@@ -60,7 +60,7 @@ Each ADR records the decision at its own point in time, with its dated amendment
 | ADR | Subject |
 | --- | --- |
 | [001](decisions/001-python-transactional-blackboard.md) | The Python transactional blackboard over C-Two: the design requirements behind the implementation |
-| [002](decisions/002-host-directed-assistance-and-workspaces.md) | Assignment by comparative advantage, turn-end yield and continuation, explicit execution workspaces and integration |
+| [002](decisions/002-host-directed-assistance-and-workspaces.md) | Historical design for turn-end yield, execution workspaces and integration |
 | [003](decisions/003-harness-model-selection.md) | A bounded dynamic evaluation table for model selection (draft, superseded by ADR-004) |
 | [004](decisions/004-buddy-decision-support-and-console.md) | Decision support, evaluation maintenance and the local console (proposal; its governance choices were resolved by ADR-005) |
 | [005](decisions/005-shared-assessments-and-table-exclusion.md) | Shared assessments, table-level exclusion and the console stack |
@@ -93,6 +93,7 @@ Each ADR records the decision at its own point in time, with its dated amendment
 | [031](decisions/031-one-process-per-execution.md) | One process per execution |
 | [032](decisions/032-host-interface-delegation-loop.md) | The Host delegation loop, explicit execution choices, response identities and work without a checkout |
 | [033](decisions/033-macro-task-pause-resume-end.md) | Pausing, resuming and ending macro tasks from the console |
+| [034](decisions/034-retire-helpers.md) | Worker attention, Host continuation and workspace resolution, historical session bindings |
 
 ## Acceptance records
 

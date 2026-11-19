@@ -29,30 +29,19 @@ class LeadShutdownTests(WorkflowTestCase):
     def conclude(self, board, run, note="Host closes Lead work"):
         return board.call("workflow_conclude", {"runId": run["runId"], "note": note})
 
-    def test_host_stop_fences_running_lead_owned_run_and_nested_helper(self):
+    def test_host_stop_fences_running_lead_and_owned_run(self):
         board = self.board(max_concurrent=8)
         self.allow_parallel_claims(board)
         lead, lead_claim = self.lead(board)
         owned = self.owned(board, lead_claim)
         self.register(board, "w2")
         owned_claim = self.claim(board, "w2", claim_request_id="owned-running", run_id=owned["runId"])
-        waiting = self.owned(board, lead_claim, "owned-with-helper")
-        waiting_view, _ = self.finish_owned(board, waiting, "w3", disposition="assistance")
-        decided = self.decide(board, waiting_view, waiting_view["activeRequest"]["requestId"],
-                              helpers=[{"title": "nested-helper", "task": "Help owned work",
-                                        "cwd": str(self.workdir("nested-helper")),
-                                        "workspace": {"kind": "existing", "access": "write"}}],
-                              autoContinue=False, credential=lead_claim["agentCredential"])
-        helper = self.get(board, {"runId": decided["children"][0]["taskId"]})
-        self.register(board, "w4")
-        helper_claim = self.claim(board, "w4", claim_request_id="helper-running", run_id=helper["runId"])
-
         stopped = board.call("workflow_cancel", {"runId": lead["runId"],
                                                  'note': "Host stops Lead"})
         self.assertEqual(stopped["state"], "cancelled")
-        for run in (lead, owned, waiting, helper):
+        for run in (lead, owned):
             self.assertEqual(self.get(board, run)["state"], "cancelled")
-        for run in (lead, owned, helper):
+        for run in (lead, owned):
             attempt = self.attempt(board, run)
             self.assertEqual(attempt["stopInitiator"], "host")
             self.assertTrue(attempt["cancelRequested"])
@@ -60,12 +49,12 @@ class LeadShutdownTests(WorkflowTestCase):
         self.assertFalse(summary["selfConfirmed"])
         self.assertFalse(summary["descendantsConfirmed"])
         self.assertEqual(set(summary["unconfirmedRunIds"]),
-                         {lead["runId"], owned["runId"], helper["runId"]})
+                         {lead["runId"], owned["runId"]})
         with self.assertRaises(BoardError) as caught:
             self.owned(board, lead_claim, "after-stop")
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
-        for claim, worker in (({"claim": lead_claim}, "w1"), (owned_claim, "w2"), (helper_claim, "w4")):
+        for claim, worker in (({"claim": lead_claim}, "w1"), (owned_claim, "w2")):
             self.finish_turn(board, claim, worker_id=worker, runner_status="cancelled", seal=False)
         summary = self.get(board, lead)["shutdown"]
         self.assertTrue(summary["selfConfirmed"])

@@ -50,7 +50,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             with seed.board.store.db.read() as connection:
                 connection.backup(cls.snapshot)
             cls.fixture_values = copy.deepcopy({name: getattr(seed, name) for name in (
-                "macros", "roots", "helpers", "completed_attempts", "plain", "operations",
+                "macros", "roots", "completed_attempts", "plain", "operations",
             )})
             cls.clock_value = seed.clock.value
             cls.workspace_values = copy.deepcopy(vars(seed.workspace))
@@ -113,14 +113,13 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 self.assertEqual(len(members), 1)
                 self.assertEqual(len(failures), 1)
                 self.assertEqual(sum(row["matchingRuns"] for row in macro_summaries(page)),
-                                 sum(row["counts"]["roots"] + row["counts"]["helpers"]
+                                 sum(row["counts"]["roots"]
                                      for row in macro_summaries(page)))
                 with self.store.db.read() as connection:
                     for summary in macro_summaries(page):
                         members = macro_tasks._members(connection, summary["macroTaskId"])
                         self.assertEqual(summary["rootRunIds"], [row["task_id"] for row in members
-                                         if row["micro_task_run_id"] is not None
-                                         and row["child_parent_run_id"] is None])
+                                         if row["micro_task_run_id"] is not None])
 
     def test_changed_group_batches_only_its_missing_inputs(self):
         with patch.object(macro_tasks, "_summary_inputs", wraps=macro_tasks._summary_inputs) as derive:
@@ -256,10 +255,9 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertEqual(self.rows()[group]["project"], original)
         self.assertEqual(self.fixture.call("task_get", {"runId": run_id})["task"]["lineage"]["project"], original_run_project)
 
-    def test_root_helper_and_router_stop_changes_are_selective(self):
+    def test_root_and_router_stop_changes_are_selective(self):
         group = self.fixture.macros[0]
         parent = self.root_for(group)
-        helper = self.fixture.helpers[0]
         with self.store.db.read() as connection:
             route = connection.execute("SELECT d.task_id FROM workflow_routes r JOIN decision_requests d USING(decision_id) WHERE r.run_id=?", (parent,)).fetchone()[0]
         # Make the owner a delivered terminal result, so its descendant stops
@@ -269,7 +267,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             initial = self.rows()[group]
             self.assert_recomputed(counter, self.fixture.macros)
-            for task in (parent, helper, route):
+            for task in (parent, route):
                 with self.subTest(task=task):
                     self.sql("UPDATE attempts SET shutdown_confirmed=0 WHERE task_id=?", (task,))
                     changed = self.rows()[group]
@@ -323,7 +321,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         root=self.root_for(group)
         self.read()
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE workflow_requests SET state='declined' WHERE run_id=?",(root,))
+            self.sql("UPDATE workflow_requests SET state='superseded' WHERE run_id=?",(root,))
             self.read()
             self.assert_recomputed(counter,[group])
             self.sql(
@@ -557,17 +555,10 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 self.assertNotIn("summary", self.rows()[group])
                 self.assert_recomputed(counter, [])
 
-    def test_raw_relationship_moves_only_recompute_old_and_new_groups(self):
+    def test_route_move_only_recomputes_old_and_new_groups(self):
         old, new = self.fixture.macros[:2]
-        helper = self.fixture.helpers[0]
         self.read()
-        before = self.rows()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE workflow_children SET parent_run_id=? WHERE child_task_id=?", (self.root_for(new), helper))
-            after = self.rows()
-            self.assertEqual(after[old]["counts"]["helpers"], before[old]["counts"]["helpers"] - 1)
-            self.assertEqual(after[new]["counts"]["helpers"], before[new]["counts"]["helpers"] + 1)
-            self.assert_recomputed(counter, [old,new])
             self.sql("UPDATE workflow_routes SET run_id=?", (self.root_for(new),))
             self.read()
             self.assert_recomputed(counter, [old,new])

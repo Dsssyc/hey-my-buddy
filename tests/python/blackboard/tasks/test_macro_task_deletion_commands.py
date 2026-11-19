@@ -84,13 +84,33 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
 
 
 class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
+    def test_delete_historical_receipt_bound_only_by_target_run_id(self):
+        board = self.board()
+        selected = self.submit(board, request_id="split-run")
+        parent = self.submit(board, request_id="old-parent", cwd=str(self.workdir("old-parent")))
+        run_id = selected["runId"]
+        board.call("workflow_conclude", {"runId": run_id, "note": "Close the selected micro task"})
+        with board.store.db.write() as connection:
+            connection.executemany(
+                "INSERT INTO commands(command_id,kind,request_hash,response_json) VALUES(?,?,?,?)",
+                [
+                    ("old-target", "workflow.cancel", "old-hash",
+                     json.dumps({"runId": parent["runId"], "targetRunId": run_id})),
+                    ("other-target", "workflow.cancel", "other-hash",
+                     json.dumps({"targetRunId": parent["runId"]})),
+                ],
+            )
+        self.assertEqual(delete_without_physical_io(board, f"run:{run_id}")["state"], "deleted")
+        after = receipt_rows(board)
+        self.assertNotIn("old-target", after)
+        self.assertIn("other-target", after)
+
     def test_real_workflow_commands_are_removed_with_their_macro_task(self):
         board = self.board()
         first = self.submit(board, request_id="commands-first", create_macro={"title": "Disposable", 'goal': "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
         attention = board.call("workflow_get", {"runId": first["runId"]})
-        decided = self.decide(board, attention, attention["activeRequest"]["requestId"],
-                              decision="decline")
+        self.continue_run(board, attention)
         self.finish_turn(board, self.claim(board, claim_request_id="commands-claim-2"))
         delivered = board.call("workflow_get", {"runId": first["runId"]})
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
@@ -155,7 +175,7 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         board.call("workflow_cancel", {"runId": submitted["runId"]})
         board.call("workflow_conclude", {"runId": submitted["runId"], "note": "Resolved work closed"})
         with board.store.db.read() as connection:
-            self.assertIsNotNone(connection.execute("SELECT decision_json FROM workflow_requests WHERE request_id=?",
+            self.assertIsNotNone(connection.execute("SELECT resolution_json FROM workflow_requests WHERE request_id=?",
                                                     (view["activeRequest"]["requestId"],)).fetchone())
         assert_deleted_receipts(self, board, "run:" + submitted["runId"],
                                 set(), set(), {submitted["runId"]})

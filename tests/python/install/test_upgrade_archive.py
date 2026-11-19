@@ -9,21 +9,27 @@ from unittest import mock
 
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, complete_fixture_cleanup
+from blackboard.store.upgrade_fixture import (
+    FIXTURE, complete_fixture_cleanup, load_fixture, load_helper_retirement_stock,
+    upgrade_fixture_board_to_41,
+)
 from hey_my_buddy.blackboard.store import backup, schema_30_31
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.tasks.session_content import identity
+from hey_my_buddy.console.session_content import read as read_session
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_dirs import session_record_path
 
 
 class UpgradeCutoverTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.state = self.directory / "state"
-        fixture = load_fixture(self.state)
+        self.fixture = fixture = load_fixture(self.state)
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             complete_fixture_cleanup(connection)
         self.private_files = {relative: native_path(self.state / relative).read_bytes()
@@ -174,6 +180,38 @@ class UpgradeCutoverTests(BoardTestCase):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             self.assertEqual(connection.execute("SELECT json_extract(spec_json,'$.routerBudgetSeconds')"
                 " FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 310)
+
+    def test_schema41_install_keeps_split_run_session_at_its_original_path(self):
+        fixture = self.fixture
+        upgrade_fixture_board_to_41(fixture)
+        load_helper_retirement_stock(fixture)
+        split = fixture["helperRetirementStock"]["scenarios"]["proxyFamily"]
+        old_group = "run:" + split["parentRunId"]
+        run_id = split["childRunId"]
+        with closing(sqlite3.connect(native_path(self.state / "board.sqlite3"))) as connection:
+            attempts = connection.execute(
+                "SELECT attempt_id FROM attempts WHERE task_id=?", (run_id,)
+            ).fetchall()
+        sessions = {
+            attempt: native_path(session_record_path(self.state, old_group, attempt)).read_bytes()
+            for (attempt,) in attempts
+        }
+        self.assertTrue(sessions)
+        self.before = upgrade.idle_snapshot(self.state)
+        target = self.runtime_root / ("b" * 32)
+        result = self.cutover(self.previous, target)
+        self.assertTrue(result["upgraded"], result)
+        self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], 41)
+        store = BoardStore(self.state)
+        self.addCleanup(store.db.close)
+        for attempt, raw in sessions.items():
+            with self.subTest(attempt=attempt):
+                owner = identity(store, run_id, attempt)
+                self.assertEqual(owner["group_id"], "run:" + run_id)
+                self.assertEqual(owner["session_group_id"], old_group)
+                self.assertEqual(native_path(session_record_path(self.state, old_group, attempt)).read_bytes(), raw)
+                self.assertFalse(native_path(session_record_path(self.state, "run:" + run_id, attempt)).exists())
+                self.assertTrue(read_session(store, run_id, attempt, {})["events"])
 
     def test_schema31_install_failure_restores_that_schema_and_previous_runtime(self):
         self.prepare_schema31()

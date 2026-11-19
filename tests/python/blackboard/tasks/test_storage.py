@@ -227,24 +227,18 @@ class StorageTests(BoardTestCase):
         linked = private_dirs.session_record_path(board.directory, 'run:linked', 'linked')
         private_dirs.ensure_private_dir(linked.parent)
         linked.symlink_to(outside)
-        original = storage.tree_info
-        def growing(path, **kwargs):
-            if path == first.parent:
-                with native_path(first).open('ab') as stream:
-                    stream.write(b' appended while inspecting')
-            return original(path, **kwargs)
-        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-             mock.patch.object(storage, 'tree_info', side_effect=growing):
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)):
             report = storage.inspect(board.store)
         records = [row for row in report['candidates'] if row['category'] == 'session-records']
         parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
         self.assertEqual(parent['reasons'], ['owner-unproven'])
         self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
-        self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
+        self.assertEqual({row['path'] for row in records}, {str(first), str(second), str(linked)})
         self.assertEqual(category['bytes'], native_path(first).stat().st_size + native_path(second).stat().st_size)
         self.assertEqual(category['reclaimableBytes'], 0)
-        self.assertTrue(all(row['reasons'] == ['macro-task-deletion'] and not row['eligible'] for row in records))
+        self.assertTrue(all('owner-unproven' in row['reasons'] and not row['eligible'] for row in records))
+        self.assertIn('linked-path', next(row['reasons'] for row in records if row['path'] == str(linked)))
         self.assertEqual(outside.read_bytes(), b'private outside content')
         private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'orphan'))
         with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)):
@@ -908,7 +902,6 @@ class StorageTests(BoardTestCase):
                 self.assertFalse(row['eligible'])
                 self.assertIn('linked-path' if marked == candidate else 'runtime-format-unsupported', row['reasons'])
         self.assertEqual(ready_path.read_text(encoding="utf-8"), 'retained READY')
-
 
 
 class ProcessInventoryServiceTests(BoardTestCase):

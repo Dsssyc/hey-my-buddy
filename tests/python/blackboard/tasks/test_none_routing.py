@@ -66,27 +66,13 @@ class NoneRoutingTests(WorkflowTestCase):
         claim = self.claim(board, run_id=selected['runId'], claim_request_id='direct-worker')
         self.assertEqual(claim['claim']['turn']['input']['executionWorkspace']['kind'], 'none')
 
-    def test_helper_admission_routes_none_read(self):
-        board = self.board()
-        self.seed(board)
-        parent = self.submit(board, request_id='helper-parent', kind='none', access='read')
-        self.finish_turn(board, self.claim(board, run_id=parent['runId']), seal=False,
-                         disposition='attention')
-        view = board.call('workflow_get', {'runId': parent['runId']})
-        approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[{
-            'title': 'Routed answer', 'task': 'Check the answer', 'cwd': str(self.workdir('helper-none')),
-            'buddy': 'route', 'checkout': 'none', 'access': 'read',
-        }])
-        child_id = approved['children'][0]['taskId']
-        helper = board.call('workflow_get', {'runId': child_id})
-        self.assert_routed(board, helper, 'read', 'helper-router')
-        claim = self.claim(board, run_id=child_id, claim_request_id='helper-worker')
-        self.assertEqual(claim['claim']['turn']['input']['executionWorkspace']['kind'], 'none')
-
     def test_queued_continuation_can_reroute_none(self):
         board = self.board()
         run = self.routed(board, 'queued-none')
         self.assertEqual(run['routing']['status'], 'needs-host')
+        boundary = run['activeRequest']['routingBoundary']
+        self.assertIsNone(boundary['continuationProblem'])
+        self.assertIn('continue', boundary['actions'])
         self.seed(board)
         continued = self.continue_run(board, run, buddy='route', note='Use current Router')
         self.assertEqual(continued['routing']['status'], 'queued', continued['routing'])

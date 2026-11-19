@@ -23,7 +23,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 TRIAL_FIELDS = {"buddyId", "identity", "index", "phase", "outcome", "code", "nativeIdentity",
                 "taskId", "attemptId", "shutdownConfirmed", "consecutiveNoAnswers", "retryAt", "usage"}
 BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "facts", "retryAt",
-                   "decisionId", "runId", "targetRunId", "helperPolicy", "continuationProblem",
+                   "decisionId", "runId", "continuationProblem",
                    "actions", "userAction"}
 
 
@@ -541,13 +541,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                            cwd=str(self.workdir(request_id)), buddy="route", kind=kind, access=access)
 
     def choice_params(self, view, buddy, *, note="Host selected the frozen buddy"):
-        boundary = view["routing"]["routingBoundary"]
         params = {"runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
                   "input": "Host continues the frozen micro task", "buddy": buddy, "note": note}
-        if boundary["targetRunId"] is not None:
-            params["targetRunId"] = boundary["targetRunId"]
-        if boundary["helperPolicy"] is not None:
-            params["helperPolicy"] = boundary["helperPolicy"]
         return params
 
     def test_boundary_exposes_request_identity_and_legal_choices(self):
@@ -636,12 +631,10 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         with self.board_.store.db.write() as db:
             row = self.board_.store.decisions._row(db, view["routing"]["decisionId"])
-            self.assertEqual(_continuation_context(db, row, "missing-run", None, self.board_.directory)[:2],
+            self.assertEqual(_continuation_context(db, row, "missing-run", self.board_.directory)[:2],
                              (False, "micro-task-not-found"))
-            self.assertEqual(_continuation_context(db, row, view["runId"], "another-owner", self.board_.directory)[:2],
-                             (True, "micro-task-not-owned"))
             db.execute("UPDATE workflow_runs SET current_routing_id='different' WHERE run_id=?", (view["runId"],))
-            self.assertEqual(_continuation_context(db, row, view["runId"], None, self.board_.directory)[:2],
+            self.assertEqual(_continuation_context(db, row, view["runId"], self.board_.directory)[:2],
                              (True, "workflow-routing-fenced"))
 
     def test_disabled_candidates_report_their_own_problem(self):
@@ -713,53 +706,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(changed["state"], "executing")
         self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
 
-    def test_nested_routing_boundary_requires_root_and_helper_target(self):
-        root = self.routed("root", kind="worktree")
-        leaf = self.routed("leaf", kind="worktree")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
-                       " VALUES(?,?,'private-authorization','attention',?,?)",
-                       (leaf["runId"], root["runId"], T0, T0))
-            source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
-            self.board_.store.workflow._propagate_boundary(db, source, T0)
-        root_view = self.board_.call("workflow_get", {"runId": root["runId"]})
-        leaf_view = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        proxy = next(item for item in root_view["pendingRequests"]
-                     if (item.get("proxy") or {}).get("runId") == leaf["runId"])
-        self.assertEqual(proxy["routingBoundary"]["targetRunId"], leaf["runId"])
-        self.assertEqual(proxy["routingBoundary"]["runId"], root["runId"])
-        self.assertEqual(proxy["routingBoundary"]["decisionId"], leaf_view["routing"]["decisionId"])
-        params = {"runId": root["runId"], "targetRunId": leaf["runId"], "requestId": proxy["requestId"],
-                  "input": "Use alpha for the owned helper", "buddy": "dsh / fixture / alpha / max",
-                  "note": "Host chose alpha"}
-        continued = self.board_.call("workflow_continue", params)
-        self.assertEqual(continued["runId"], root["runId"])
-        self.assertEqual(self.board_.call("workflow_get", {"runId": leaf["runId"]})["buddy"]["model"], "alpha")
-
-    def test_terminal_root_blocks_owned_helper_routing(self):
-        root = self.routed("root", kind="worktree")
-        leaf = self.routed("leaf", kind="worktree")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
-                       " VALUES(?,?,'private-authorization','attention',?,?)",
-                       (leaf["runId"], root["runId"], T0, T0))
-            source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
-            self.board_.store.workflow._propagate_boundary(db, source, T0)
-            db.execute("UPDATE workflow_runs SET state='cancelled' WHERE run_id=?", (root["runId"],))
-        root_view = self.board_.call("workflow_get", {"runId": root["runId"]})
-        proxy = next(item for item in root_view["pendingRequests"]
-                     if (item.get("proxy") or {}).get("runId") == leaf["runId"])
-        leaf_view = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        boundary = leaf_view["routing"]["routingBoundary"]
-        self.assertEqual(boundary["continuationProblem"], "ANCESTOR_TERMINAL")
-        self.assertEqual(boundary["actions"], ["get", "cancel"])
-        with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", {"runId": root["runId"], "targetRunId": leaf["runId"],
-                                                  "requestId": proxy["requestId"],
-                                                  "input": "continue", "buddy": "dsh / fixture / alpha / max",
-                                                  "note": "Host chose alpha"})
-        self.assertEqual(raised.exception.code, "CONFLICT")
-
     def test_cli_brief_get_and_await_keep_current_boundary_facts(self):
         from hey_my_buddy.cli import blocking, cli_views
         view = self.routed()
@@ -775,7 +721,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         for output in (cli_views.OUTPUT_FULL, cli_views.OUTPUT_BRIEF):
             awaited = cli_views.render("await", envelope, output)
             self.assertEqual(awaited["requestId"], view["activeRequest"]["requestId"])
-            self.assertEqual(awaited["requestKind"], view["activeRequest"]["kind"])
+            self.assertEqual(awaited["requestId"], view["activeRequest"]["requestId"])
             self.assertIn("continue", awaited["actions"])
 
     def test_explicit_reroute_after_known_retry_time_uses_same_request_identity(self):
@@ -855,7 +801,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                             "nativeCode": "fixture-denied", "source": "synthetic/candidate",
                             "observedAt": self.clock.value, "resetsAt": None,
                             "rejectionPhase": "before-model"}, now=self.clock.value)
-                    self.assertEqual(_candidate_problem(db, candidate, request, None, self.clock.value),
+                    self.assertEqual(_candidate_problem(db, candidate, request, self.clock.value),
                                      {"code": "router-out-of-bounds", "bound": bound})
                     db.execute("ROLLBACK TO candidate_gate")
                     db.execute("RELEASE candidate_gate")

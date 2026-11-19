@@ -85,12 +85,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return {**self.view(board,reply["runId"]),**reply}
 
     def continue_run(self, board, params):
-        target=self.view(board,params.get("targetRunId",params["runId"]))
+        target=self.view(board,params["runId"])
         if not any(key in params for key in ("requestId","artifactId","turnId")):
             active=target["activeRequest"]
             if active is not None:
-                root=self.view(board,params["runId"])
-                params["requestId"]=root["activeRequest"]["requestId"]
+                params["requestId"]=active["requestId"]
             elif target["finalArtifactId"] is not None:
                 params["artifactId"]=target["finalArtifactId"]
             else:
@@ -111,9 +110,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         """
         outcome = {"disposition": disposition, "summary": "did the work", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
-        if disposition in ("assistance", "attention"):
+        if disposition == "attention":
             outcome["request"] = {"summary": "please review", "attempted": "tried the obvious fix",
-                                  "neededWork": ["decide the schema"], "expectedArtifacts": ["a reviewed design"],
+                                  "neededWork": "decide the schema", "expectedArtifacts": ["a reviewed design"],
                                   "acceptance": "the design is approved"}
         return native_turn.claim_record(claim, outcome=outcome)
 
@@ -169,7 +168,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         params = {"runId": view["runId"]}
         params.update(extra)
         try:
-            return board.store.workflow._reclaim_checkout(run_id=params.get("targetRunId", params["runId"]))
+            return board.store.workflow._reclaim_checkout(run_id=params["runId"])
         except BoardError as error:
             error.add_note(repr(error.details))
             raise
@@ -326,7 +325,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted, first_claim, first_manifest, checkout, first_seal, yielded, first_artifact = self.run_worktree(
-            board, request_id=request_id, output="first turn output\n", disposition="assistance"
+            board, request_id=request_id, output="first turn output\n", disposition="attention"
         )
         run_id = submitted["runId"]
         self.assertEqual(yielded["state"], "awaiting-host")
@@ -438,74 +437,35 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             report = board.call('storage_plan', {})
         self.assertFalse(any(row['path'] == str(root) for row in report['candidates']))
 
-    def root_with_helper_worktree(self, *, request_id="helper-target"):
-        """A root worktree run plus a helper that owns a separate isolated worktree.
-
-        Helper mutations address the root run and its target helper explicitly.
-        """
+    def scope_failure(self, *, request_id="scope"):
+        """A worktree turn whose seal fails outside its authorized scope."""
         board = self.board()
         self.register(board)
-        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
-            board, request_id=request_id, output="root output\n", disposition="assistance"
-        )
+        submitted = self.submit_run(board, {
+            "title": request_id, "task": "Edit the feature", "cwd": str(self.repo),
+            "checkout": "worktree", "access": "write", "writeScope": ["src"],
+        })
         run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper owns its own worktree", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
-        self.assertEqual(decided["decision"], "approve")
-        helper_id = decided["children"][0]["taskId"]
-        with board.store.db.read() as connection:
-            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
-            helper_run = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone()
-            helper_manifest = effective_manifest(board.directory, connection, helper_run)
-        self.assertEqual(helper_manifest["kind"], "worktree")
-        self.assertNotEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
-        helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="h" * 16)
-        self.assertIsNotNone(helper_claim["claim"], helper_claim)
-        helper_turn_manifest = resolve_manifest(board.directory,
-                                                helper_claim["claim"]["turn"]["input"]["executionWorkspace"])
-        helper_checkout = Path(helper_turn_manifest["path"])
-        (helper_checkout / "helper.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
-        helper_seal = workspace_module.seal(self.directory, helper_turn_manifest, helper_id,
-                                            helper_claim["claim"]["attempt"]["attemptId"])
-        self.finish_turn(board, helper_claim, helper_seal, nonce="h" * 16)
-        helper_view = self.view(board, helper_id)
-        self.assertEqual(helper_view["state"], "delivered")
-        helper_artifact = next(row for row in helper_view["artifacts"] if row["kind"] == "output")
-        return {
-            "board": board, "runId": run_id, "rootView": self.view(board, run_id), "manifest": manifest,
-            "checkout": checkout, "helperId": helper_id, "helperView": helper_view,
-            "helperManifest": helper_manifest, "helperCheckout": helper_checkout, "artifact": helper_artifact,
-        }
-
-    def helper_scope_failure(self, *, request_id="helper-scope"):
-        """A root run plus a helper whose own worktree seal fails outside its scope."""
-        board = self.board()
-        self.register(board)
-        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
-            board, request_id=request_id, output="root output\n", disposition="assistance"
-        )
-        run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "scoped helper", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"], 'expectedSeconds': 1800}], 'autoContinue': True})
-        helper_id = decided["children"][0]["taskId"]
-        helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="s" * 16)
-        self.assertIsNotNone(helper_claim["claim"], helper_claim)
-        helper_manifest = resolve_manifest(board.directory,
-                                           helper_claim["claim"]["turn"]["input"]["executionWorkspace"])
-        helper_checkout = Path(helper_manifest["path"])
-        (helper_checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
-        (helper_checkout / "tracked.txt").write_text("outside the helper scope\n", encoding="utf-8", newline="\n")
+        claim = self.claim(board, run_id, request_id=f"{request_id}-claim", nonce="s" * 16)
+        self.assertIsNotNone(claim["claim"], claim)
+        manifest = resolve_manifest(board.directory,
+                                           claim["claim"]["turn"]["input"]["executionWorkspace"])
+        checkout = Path(manifest["path"])
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
-            workspace_module.seal(self.directory, helper_manifest, helper_id,
-                                  helper_claim["claim"]["attempt"]["attemptId"])
+            workspace_module.seal(self.directory, manifest, run_id,
+                                  claim["claim"]["attempt"]["attemptId"])
         self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
-        attempt = helper_claim["claim"]["attempt"]
+        attempt = claim["claim"]["attempt"]
         seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 's' * 16, 'status': 'failed', 'result': {'status': 'failed', 'workspaceSealError': seal_error, 'turnResultPath': '/tmp/turn-result.json'}, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
-        helper_view = self.view(board, helper_id)
-        self.assertEqual(helper_view["state"], "awaiting-host")
-        conflict = helper_view["workspaceConflicts"][0]
+        view = self.view(board, run_id)
+        self.assertEqual(view["state"], "awaiting-host")
+        conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["state"], "open")
-        return {"board": board, "runId": run_id, "helperId": helper_id, "helperManifest": helper_manifest,
-                "helperCheckout": helper_checkout, "conflict": conflict}
+        return {"board": board, "runId": run_id, "manifest": manifest,
+                "checkout": checkout, "conflict": conflict}
 
     def interrupted_reclaim(self, *, missing=(), remove_git=False):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(

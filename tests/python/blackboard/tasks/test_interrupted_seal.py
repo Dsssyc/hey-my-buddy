@@ -78,7 +78,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assert_stopped_receipt(board, attempt_id, "WORKSPACE_SCOPE_VIOLATION")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "awaiting-host")
-        self.assertEqual(view["activeRequest"]["kind"], "attention")
+        self.assertEqual(view["activeRequest"]["reason"]["code"], "workspace-scope-violation")
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["blockingPaths"], ["tracked.txt"])
         resolved = board.call("workflow_continue", {

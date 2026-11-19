@@ -3,7 +3,6 @@ from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from pathlib import Path
 from unittest.mock import patch
 
-from blackboard.tasks.test_workflow_real import BUDDY
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
@@ -67,7 +66,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         self.assertEqual(self.view(board, run_id)["artifacts"], before)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=? AND state IN ('held','transferred')",
+                "SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
                 (run_id,),
             ).fetchone()[0], 0)
         replacement = self.submit_run(board, {
@@ -163,30 +162,3 @@ class ExistingConclusionTests(LifecycleTestCase):
         self.assertTrue(any(row["kind"] == "partial-output" for row in self.view(board, run_id)["artifacts"]))
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
-
-    def test_managed_parent_seals_after_a_same_checkout_helper_without_a_new_parent_turn(self):
-        board = self.board()
-        submitted, _, _, checkout, _, view, _ = self.run_worktree(board, disposition="assistance")
-        run_id = submitted["runId"]
-        board.call("workflow_continue", {
-            "runId": run_id, "requestId": view["activeRequest"]["requestId"],
-            "decision": "approve", "autoContinue": False,
-            "helpers": [{"title": "borrow-checkout", "task": "Finish in the parent checkout",
-                         "cwd": str(checkout), "buddy": " / ".join(BUDDY.values()),
-                         "checkout": "existing", "access": "write", "writeScope": ["."],
-                         "inputs": [], "expectedSeconds": 1800}],
-        })
-        helper_id = self.view(board, run_id)["children"][0]["taskId"]
-        claimed = self.claim(board, helper_id, request_id="same-checkout-helper-claim")
-        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
-        (checkout / "helper.txt").write_text("The helper's sealed work\n", encoding="utf-8", newline="\n")
-        seal = workspace.seal(self.directory, manifest, helper_id, claimed["claim"]["attempt"]["attemptId"])
-        self.finish_turn(board, claimed, seal)
-        board.call("workflow_cancel", {"runId": run_id})
-        concluded = board.call("workflow_conclude", {
-            "runId": run_id, "note": "No further parent turn",
-        })
-        self.assertTrue(any(row["kind"] == "partial-output" for row in self.view(board, run_id)["artifacts"]))
-        self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
-        self.assertFalse(checkout.exists())
-

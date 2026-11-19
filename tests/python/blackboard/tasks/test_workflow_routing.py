@@ -287,61 +287,15 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(view["shutdown"]["unconfirmedCount"], 0)
 
 
-
-
-
-
-
-    def test_routing_attention_refuses_assistance_before_workspace_or_catalog_work(self):
+    def test_routing_attention_requires_buddy_before_workspace_or_catalog_work(self):
         board = self.board()
         submitted = self.routed(board)
         prepared = len(self.workspace.prepare_calls)
         with self.assertRaises(BoardError) as raised:
-            self.decide(board, submitted, submitted["activeRequest"]["requestId"], helpers=[{
-                "title": "wrong-operation-helper", "task": "cannot resolve buddy",
-                "cwd": str(self.workdir("wrong-operation-helper")),
-                "workspace": {"kind": "worktree", "access": "write"},
-            }])
+            self.continue_run(board, submitted, input="Continue without selecting a buddy")
         self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
         self.assertEqual(self.catalog_validation.call_count, 0)
-
-    def helper_routing(self, board, parent, *, request_id="route-helper"):
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        reply = board.call("workflow_continue", {"runId": view["runId"],
-            "requestId": view["activeRequest"]["requestId"],
-            "decision": "approve", "autoContinue": True, "helpers": [{
-            "title": request_id, "task": "Produce one bounded helper output",
-            "cwd": str(self.workdir(request_id)), "buddy": "route",
-            "checkout": "worktree", "access": "write", "inputs": [],
-            "writeScope": ["."], "expectedSeconds": 1800,
-        }]})
-        return {**board.call("workflow_get", {"runId": parent["runId"]}), **reply}
-
-    def test_helper_routing_attention_can_be_resolved_by_root_owner(self):
-        board = self.board()
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        # Explicit parent admission registers a candidate in the shared catalog;
-        # remove it to exercise a helper's unresolved routing boundary.
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE buddies SET enabled=0")
-        view = self.helper_routing(board, parent)
-        helper_id = view["children"][0]["taskId"]
-        request = view["activeRequest"]
-        self.assertTrue(request["routing"])
-        self.assertEqual(request["origin"]["runId"], helper_id)
-        with self.assertRaises(BoardError) as raised:
-            self.decide(board, view, request["requestId"])
-        self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
-        from support import enable_fixture_buddy
-        enable_fixture_buddy(board.store, BUDDY)
-        continued = self.continue_run(board, view, requestId=request["requestId"],
-                                      targetRunId=helper_id, buddy=BUDDY, note="Root Host selected an installed buddy")
-        self.assertEqual(continued["counts"]["openRequests"], 0)
-        claimed = self.claim(board, run_id=helper_id)
-        self.assertIsNotNone(claimed["claim"], claimed)
-        self.assertEqual(claimed["claim"]["task"]["spec"]["model"], BUDDY["model"])
 
     def test_native_resume_requires_same_buddy_and_exact_previous_session(self):
         board = self.board()

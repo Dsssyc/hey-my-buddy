@@ -29,7 +29,7 @@ With `checkout: "none"`, the Worker works directly in `cwd`, whether it is a Git
 
 ### 3. Write a bounded packet
 
-Use one macro task per user agenda, created separately with its title and goal. It can remain empty. Each micro task supplies its own intent-focused title and brief: inputs, expected output, permitted changes, non-goals, acceptance checks, plan, references and known pitfalls. The brief must say when the Worker should stop and return assistance or attention, including a cause outside its scope or a disagreement between code and the agreed plan. [Writing the brief](workflow.md#writing-the-brief) explains that boundary.
+Use one macro task per user agenda, created separately with its title and goal. It can remain empty. Each micro task supplies its own intent-focused title and brief: inputs, expected output, permitted changes, non-goals, acceptance checks, plan, references and known pitfalls. The brief must say when the Worker should stop and return attention, including a cause outside its scope or a disagreement between code and the agreed plan. [Writing the brief](workflow.md#writing-the-brief) explains that boundary.
 
 Use `buddy: "route"` unless the user has named a buddy. A named buddy is written by its complete name `harness / provider / model / effort`, as the console's Buddy page lists it, or by the alias the user gave it in the console, compared without regard to case. CLI replies, `get` with `{"buddies":true}` among them, write every buddy by its complete name followed by ` [alias]` when it has one, and that form is accepted too when both parts name the same buddy. Routing uses enabled legal candidates and the user's settings, and returns its reasons on this micro task. The console owns model discovery and user preferences. [Decision](decision.md) owns routing; routing trouble does not authorize changing user settings.
 
@@ -56,13 +56,13 @@ The service derives a creation key from project and title for `create`, and from
 
 ### 6. Continue at the boundary
 
-Read `get` when a reply needs a decision or inspection. Answer the returned `requestId` with `continue`: approve or decline a boundary, authorize complete helper packets, or provide continuation input. To send a delivered result back, answer its `artifactId` with input describing the acceptance problem. After a failed turn without a fixed result, use its `turnId`. A new reply's ids and legal actions supersede assumptions remembered from an earlier view.
+Read `get` when a reply needs a decision or inspection. Answer the returned `requestId` with `continue`: provide continuation input or resolve a workspace conflict using its recorded fingerprint. To send a delivered result back, answer its `artifactId` with input describing the acceptance problem. After a failed turn without a fixed result, use its `turnId`. A new reply's ids and legal actions supersede assumptions remembered from an earlier view.
 
 ```sh
 "$HMB" continue '{"runId":"<runId>","artifactId":"<artifactId>","input":"The regression case still fails. Fix it in the authorized paths and rerun the focused checks."}'
 ```
 
-A continuation can also select `buddy: "route"` or a complete buddy name, change access or future write scope, or resolve a recorded workspace site. A buddy change requires a note; a running turn must first stop. With live helpers, explicitly choose `helperPolicy: "keep"` or `"cancel"`. [Workflow](workflow.md#host-boundaries-and-requests) covers helpers, [manual continuation](workflow.md#manual-continuation) covers resume, and [workspace lifecycle](workspace-lifecycle.md) covers site resolution. Provider failures retain their class and partial-work evidence; never create a duplicate to hide a routing or provider boundary.
+A continuation can also select `buddy: "route"` or a complete buddy name, change access or future write scope, or resolve a recorded workspace site. A buddy change requires a note; a running turn must first stop. [Workflow](workflow.md#host-boundaries-and-requests) covers boundary responses, [manual continuation](workflow.md#manual-continuation) covers resume, and [workspace lifecycle](workspace-lifecycle.md) covers site resolution. Provider failures retain their class and partial-work evidence; never create a duplicate to hide a routing or provider boundary.
 
 ### 7. Inspect the final artifact and accept it
 
@@ -103,7 +103,7 @@ Observation and inquiry do not continue or cancel a turn. The service derives th
 
 ## Cancellation and stopping
 
-`cancel` uses `runId` and an optional note. It records ordered cancellation across the owned graph, including routing and helpers; its reply never proves every process stopped. `get.shutdown` separates self and descendant confirmation. Unknown is not stopped. `cancel` is for work another turn or buddy will continue: continue only after the required stop evidence holds. To end work, call `conclude` directly. [Operations](operations.md#cancellation-and-recovery) owns service restart and process recovery.
+`cancel` uses `runId` and an optional note. It records ordered cancellation across the owned graph, including routing and Lead-owned micro tasks; its reply never proves every process stopped. `get.shutdown` separates self and descendant confirmation. Unknown is not stopped. `cancel` is for work another turn or buddy will continue: continue only after the required stop evidence holds. To end work, call `conclude` directly. [Operations](operations.md#cancellation-and-recovery) owns service restart and process recovery.
 
 When the user asks you to pause, `inquire` each running micro task asking it to deliver what it has done so far, and `continue` the delivered work when the user wants it carried on. This is cooperative: the Worker acts when it reads the question, and queued work in the macro task still starts. To stop a macro task for certain, the user pauses it in the [console](console.md); `await` then returns `paused` for each interrupted turn, and the micro task continues on its own when the user resumes the macro task ([ADR-033](../decisions/033-macro-task-pause-resume-end.md)). Pausing and resuming decide nothing about the micro task; when the user ends a macro task in the console, its unfinished micro tasks carry the user's conclusion and delivered ones are left for you to accept or conclude.
 

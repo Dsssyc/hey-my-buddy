@@ -188,57 +188,6 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.control(board, 'end', first['macroTaskId'], 'retry-mixed-stop')
         self.assertIsNotNone(board.call('workflow_get', {'runId':first['runId']})['hostConclusion'])
 
-    def test_end_skips_parent_blocked_by_unconfirmed_helper_and_concludes_sibling(self):
-        board = self.board(max_concurrent=4)
-        parent = self.submit(board, kind='worktree', create_macro={'title':'Helper stop proof','goal':'Work'})
-        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
-        view = board.call('workflow_get', {'runId':parent['runId']})
-        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
-            'title':'active helper','task':'Assist','cwd':str(self.workdir('end-active-helper')),
-            'workspace':{'kind':'worktree','access':'write'}}])
-        helper_id = approved['children'][0]['taskId']
-        active_helper = self.claim(board, run_id=helper_id)
-        sibling = self.submit(board, kind='worktree', request_id='end-sibling', macroTaskId=parent['macroTaskId'])
-        with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
-            result = self.control(board, 'end', parent['macroTaskId'])
-        self.assertEqual(result, {'macroTaskId':parent['macroTaskId'], 'duplicate':False})
-        self.assertIsNone(board.call('workflow_get', {'runId':parent['runId']})['hostConclusion'])
-        self.assertIsNone(board.call('workflow_get', {'runId':helper_id})['hostConclusion'])
-        self.assertIsNotNone(board.call('workflow_get', {'runId':sibling['runId']})['hostConclusion'])
-        self.finish_turn(board, active_helper, runner_status='cancelled', seal=False)
-
-    def test_pause_auto_continuation_for_helper_uses_group_pause_session(self):
-        board = self.board(max_concurrent=4)
-        parent = self.submit(board, kind='worktree')
-        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
-        view = board.call('workflow_get', {'runId':parent['runId']})
-        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
-            'title':'pause helper','task':'Assist','cwd':str(self.workdir('pause-active-helper')),
-            'workspace':{'kind':'worktree','access':'write'}}])
-        helper_id = approved['children'][0]['taskId']
-        active_helper = self.claim(board, run_id=helper_id)
-        target = 'run:' + parent['runId']
-        self.control(board, 'pause', target)
-        self.pause_result(board, active_helper)
-        with board.store.db.read() as connection:
-            pause = connection.execute(
-                "SELECT actor_role,actor_id FROM events WHERE kind='macro_task.paused'"
-                " AND json_extract(payload_json,'$.macroTaskId')=? ORDER BY seq DESC LIMIT 1", (target,),
-            ).fetchone()
-            event = connection.execute(
-                "SELECT actor_role,actor_id FROM events WHERE kind='workflow.paused' AND task_id=? ORDER BY seq DESC LIMIT 1",
-                (helper_id,),
-            ).fetchone()
-            continuation = connection.execute(
-                "SELECT state FROM workflow_continuations WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
-                (helper_id,),
-            ).fetchone()
-        self.assertEqual(event['actor_role'], pause['actor_role'])
-        self.assertEqual(event['actor_id'], pause['actor_id'])
-        self.assertEqual(event['actor_role'], 'console')
-        self.assertNotEqual(event['actor_id'], 'pause')
-        self.assertEqual(continuation['state'], 'queued')
-
     def test_host_continue_during_pause_is_recorded_then_starts_after_resume(self):
         board = self.board()
         run = self.submit(board, kind='worktree')
@@ -501,48 +450,6 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(result, {'macroTaskId': first['macroTaskId'], 'duplicate': False})
         for run in (first, second, late):
             self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'concluded')
-
-    def test_pause_keeps_host_boundary_and_blocks_helpers_in_the_standalone_tree(self):
-        board = self.board(max_concurrent=4)
-        run = self.submit(board, kind='worktree')
-        self.finish_turn(board, self.claim(board), disposition='assistance')
-        view = board.call('workflow_get', {'runId':run['runId']})
-        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
-            'title':'helper','task':'Assist','cwd':str(self.workdir('pause-helper')),
-            'workspace':{'kind':'worktree','access':'write'}}])
-        helper = approved['children'][0]['taskId']
-        before = board.call('workflow_get', {'runId':run['runId']})
-        self.control(board, 'pause', 'run:'+run['runId'])
-        self.assertIsNone(self.claim(board, run_id=helper)['claim'])
-        self.assertEqual(board.call('workflow_get', {'runId':helper})['queueReason'], 'paused')
-        current = board.call('workflow_get', {'runId':run['runId']})
-        self.assertEqual(current['activeRequest'], before['activeRequest'])
-        self.assertEqual(current['queueReason'], before['queueReason'])
-        self.control(board, 'resume', 'run:'+run['runId'])
-        self.assertIsNotNone(self.claim(board, run_id=helper)['claim'])
-
-    def test_unfinished_counts_unconcluded_failed_and_cancelled_helpers(self):
-        board = self.board(max_concurrent=4)
-        run = self.submit(board, kind='worktree')
-        self.finish_turn(board, self.claim(board), disposition='assistance')
-        view = board.call('workflow_get', {'runId':run['runId']})
-        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
-            'title':name, 'task':'Assist', 'cwd':str(self.workdir('end-helper-'+name)),
-            'workspace':{'kind':'worktree','access':'write'}} for name in ('failed','cancelled','delivered')])
-        children = dict(zip(('failed','cancelled','delivered'),
-                            (child['taskId'] for child in approved['children'])))
-        for name, child in children.items():
-            self.finish_turn(board, self.claim(board, run_id=child),
-                             runner_status='ok' if name == 'delivered' else name, seal=name == 'delivered')
-        target = 'run:'+run['runId']
-        counts = board.call('macro_task_timeline', {'macroTaskId':target})['macroTask']['counts']
-        self.assertEqual(counts['unfinished'], 3)
-        self.assertEqual(counts['delivered'], 1)
-        ended = self.control(board, 'end', target)
-        self.assertEqual(ended, {'macroTaskId': target, 'duplicate': False})
-        for run_id in (run['runId'], children['failed'], children['cancelled']):
-            self.assertEqual(board.call('workflow_get', {'runId':run_id})['state'], 'concluded')
-        self.assertEqual(board.call('workflow_get', {'runId':children['delivered']})['state'], 'delivered')
 
     def test_end_preserves_delivered_owned_work_below_the_lead(self):
         board = self.board(max_concurrent=4)

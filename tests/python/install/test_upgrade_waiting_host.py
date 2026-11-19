@@ -8,7 +8,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import launcher, upgrade
 
 class WaitingHostUpgradeTests(WorkflowTestCase):
-    def boundary(self, *, disposition="assistance"):
+    def boundary(self, *, disposition="attention"):
         board = self.board()
         run = self.submit(board)
         self.register(board)
@@ -37,7 +37,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
 
     def test_queued_continuation_still_refuses_without_cancellation(self):
         board, run, view = self.boundary()
-        self.decide(board, view, view["activeRequest"]["requestId"])
+        self.continue_run(board, view)
         before = self.snapshot(board)
         with self.assertRaises(BoardError) as caught:
             upgrade.idle_snapshot(board.directory)
@@ -50,7 +50,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
 
     def test_recorded_continuation_at_a_host_boundary_still_blocks(self):
         board, run, view = self.boundary()
-        self.decide(board, view, view["activeRequest"]["requestId"])
+        self.continue_run(board, view)
         # Preserve a pending automatic continuation while its run is at a Host
         # boundary: admission must inspect the pending work, not the label alone.
         with board.store.db.write() as connection:
@@ -102,7 +102,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         created_title = "fenced fixture"
         created_task = "inspect the fixture"
         calls = (
-            ("workflow_continue", {"runId": run_id, "requestId": request_id, "decision": "approve"}),
+            ("workflow_continue", {"runId": run_id, "requestId": request_id, "input": "Proceed with the work"}),
             ("workflow_continue", {"runId": run_id, "requestId": request_id, "input": "continue"}),
             ("workflow_accept", {"runId": run_id, "artifactId": "fixture-output", "note": "reviewed", "notRequired": "fixture"}),
             ("workflow_conclude", {"runId": run_id, "note": "reviewed"}),

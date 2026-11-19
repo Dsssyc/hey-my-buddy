@@ -63,7 +63,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         answered = board.call("workflow_continue", {
             "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
-            "decision": "decline",
+            "input": "Use the current findings",
         })
         self.assertEqual(answered["state"], "executing")
         cancelled = board.call("workflow_cancel", {"runId": submitted["runId"],
@@ -82,19 +82,19 @@ class WorkflowReceiptTests(WorkflowTestCase):
                 ).fetchone()[0], 0)
         for operation, params in (("workflow_continue", {"runId": submitted["runId"],
                                                          "requestId": view["activeRequest"]["requestId"],
-                                                         "decision": "decline"}),
+                                                         "input": "Use the current findings"}),
                                   ("workflow_cancel", {"runId": submitted["runId"]})):
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
                 board.call(operation, params)
             self.assertEqual(caught.exception.code, "NOT_FOUND")
 
-    def test_decision_replay_uses_the_request_row(self):
+    def test_continuation_replay_uses_the_request_row(self):
         board = self.board()
         submitted = self.submit(board)
         self.finish_turn(board, self.claim(board), disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         params = {"runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
-                  "decision": "approve"}
+                  "input": "Proceed with the work"}
         first = board.call("workflow_continue", params)
         replayed = board.call("workflow_continue", params)
         self.assertEqual(replayed["state"], first["state"])
@@ -105,9 +105,9 @@ class WorkflowReceiptTests(WorkflowTestCase):
                 (params["requestId"],),
             ).fetchone()
         self.assertEqual((response["response_kind"], response["response_id"]),
-                         ("decision", params["requestId"]))
+                         ("continue", first["continuationId"]))
         with self.assertRaises(BoardError) as changed:
-            board.call("workflow_continue", {**params, "decision": "decline"})
+            board.call("workflow_continue", {**params, "input": "Use the current findings"})
         self.assertEqual(changed.exception.code, "CONFLICT")
 
     def test_acceptance_consumes_the_artifact_once(self):

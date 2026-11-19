@@ -7,7 +7,7 @@ from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
-from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from support import occupied_directory
 
 
@@ -586,46 +586,6 @@ class ReclamationTests(LifecycleTestCase):
             self.assertTrue(Path(first['checkoutRoot']).exists())
             self.assertTrue(Path(second['checkoutRoot']).exists())
         self.assertEqual(board.store.service_issues(), [])
-
-    def test_failed_or_cancelled_borrower_uses_its_concluded_parents_retention_time(self):
-        from support import FakeClock
-        from hey_my_buddy import private_dirs
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
-        from blackboard.tasks.test_workflow_real import BUDDY
-        for terminal in ('failed', 'cancelled'):
-            with self.subTest(terminal=terminal):
-                clock = FakeClock()
-                board = self.board(clock=clock)
-                submitted, _, _, checkout, _, yielded, _ = self.run_worktree(
-                    board, request_id='parent-' + terminal, disposition='assistance')
-                decided = self.continue_run(board, {'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect shared files', 'cwd': str(checkout), 'title': 'borrower-' + terminal, 'buddy': " / ".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
-                child_id = decided['children'][0]['taskId']
-                if terminal == 'failed':
-                    child = self.claim(board, child_id, request_id='borrower-failed-claim')['claim']
-                    attempt = child['attempt']
-                    seal = workspace.seal(board.directory, turn_manifest(board.directory, child['turn']['input']),
-                                          child_id, attempt['attemptId'])
-                    board.call('execution_result', {
-                        'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16,
-                        'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1,
-                        'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)},
-                    })
-                root = private_dirs.ensure_private_dir(private_dirs.micro_task_root(board.directory, 'dsh', child_id))
-                (root / 'failed-evidence.log').write_text('retained', encoding='utf-8')
-                board.call('workflow_cancel', {'runId': submitted['runId']})
-                board.call('workflow_conclude', {'runId': submitted['runId'], 'note': 'Ended the parent'})
-                reclaim_native(board.store)
-                self.assertTrue(root.exists())
-                clock.advance(3 * 86400)
-                reclaim_native(board.store)
-                self.assertFalse(root.exists())
-                with board.store.db.read() as connection:
-                    row = connection.execute('SELECT state FROM workflow_runs WHERE run_id=?', (child_id,)).fetchone()
-                    self.assertEqual(row['state'], 'concluded')
-                    conclusion = connection.execute(
-                        'SELECT execution_status FROM workflow_host_conclusions WHERE run_id=?', (child_id,),
-                    ).fetchone()
-                    self.assertIn(conclusion['execution_status'], ('failed', 'cancelled'))
 
     def test_shell_with_a_live_request_is_retained_until_its_task_has_gone(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation

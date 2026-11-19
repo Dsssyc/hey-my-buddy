@@ -465,7 +465,7 @@ def _delete_rows(store, connection, scope, deletion):
     if deletion['target_kind'] == 'macro-task':
         project_ids.add(connection.execute('SELECT project_id FROM macro_tasks WHERE macro_task_id=?',
                                            (deletion['target_id'],)).fetchone()['project_id'])
-    bindings = {'runId':r,
+    bindings = {'runId':r,'targetRunId':r,
                 'requestId':{x['request_id'] for x in _rows(connection,'workflow_requests','run_id',r)},
                 'continuationId':{x['continuation_id'] for x in _rows(connection,'workflow_continuations','run_id',r)},
                 'artifactId':{x['artifact_id'] for x in _rows(connection,'workflow_artifacts','run_id',r)},

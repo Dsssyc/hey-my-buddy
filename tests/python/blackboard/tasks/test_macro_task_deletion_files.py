@@ -58,21 +58,30 @@ class DeletionFileTests(BoardTestCase):
 class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
     closed = engine_fixtures.MacroTaskDeletionTests.closed
 
-    def test_session_group_removal_is_idempotent_and_finished_deletion_is_not_found(self):
+    def bind_session(self, board, run_id, group):
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
+                "adapter,shutdown_confirmed,session_group_id,created_at,updated_at)"
+                " VALUES('attempt',?,1,'fixture','finished','codex',1,?,?,?)",
+                (run_id, group, board.store.now(), board.store.now()),
+            )
+        return private_dirs.session_record_path(board.directory, group, "attempt")
+
+    def test_session_record_removal_and_finished_deletion_is_not_found(self):
         for macro in (True, False):
             with self.subTest(macro=macro):
                 board = self.board()
                 run = self.closed(board, "session-delete-" + str(macro),
                                   **({"macro_task": "Session deletion"} if macro else {}))
                 target = run.get("macroTaskId") or "run:" + run["runId"]
-                record = private_dirs.session_record_path(board.directory, target, "attempt")
+                record = self.bind_session(board, run["runId"], target)
                 native_path(record.parent).mkdir(parents=True)
                 native_path(record).write_bytes(b"private session")
                 with patch.object(deletion, "_delete_workspaces", return_value=[]):
                     result = deletion.delete(board.store, target, 1)
                 self.assertEqual(result["state"], "deleted")
                 self.assertFalse(native_path(record.parent).exists())
-                self.assertEqual(deletion._delete_session_group(board.store, target), [])
                 with self.assertRaises(BoardError) as caught:
                     deletion.delete(board.store, target, 1)
                 self.assertEqual(caught.exception.code, "NOT_FOUND")
@@ -80,7 +89,7 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
     def test_session_group_link_is_reported_without_following_target(self):
         board = self.board()
         run = self.closed(board, "linked-session-group", macro_task="Linked session group")
-        group = private_dirs.session_group_root(board.directory, run["macroTaskId"])
+        group = self.bind_session(board, run["runId"], run["macroTaskId"]).parent
         outside = self.directory / "unrelated-session-content"
         outside.mkdir()
         (outside / "valuable").write_text("untouched", encoding="utf-8", newline="\n")

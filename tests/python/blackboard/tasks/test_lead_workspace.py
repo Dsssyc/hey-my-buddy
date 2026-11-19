@@ -170,7 +170,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         def after_release(*, run_id):
             with board.store.db.read() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=?"
-                                                    " AND state IN ('held','transferred')", (run_id,)).fetchone()[0], 0)
+                                                    " AND state='held'", (run_id,)).fetchone()[0], 0)
             released.append(run_id)
             return reclaim(run_id=run_id)
         with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=after_release):

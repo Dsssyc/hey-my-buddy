@@ -18,7 +18,7 @@ class RefusedResumeTests(WorkflowTestCase):
         if continuation_kind == "manual":
             self.continue_run(board, view,  input="Keep this exact continuation input.")
         else:
-            self.decide(board, view, view["activeRequest"]["requestId"], note="Keep this approved input.")
+            self.continue_run(board, view, input="Keep this continuation input.")
         second = self.claim(board, claim_request_id="native-" + suffix)
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
         return board, submitted["runId"], second
@@ -95,7 +95,7 @@ class RefusedResumeTests(WorkflowTestCase):
     def test_zcode_refusal_rebuilds_once(self):
         self.assert_auto_rebuild("zcode")
 
-    def test_helper_authorized_continuation_keeps_its_one_use_input(self):
+    def test_boundary_continuation_keeps_its_input(self):
         self.assert_auto_rebuild("zcode", continuation_kind="helper")
 
     def test_responded_unknown_and_unconfirmed_failures_do_not_requeue(self):
@@ -135,37 +135,3 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertEqual(view["state"], "failed")
         self.assertEqual(view["continuationCount"], 0)
         self.assertIsNone(view["resumeRecovery"])
-
-    def test_helper_refusal_keeps_parent_waiting_and_checkout_reserved(self):
-        self.executors["dsh"].native_resume = True
-        board = self.board()
-        self.register(board)
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        parent = board.call("workflow_get", {"runId": parent["runId"]})
-        approved = self.decide(board, parent, parent["activeRequest"]["requestId"], helpers=[{
-            "title": "helper", "task": "Do helper work", "cwd": str(self.workdir()),
-            "workspace": {"kind": "worktree", "access": "write"},
-        }])
-        child_id = approved["children"][0]["taskId"]
-        first = self.claim(board, claim_request_id="helper-first", run_id=child_id)
-        self.finish_turn(board, first, disposition="attention", result_mutator=lambda result: result.update(
-            nativeSession={"storageOwner": "hey-my-buddy-micro-task"}))
-        parent = board.call("workflow_get", {"runId": parent["runId"]})
-        self.decide(board, parent, parent["activeRequest"]["requestId"])
-        second = self.claim(board, claim_request_id="helper-native", run_id=child_id)
-        self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
-        self.refuse(board, second)
-        parent = board.call("workflow_get", {"runId": parent["runId"]})
-        self.assertEqual(parent["state"], "waiting-helpers")
-        self.assertNotIn(parent["children"][0]["state"], ("failed", "succeeded", "cancelled"))
-        with board.store.db.read() as connection:
-            held = connection.execute("SELECT state FROM workspace_reservations WHERE holder_task_id=?",
-                                      (child_id,)).fetchall()
-        self.assertIn("held", [row["state"] for row in held])
-        third = self.claim(board, claim_request_id="helper-rebuild", run_id=child_id)
-        self.assertEqual(third["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
-        self.finish_turn(board, third)
-        parent = board.call("workflow_get", {"runId": parent["runId"]})
-        self.assertEqual(parent["state"], "executing")
-        self.assertEqual(parent["children"][0]["state"], "succeeded")

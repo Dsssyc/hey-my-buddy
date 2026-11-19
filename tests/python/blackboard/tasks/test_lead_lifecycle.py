@@ -5,7 +5,7 @@ import json
 from unittest.mock import patch
 
 from blackboard.tasks import test_lead_owned as lead_helpers
-from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.routing.test_decision import DecisionTestCase
 from support import settle_fixture_receipt, FakeClock
 
@@ -64,7 +64,6 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertFalse(response["workflow"]["accepted"])
         view = self.current(board, lead)
         self.assertEqual(view["state"], "awaiting-host")
-        self.assertEqual(view["activeRequest"]["kind"], "attention")
         with board.store.db.read() as db:
             payload = json.loads(db.execute("SELECT payload_json FROM workflow_requests WHERE request_id=?", (view["activeRequest"]["requestId"],)).fetchone()[0])
         self.assertEqual(payload, {})
@@ -114,7 +113,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(self.current(board, lead)["state"], "delivered")
 
     def test_each_owned_outcome_wakes_a_parked_lead(self):
-        for disposition in ("completed", "assistance", "attention", "failed", "cancelled", "uncertain"):
+        for disposition in ("completed", "attention", "failed", "cancelled", "uncertain"):
             with self.subTest(disposition=disposition):
                 board = self.board()
                 lead, claim = self.lead(board, "lead-" + disposition)
@@ -243,24 +242,6 @@ class LeadLifecycleTests(WorkflowTestCase):
             payload = json.loads(db.execute("SELECT payload_json FROM events WHERE seq=?", (trigger["seq"],)).fetchone()[0])
         self.assertEqual(payload["activeRequestId"], child_view["activeRequest"]["requestId"])
 
-    def test_helper_attention_propagates_through_owned_micro_task_and_wakes_lead(self):
-        board = self.board()
-        lead, claim = self.lead(board)
-        child = self.owned(board, claim)
-        view, _ = self.finish_owned(board, child, disposition="assistance")
-        helpers = self.decide(board, view, view["activeRequest"]["requestId"], credential=claim["agentCredential"], helpers=[{
-            "title": "helper", "task": "Help owned work", "cwd": str(self.workdir("helper")),
-            "buddy":" / ".join(BUDDY.values()), "checkout":"existing", "access":"write",
-            "inputs":[],"writeScope":["."],"expectedSeconds":60,
-        }])
-        self.wait(board, claim)
-        self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
-        helper = board.call("workflow_get", {"runId": helpers["children"][0]["taskId"]})
-        self.finish_owned(board, helper, disposition="attention")
-        self.assertEqual(self.current(board, lead)["state"], "executing")
-        self.assertEqual(self.current(board, child)["activeRequest"]["kind"], "helper-attention")
-        self.assertEqual(len(self.wakeups(board, lead)), 1)
-
     def test_multiple_boundaries_before_next_turn_coalesce_and_freeze_at_input_time(self):
         board = self.board()
         lead, claim = self.lead(board)
@@ -380,42 +361,6 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(self.current(board, child)["state"], "executing")
         self.assertEqual(self.current(board, child)["task"]["state"], "queued")
 
-    def test_lead_waits_until_a_stopped_owned_micro_tasks_helpers_settle(self):
-        self._lead_waits_for_helper_stop_report(shutdown=True)
-
-    def test_unconfirmed_nested_stop_report_waits_for_proof_before_waking(self):
-        self._lead_waits_for_helper_stop_report(shutdown=False)
-
-    def _lead_waits_for_helper_stop_report(self, *, shutdown):
-        board = self.board()
-        lead, claim = self.lead(board)
-        child = self.owned(board, claim)
-        view, _ = self.finish_owned(board, child, disposition="assistance")
-        approved = self.decide(board, view, view["activeRequest"]["requestId"], credential=claim["agentCredential"],
-                               helpers=[{"title": "stopping-helper", "task": "Help owned work",
-                                         "cwd": str(self.workdir("stopping-helper")),
-                                         "workspace": {"kind": "existing", "access": "write"}}])
-        helper_id = approved["children"][0]["taskId"]
-        helper_claim = self.claim(board, "w2", claim_request_id="helper-to-stop", run_id=helper_id)
-        prior_wakeups = len(self.wakeups(board, lead))
-        board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
-        self.assertFalse(self.current(board, child)["task"]["workflowShutdown"]["descendantsConfirmed"])
-        self.wait(board, claim)
-        self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
-        self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups)
-        self.finish_turn(board, helper_claim, worker_id="w2", runner_status="cancelled", seal=False, shutdown=shutdown)
-        self.assertEqual(self.current(board, child)["task"]["workflowShutdown"]["descendantsConfirmed"], shutdown)
-        if not shutdown:
-            self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
-            self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups)
-            settle_fixture_receipt(board, helper_claim["claim"]["attempt"]["attemptId"], native_stopped=True)
-        self.assertEqual(self.current(board, lead)["state"], "executing")
-        self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups + 1)
-        trigger = json.loads(self.wakeups(board, lead)[-1]["trigger_event_json"])
-        with board.store.db.read() as connection:
-            event = connection.execute("SELECT payload_json FROM events WHERE seq=?", (trigger["seq"],)).fetchone()
-            self.assertEqual(json.loads(event["payload_json"])["stopConfirmed"], True)
-
     def test_lead_waits_until_a_stopped_owned_micro_tasks_router_settles(self):
         self.catalog_fixture()
         DecisionTestCase.use_helper(self)
@@ -423,7 +368,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         DecisionTestCase.seed(self, board)
         lead, claim = self.lead(board)
         child = self.owned(board,claim,"stopping-routed-owned",cwd=str(self.workdir("stopping-routed-owned")))
-        current,_ = self.finish_owned(board,child,disposition="assistance")
+        current,_ = self.finish_owned(board,child,disposition="attention")
         self.continue_run(board,current,buddy="route",credential=claim["agentCredential"])
         board.store.workflow.prepare_continuation_workspace({"runId":child["runId"]})
         child = self.current(board,child)
@@ -525,20 +470,30 @@ class LeadLifecycleTests(WorkflowTestCase):
             board.call("task_list", params)
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
-    def test_queue_failure_uses_host_report_instead_of_another_execution_path(self):
+    def test_lead_wakeup_queue_failure_opens_its_own_boundary(self):
         board = self.board()
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
+        second = self.owned(board, claim, "second-owned")
         self.wait(board, claim)
         with patch.object(board.store.workflow, "_requeue", side_effect=BoardError("SHUTDOWN_UNCONFIRMED", "unknown stop")):
             self.finish_owned(board, child)
         view = self.current(board, lead)
         self.assertEqual(view["state"], "awaiting-host")
-        self.assertEqual(view["activeRequest"]["kind"], "helper-report")
         self.assertEqual(view["activeRequest"]["reason"], {"code": "SHUTDOWN_UNCONFIRMED", "params": {}})
         self.assertIsNone(view["activeRequest"]["summary"])
-        self.assertEqual(view["activeRequest"]["helperOutcomes"], [])
-        self.assertEqual(self.wakeups(board, lead)[0]["state"], "recorded")
+        wakeup, = self.wakeups(board, lead)
+        self.assertEqual(wakeup["state"], "recorded")
+        self.assertEqual(view["activeRequest"]["trigger"], json.loads(wakeup["trigger_event_json"]))
+        with board.store.db.read() as db:
+            boundary = db.execute(
+                "SELECT run_id, reason_code, reason_params_json FROM workflow_requests WHERE request_id=?",
+                (view["activeRequest"]["requestId"],),
+            ).fetchone()
+        self.assertEqual(tuple(boundary), (lead["runId"], "SHUTDOWN_UNCONFIRMED", "{}"))
+        self.finish_owned(board, second)
+        self.assertEqual(self.current(board, lead)["activeRequest"]["requestId"], view["activeRequest"]["requestId"])
+        self.assertEqual(self.wakeups(board, lead), [wakeup])
 
     def test_storage_alone_reconstructs_lead_segments_wakeups_owned_turns_and_usage(self):
         clock = FakeClock()

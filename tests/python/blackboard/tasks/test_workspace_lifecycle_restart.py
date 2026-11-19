@@ -27,7 +27,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, claimed, original, checkout, first_seal, parked, _artifact = self.run_worktree(
-            board, request_id="restart-chain", output="base\n", disposition="assistance")
+            board, request_id="restart-chain", output="base\n", disposition="attention")
         initial_files = self.fixed_files()
         board = self.board()
         self.assertEqual(self.fixed_files(), initial_files)
@@ -151,20 +151,18 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertTrue(retained.exists())
         self.assertNotEqual((self.view(board, submitted["runId"])["cleanup"] or {}).get("state"), "applied")
 
-    def test_restart_scope_restore_keeps_the_failure_and_continues_helper(self):
-        flow = self.helper_scope_failure(request_id="restart-restore")
-        board, root_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+    def test_restart_scope_restore_keeps_the_failure_and_continues_the_run(self):
+        flow = self.scope_failure(request_id="restart-restore")
+        board, run_id = flow["board"], flow["runId"]
         files = self.fixed_files()
         board = self.board()
         self.assertEqual(self.fixed_files(), files)
-        root = self.view(board, root_id)
-        resolved = self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'paths': ["tracked.txt"], 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "restore the authorized helper input", 'resolution': "restore", 'requestId': self.view(board, root_id)["activeRequest"]["requestId"]})
+        resolved = self.continue_run(board, {'runId': run_id, 'paths': ["tracked.txt"], 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "restore the authorized input", 'resolution': "restore", 'requestId': self.view(board, run_id)["activeRequest"]["requestId"]})
         self.assertEqual(resolved["resolutionState"], "restored")
-        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
-        root = self.view(board, root_id)
-        self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'input': "continue from the preserved legal output"})
-        resumed = self.claim(board, helper_id, request_id="restart-restored-helper-claim")
+        self.assertEqual((flow["checkout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((flow["checkout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
+        self.continue_run(board, {'runId': run_id, 'input': "continue from the preserved legal output"})
+        resumed = self.claim(board, run_id, request_id="restart-restored-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
         current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(current["baseCommit"],self.artifact_record(board,resolved["artifactId"])["commit"])
@@ -173,24 +171,22 @@ class RestartLifecycleTests(LifecycleTestCase):
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 
     def test_restart_abandon_returns_input_and_preserves_the_failed_site(self):
-        flow = self.helper_scope_failure(request_id="restart-abandon")
-        board, root_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        flow = self.scope_failure(request_id="restart-abandon")
+        board, run_id = flow["board"], flow["runId"]
         files = self.fixed_files()
         board = self.board()
         self.assertEqual(self.fixed_files(), files)
-        root = self.view(board, root_id)
-        abandoned = self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "preserve this failed round as evidence", 'resolution': "abandon", 'requestId': self.view(board, root_id)["activeRequest"]["requestId"]})
+        abandoned = self.continue_run(board, {'runId': run_id, 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "preserve this failed round as evidence", 'resolution': "abandon", 'requestId': self.view(board, run_id)["activeRequest"]["requestId"]})
         self.assertEqual(abandoned["resolutionState"], "abandoned")
-        artifact=next(row for row in self.view(board,helper_id)["artifacts"] if row["artifactId"]==abandoned["artifactId"])
+        artifact=next(row for row in self.view(board,run_id)["artifacts"] if row["artifactId"]==abandoned["artifactId"])
         self.assertEqual(artifact["kind"], "abandoned-site")
-        self.assertIn("outside the helper scope",native_path(Path(self.artifact_record(board,abandoned["artifactId"])["diffPath"])).read_text(encoding="utf-8"))
-        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
-        root = self.view(board, root_id)
-        self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'input': "continue from the original authorized input"})
-        resumed = self.claim(board, helper_id, request_id="restart-abandoned-helper-claim")
+        self.assertIn("outside the authorized scope",native_path(Path(self.artifact_record(board,abandoned["artifactId"])["diffPath"])).read_text(encoding="utf-8"))
+        self.assertEqual((flow["checkout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
+        self.continue_run(board, {'runId': run_id, 'input': "continue from the original authorized input"})
+        resumed = self.claim(board, run_id, request_id="restart-abandoned-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
         current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(current, flow["helperManifest"])
+        self.assertEqual(current, flow["manifest"])
         for path, raw in files.items():
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 

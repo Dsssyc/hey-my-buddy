@@ -116,23 +116,6 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertEqual(upgraded["stopInitiator"], "console")
         self.assertIsNotNone(upgraded["graceDeadline"])
 
-    def test_host_cancel_passes_grace_to_active_helper(self):
-        board = self.board()
-        self.register(board)
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "title": "helper", "task": "help", "cwd": str(self.workdir("helper")),
-            "workspace": {"kind": "worktree", "access": "write"},
-        }])
-        child = approved["children"][0]["taskId"]
-        claim = self.claim(board, claim_request_id="child-claim", run_id=child)
-        board.call("workflow_cancel", {"runId": parent["runId"]})
-        attempt = self.attempt(board, claim)
-        self.assertEqual(attempt["stopInitiator"], "host")
-        self.assertIsNotNone(attempt["graceDeadline"])
-
     def test_service_stop_and_uncertain_attempt_have_no_grace(self):
         board = self.board(max_concurrent=2)
         self.register(board)

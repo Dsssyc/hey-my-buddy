@@ -499,35 +499,6 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                         (directory.name,)).fetchone()[0], self._submission_request_ids[request])
                 self.assert_no_registration(board, request)
 
-    def test_unconfirmed_helper_transfer_revokes_both_kinds_in_the_same_batch(self):
-        board = self.board()
-        parent = self.submit(board, cwd=str(self.repo))
-        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
-        other = self.repository('other-source')
-        for kind in ('existing', 'worktree'):
-            with self.subTest(kind=kind):
-                view = board.call('workflow_get', {'runId': parent['runId']})
-                before_refs = self.git(self.repo, 'for-each-ref')
-                before_other_refs = self.git(other, 'for-each-ref', 'refs/heads/', 'refs/tags/', 'refs/hey-my-buddy/workspaces/')
-                before_allocations = sorted((self.directory / 'workspaces').iterdir())
-                with patch.object(board.store.workflow, '_stopped_parent', return_value=False):
-                    with self.assertRaises(BoardError) as caught:
-                        self.decide(board, view, view['activeRequest']['requestId'],  helpers=[
-                            {'title': 'new-' + kind, 'task': 'new allocation', 'cwd': str(other),
-                             'workspace': {'kind': kind, 'access': 'write'}},
-                            {'title': 'transfer-' + kind, 'task': 'take parent checkout', 'cwd': str(self.repo),
-                             'workspace': {'kind': 'existing', 'access': 'write'}},
-                        ])
-                self.assertEqual(caught.exception.code, 'SHUTDOWN_UNCONFIRMED')
-                self.assertNotIn('submissionCleanup', caught.exception.details)
-                self.assertEqual(len(caught.exception.details['helperPreparationCleanup']), 2)
-                self.assertTrue(all(item['removed'] for item in caught.exception.details['helperPreparationCleanup']))
-                self.assertEqual(sorted((self.directory / 'workspaces').iterdir()), before_allocations)
-                self.assertEqual(self.git(self.repo, 'for-each-ref'), before_refs)
-                self.assertEqual(self.git(other, 'for-each-ref', 'refs/heads/', 'refs/tags/', 'refs/hey-my-buddy/workspaces/'), before_other_refs)
-                self.assertIsNotNone(workspace.read_project_id(other / '.git'))
-                self.assertTrue((self.repo / 'tracked.txt').exists())
-
     def test_preexisting_prepared_worktree_is_preserved_on_rejection(self):
         board = self.board()
         intent = {'kind':'worktree', 'cwd':str(self.repo), 'access':'write', 'base':{'kind':'working-tree'}, 'writeScope':['.'], 'integrator':{'role':'host'}}
@@ -775,66 +746,3 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 with board.store.db.read() as connection:
                     self.assertIsNotNone(connection.execute("SELECT 1 FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
                                                            (submitted['runId'],)).fetchone())
-
-    def test_all_prepared_helpers_hold_locks_until_database_admission(self):
-        from hey_my_buddy.blackboard.tasks import storage
-        board = self.board()
-        self.register(board)
-        parent = self.submit(board, cwd=str(self.repo), kind='existing')
-        self.finish_turn(board, self.claim(board), disposition='assistance')
-        view = board.call('workflow_get', {'runId': parent['runId']})
-        original_prepare = workspace._prepare_locked
-        captures = {}
-        def capture_first(directory, workspace_id, request_id, intent, *, state_dir, handoff=None):
-            if 'manifest' in captures:
-                checkout = captures['manifest']['checkoutRoot']
-                planned = board.call('storage_plan', {})
-                candidate = next(row for row in planned['candidates'] if row['path'] == checkout)
-                self.assertFalse(candidate['eligible'])
-                self.assertEqual(candidate['reasons'], ['WORKSPACE_BUSY'])
-                from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
-                Reclamation(board.store).run()
-                captures['cleanup'] = Path(checkout).exists()
-            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir, handoff=handoff)
-            if 'manifest' not in captures:
-                captures['manifest'] = manifest
-            return manifest
-        with patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-                patch.object(workspace, '_prepare_locked', side_effect=capture_first):
-            approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False,
-                helpers=[{'title': 'first-cleanup-helper', 'task': 'first helper', 'cwd': str(self.repo),
-                          'workspace': {'kind': 'worktree', 'writeScope': ['.']}},
-                         {'title': 'later-cleanup-helper', 'task': 'later helper', 'cwd': str(self.repo),
-                          'workspace': {'kind': 'worktree', 'writeScope': ['.']}}])
-        checkout = Path(captures['manifest']['checkoutRoot'])
-        self.assertTrue(checkout.exists(), 'an earlier prepared helper must stay allocated while later helpers prepare')
-        self.assertTrue(captures['cleanup'])
-        self.assertEqual(board.store.service_issues(), [])
-        self.assertEqual(len(approved['children']), 2)
-        with board.store.db.read() as connection:
-            for child in approved['children']:
-                self.assertIsNotNone(connection.execute("SELECT 1 FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
-                                                       (child['taskId'],)).fetchone())
-
-    def test_two_read_helpers_share_one_original_allocation_lock(self):
-        board = self.board()
-        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
-                  'base': {'kind': 'working-tree'}, 'writeScope': ['.'], 'integrator': {'role':'host'}}
-        manifest = workspace.prepare(self.directory, 'shared-original-allocation', intent)
-        checkout = Path(manifest['checkoutRoot'])
-        enable_fixture_buddy(board.store, workflow_tests.BUDDY)
-        helpers = [board.store.workflow._normalize_helper({
-            'title': f'shared-reader-{index}', 'task': f'read {index}', 'cwd': str(checkout),
-            'buddy': ' / '.join(workflow_tests.BUDDY.values()), 'checkout': 'existing',
-            'access': 'read', 'inputs': [], 'expectedSeconds': 1800,
-        }, request_id='shared-readers', index=index, integrator={'role': 'host'})
-            for index in (1, 2)]
-        with patch.object(workspace, '_lock', wraps=workspace._lock) as lock:
-            with board.store.workflow._helper_preparations(helpers) as prepared:
-                self.assertEqual(len(prepared), 2)
-                self.assertEqual([item['manifest']['checkoutRoot'] for item in prepared],
-                                 [manifest['checkoutRoot'], manifest['checkoutRoot']])
-                self.assertTrue(checkout.exists())
-        self.assertEqual(sum(call.args[0] == checkout.parent for call in lock.call_args_list), 1,
-                         'shared helpers must acquire the original physical allocation lock only once')
-        self.assertTrue(checkout.exists())

@@ -313,7 +313,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board, decision_buddy=None)
         view = self.routed(board)
         self.assertTrue(view["awaitingHost"])
-        self.assertEqual(view["activeRequest"]["kind"], "attention")
+        self.assertTrue(view["activeRequest"]["routing"])
         self.assertEqual(view["counts"]["turns"], 0)
         self.assertEqual(view["routing"]["routerProblem"]["code"], "router-not-configured")
         self.assertIsNone(view["activeRequest"]["summary"])

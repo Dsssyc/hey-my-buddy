@@ -23,7 +23,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         self.assertIsNotNone(row)
         return row["artifact_id"]
 
-    def test_host_cannot_target_independent_lead_owned_work_through_the_lead(self):
+    def test_retired_target_selector_is_rejected_for_every_lifecycle_operation(self):
         operations = {
             "workflow_accept": lambda child: {
                 "artifactId": child["finalArtifactId"], "note": "Host review",
@@ -49,7 +49,8 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
                         "runId": lead["runId"], "targetRunId": child["runId"],
                         **fields(child),
                     })
-                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                self.assertEqual(caught.exception.details["field"], "targetRunId")
                 after = self.view(board, child)
                 self.assertEqual(after["state"], before["state"])
                 self.assertEqual(after["finalArtifactId"], before["finalArtifactId"])
@@ -58,10 +59,10 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         board = self.board()
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
-        child, _ = self.finish_owned(board, child, disposition="assistance")
+        child, _ = self.finish_owned(board, child, disposition="attention")
         request_id = child["activeRequest"]["requestId"]
         for operation, fields in (
-            ("workflow_continue", {"requestId": request_id, "decision": "decline"}),
+            ("workflow_continue", {"requestId": request_id, "input": "Use the current findings"}),
             ("workflow_cancel", {"note": "Wrong owner"}),
         ):
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
@@ -84,11 +85,9 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         before = board.call("task_get", {"runId": child["runId"]})["task"]
         self.view(board, lead)
         self.view(board, child)
-        for packet in ({"runId": child["runId"]},
-                       {"runId": lead["runId"], "targetRunId": child["runId"]}):
-            with self.subTest(packet=packet), self.assertRaises(BoardError) as caught:
-                board.call("workflow_cancel", packet)
-            self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        with self.assertRaises(BoardError) as caught:
+            board.call("workflow_cancel", {"runId": child["runId"]})
+        self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         after = board.call("task_get", {"runId": child["runId"]})["task"]
         self.assertEqual(after["state"], before["state"])
         self.assertEqual(after["selectedAttempt"]["attemptId"], before["selectedAttempt"]["attemptId"])

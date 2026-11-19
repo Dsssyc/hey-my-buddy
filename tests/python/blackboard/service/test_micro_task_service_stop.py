@@ -23,10 +23,10 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
 
     def test_host_boundary_only_stop_is_idle_and_preserves_the_board(self):
         board = self.board()
-        for disposition in ("assistance", "attention"):
-            run = self.submit(board, request_id=disposition, cwd=str(self.workdir(disposition)))
+        for name in ("first-boundary", "second-boundary"):
+            run = self.submit(board, request_id=name, cwd=str(self.workdir(name)))
             claimed = self.claim(board, run_id=run["runId"])
-            self.finish_turn(board, claimed, disposition=disposition)
+            self.finish_turn(board, claimed, disposition="attention")
             board.store.complete_execution_cleanup(claimed["claim"]["attempt"]["attemptId"])
         with board.store.db.read() as connection:
             before = backup.database_snapshot(connection)
@@ -52,12 +52,12 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
             run = self.submit(board, request_id=state, cwd=str(self.workdir(state)))
             runs[state] = run["runId"]
             claimed = self.claim(board, run_id=run["runId"])
-            self.finish_turn(board, claimed, disposition="assistance")
+            self.finish_turn(board, claimed, disposition="attention")
             board.store.complete_execution_cleanup(claimed["claim"]["attempt"]["attemptId"])
             if state == "passive":
                 continue
             view = board.call("workflow_get", {"runId": run["runId"]})
-            self.decide(board, view, view["activeRequest"]["requestId"])
+            self.continue_run(board, view)
             if state in ("recorded", "queued"):
                 # Keep the durable continuation before its run leaves the Host boundary.
                 with board.store.db.write() as connection:
@@ -95,7 +95,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         passive = self.submit(board, request_id="passive", cwd=str(self.workdir("passive")))
         delivered = self.submit(board, request_id="delivered", cwd=str(self.workdir("delivered")))
         self.register(board)
-        self.finish_turn(board, self.claim(board, run_id=passive["runId"]), disposition="assistance")
+        self.finish_turn(board, self.claim(board, run_id=passive["runId"]), disposition="attention")
         self.finish_turn(board, self.claim(board, claim_request_id="delivered-claim", run_id=delivered["runId"]))
         self.assertEqual(board.call("workflow_get", {"runId": passive["runId"]})["state"], "awaiting-host")
         self.assertEqual(board.call("workflow_get", {"runId": delivered["runId"]})["state"], "delivered")
@@ -112,37 +112,6 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         self.assertEqual(repeated["cancelledQueued"], 0)
         events = board.call("events_read", {"runId": queued["runId"]})["events"]
         self.assertEqual(sum(event["kind"] == "workflow.cancelled" for event in events), 1)
-
-    def test_running_helper_behind_yielded_parent_requires_real_stop_receipt(self):
-        board = self.board()
-        self.register(board)
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        waiting = board.call("workflow_get", {"runId": parent["runId"]})
-        approved = self.decide(board, waiting, waiting["activeRequest"]["requestId"], helpers=[{
-            "title": "helper-1", "task": "helper", "cwd": str(self.workdir("helper")),
-            "workspace": {"kind": "worktree", "access": "write"},
-        }])
-        child_id = approved["children"][0]["taskId"]
-        claim = self.claim(board, claim_request_id="helper-claim", run_id=child_id)
-
-        reply = self.stop_daemon()
-        self.assertFalse(reply["stopped"])
-        self.assertEqual(reply["cancelRequested"], 1)
-        self.assertEqual(reply["unresolvedAttempts"][0]["taskId"], child_id)
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        self.assertEqual(view["state"], "cancelled")
-        self.assertEqual(view["children"][0]["state"], "cancelled")
-        self.assertFalse(view["shutdown"]["descendantsConfirmed"])
-        events = board.call("events_read", {"runId": child_id})["events"]
-        self.assertEqual([event["payload"]["actor"] for event in events if event["kind"] == "workflow.helper_cancelled"],
-                         [{"role": "service", "id": "stop"}])
-        with board.store.db.read() as connection:
-            attempt = connection.execute("SELECT cancel_requested_at FROM attempts WHERE task_id=?", (child_id,)).fetchone()
-            self.assertIsNotNone(attempt["cancel_requested_at"])
-        self.finish_turn(board, claim)
-        settled = board.call("workflow_get", {"runId": parent["runId"]})
-        self.assertTrue(settled["shutdown"]["descendantsConfirmed"])
 
     def test_internal_task_cancel_cannot_bypass_micro_task_authority(self):
         board = self.board()

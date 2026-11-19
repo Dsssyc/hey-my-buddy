@@ -264,7 +264,7 @@ class GitDeliveryWorkflowTests(LifecycleTestCase):
             with self.subTest(committed=committed):
                 board = self.board()
                 view, artifact, initial, checkout, seal = self.deliver(
-                    board, committed=committed, disposition="assistance", request_id="committed-" + str(committed))
+                    board, committed=committed, disposition="attention", request_id="committed-" + str(committed))
                 self.assertEqual(artifact["integrationSource"]["kind"], "commits" if committed else "patch")
                 self.assertNotIn("outputCommit", artifact)
                 self.assertNotIn("outputCommit", artifact["cumulativePatch"])

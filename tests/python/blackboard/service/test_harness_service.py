@@ -261,16 +261,20 @@ class HarnessServiceTests(BoardTestCase):
                     buddy = next(item for item in self.board.evaluation.console_core()['buddies'] if item['buddyId'] == 'codex:openai:gpt-6-sol:high')
                     self.assertIn('decision', buddy['capabilities'])
 
-    def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
-        for harness in ('codex','dsh'):
-            enable_fixture_buddy(self.board,{'harness':harness,'provider':'fixture','model':'fixture','effort':'high'})
-        with patch.object(self.board.workflow,'continue_run',return_value={}), patch.object(self.service.harnesses,'refresh') as refresh:
-            self.call('workflow_continue',runId='run',requestId='boundary',input='Continue',
-                      buddy='codex / fixture / fixture / high',note='Choose this installed route')
-            self.call('workflow_continue',runId='run',requestId='boundary',decision='approve',autoContinue=True,helpers=[{
-                'title':'helper','task':'Bounded helper','cwd':str(self.directory),'buddy':'dsh / fixture / fixture / high',
-                'checkout':'worktree','access':'read','inputs':[],'expectedSeconds':60}])
-        self.assertEqual([call.args[0] for call in refresh.call_args_list],['codex','dsh'])
+    def test_explicit_continuation_refreshes_unavailable_harness(self):
+        enable_fixture_buddy(self.board, {
+            'harness': 'codex', 'provider': 'fixture', 'model': 'fixture', 'effort': 'high',
+        })
+
+        def continue_run(params, *, console_authority, prepare_buddy):
+            prepare_buddy(params)
+            return {}
+
+        with patch.object(self.board.workflow, 'continue_run', side_effect=continue_run), \
+                patch.object(self.service.harnesses, 'refresh') as refresh:
+            self.call('workflow_continue', runId='run', requestId='boundary', input='Continue',
+                      buddy='codex / fixture / fixture / high', note='Choose this installed route')
+        refresh.assert_called_once_with('codex', force=True)
 
     def test_accounts_reports_cached_native_login_without_source_management(self):
         ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],

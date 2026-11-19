@@ -1392,18 +1392,16 @@ class RootCreationTeardownTests(BoardTestCase):
 
 
 class SessionRecordGroupingTests(WorkflowTestCase):
-    def test_admission_has_no_record_path_for_command_or_ungrouped_execution(self):
+    def test_admission_has_no_session_record_for_a_command(self):
         board = self.board()
-        for adapter in ('command', 'dsh'):
-            claim = {'task': {'taskId': 'ungrouped', 'spec': {'adapter': adapter}},
-                     'attempt': {'attemptId': 'attempt'}}
-            with self.subTest(adapter=adapter), \
-                    patch.object(board.store, 'admit_execution', return_value={'claim': claim}), \
-                    patch.object(board.store.workflow, 'prepare_continuation_workspace'):
-                admitted = board.service.admit_execution('fixture-nonce-00000000000000000')['claim']
-            self.assertIsNone(admitted['sessionRecordPath'])
+        task = board.submit_execution(
+            requestId="ungrouped", task="Private command fixture",
+            cwd=str(self.workdir("ungrouped")), adapter="command", argv=["fixture-never-run"],
+        )["task"]
+        admitted = self.claim(board, run_id=task["runId"])["claim"]
+        self.assertIsNone(admitted["sessionRecordPath"])
 
-    def test_launch_path_uses_the_consoles_group_for_macro_standalone_and_helper(self):
+    def test_launch_path_uses_the_consoles_group_for_macro_and_standalone(self):
         from hey_my_buddy.blackboard.tasks.session_content import identity as console_identity
         from hey_my_buddy.private_dirs import session_record_path
 
@@ -1420,21 +1418,3 @@ class SessionRecordGroupingTests(WorkflowTestCase):
                 self.assertEqual(group, root.get("macroTaskId") or f"run:{root['runId']}")
                 self.assertEqual(claim["sessionRecordPath"], str(session_record_path(
                     board.store.directory, group, claim["attempt"]["attemptId"])))
-
-                self.finish_turn(board, {"claim": claim}, disposition="assistance")
-                view = board.call("workflow_get", {"runId": root["runId"]})
-                helper_dir = self.workdir(f"session-child-{named}")
-                # Each existing helper represents a separate checkout, even when
-                # the private test root is nested beneath the source repository.
-                (helper_dir / ".git").mkdir()
-                decision = self.decide(board, view, view["activeRequest"]["requestId"],
-                                        helpers=[{
-                                           "title": f"session-child-{named}", "task": "assist",
-                                           "cwd": str(helper_dir),
-                                           "workspace": {"kind": "existing", "access": "write"}}])
-                child_id = decision["children"][0]["taskId"]
-                helper = self.claim(board, run_id=child_id,
-                                    claim_request_id=f"session-child-claim-{named}")["claim"]
-                self.assertEqual(helper["sessionRecordPath"], str(session_record_path(
-                    board.store.directory, group, helper["attempt"]["attemptId"])))
-                self.finish_turn(board, {"claim": helper}, disposition="assistance")

@@ -107,10 +107,10 @@ class ExecutionInstallFenceTests(BoardTestCase):
                                "                if is_retryable(error):\n")
                 text = text.replace(error, observation, 1)
             else:
-                start = "        receipt = self.execute()\n"
+                start = "            receipt = self.execute()\n"
                 self.assertEqual(text.count(start), 1)
-                gate = (f"        Path({str(ready)!r}).touch()\n"
-                        f"        while not Path({str(release)!r}).exists(): time.sleep(0.05)\n")
+                gate = (f"            Path({str(ready)!r}).touch()\n"
+                        f"            while not Path({str(release)!r}).exists(): time.sleep(0.05)\n")
                 text = text.replace(start, gate + start, 1)
                 error = "                    except BoardError as error:\n"
                 self.assertEqual(text.count(error), 1)

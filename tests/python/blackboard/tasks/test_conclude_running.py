@@ -18,18 +18,6 @@ class RunningConclusionTests(WorkflowTestCase):
     def get(self, board, run_id):
         return board.call("workflow_get", {"runId": run_id})
 
-    def helper_tree(self, name="helper-root"):
-        board = self.board()
-        root = self.submit(board, request_id=name, cwd=str(self.workdir(name)))
-        self.finish_turn(board, self.claim(board, run_id=root["runId"]), disposition="assistance")
-        boundary = self.get(board, root["runId"])
-        granted = self.decide(board, boundary, boundary["activeRequest"]["requestId"], autoContinue=False,
-                              helpers=[{"title": "helper", "task": "Inspect a dependency",
-                                        "cwd": str(self.workdir(name + "-helper")),
-                                        "workspace": {"kind": "worktree", "access": "write"}}])
-        child = {"runId": granted["children"][0]["taskId"]}
-        return board, root, child
-
     def open_conflict(self, board, run_id):
         view = self.get(board, run_id)
         evidence = {"manifestSha256": "fixture", "blockingPaths": ["outside.txt"], "entries": []}
@@ -48,33 +36,31 @@ class RunningConclusionTests(WorkflowTestCase):
             self.assertIsNone(self.get(board, run_id)["cancellation"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM events WHERE kind IN ('workflow.cancelled','workflow.helper_cancelled',"
+                "SELECT COUNT(*) FROM events WHERE kind IN ('workflow.cancelled',"
                 "'workflow.lead_task_cancelled')").fetchone()[0], 0)
 
-    def test_descendant_conflict_refuses_before_cancelling_helper_or_lead_tree(self):
-        for kind in ("helper", "lead"):
-            with self.subTest(kind=kind):
-                if kind == "helper":
-                    board, root, child = self.helper_tree()
-                else:
-                    board = self.board()
-                    root, claim = self.lead(board)
-                    child = self.owned(board, claim)
-                    self.finish_turn(board, {"claim": claim}, disposition="attention")
-                self.finish_turn(board, self.claim(board, run_id=child["runId"]), disposition="attention")
-                self.open_conflict(board, child["runId"])
-                requests = self.get(board, child["runId"])["requests"]
-                before = board.store.head()
-                with self.assertRaises(BoardError) as refused:
-                    board.call("workflow_conclude", {"runId": root["runId"], "note": "Close the tree"})
-                self.assertEqual(refused.exception.code, "CONFLICT")
-                self.assert_no_cancellation(board, (root["runId"], child["runId"]), before)
-                self.assertEqual(self.get(board, child["runId"])["requests"], requests)
+    def test_descendant_conflict_refuses_before_cancelling_lead_tree(self):
+        board = self.board()
+        root, claim = self.lead(board)
+        child = self.owned(board, claim)
+        self.finish_turn(board, {"claim": claim}, disposition="attention")
+        self.finish_turn(board, self.claim(board, run_id=child["runId"]), disposition="attention")
+        self.open_conflict(board, child["runId"])
+        requests = self.get(board, child["runId"])["requests"]
+        before = board.store.head()
+        with self.assertRaises(BoardError) as refused:
+            board.call("workflow_conclude", {"runId": root["runId"], "note": "Close the tree"})
+        self.assertEqual(refused.exception.code, "CONFLICT")
+        self.assert_no_cancellation(board, (root["runId"], child["runId"]), before)
+        self.assertEqual(self.get(board, child["runId"])["requests"], requests)
 
     def test_pending_continuation_refuses_before_cancelling_any_run(self):
         for pending in ("root", "child"):
             with self.subTest(pending=pending):
-                board, root, child = self.helper_tree("pending-" + pending)
+                board = self.board()
+                root, claim = self.lead(board, "pending-lead-" + pending)
+                child = self.owned(board, claim)
+                self.finish_turn(board, {"claim": claim}, disposition="attention")
                 run_id = root["runId"] if pending == "root" else child["runId"]
                 with board.store.db.write() as connection:
                     connection.execute(
@@ -109,24 +95,19 @@ class RunningConclusionTests(WorkflowTestCase):
         self.assertEqual(self.get(board, root["runId"])["hostConclusion"]["executionStatus"], "failed")
 
     def test_retries_do_not_repeat_descendant_cancellation_events(self):
-        for kind in ("helper", "lead"):
-            with self.subTest(kind=kind):
-                if kind == "helper":
-                    board, root, child = self.helper_tree()
-                else:
-                    board = self.board()
-                    root, claim = self.lead(board)
-                    child = self.owned(board, claim)
-                    self.finish_turn(board, {"claim": claim}, disposition="attention")
-                self.claim(board, run_id=child["runId"])
-                for _ in range(3):
-                    with self.assertRaises(BoardError) as refused:
-                        board.call("workflow_conclude", {"runId": root["runId"], "note": "Close the tree"})
-                    self.assertEqual(refused.exception.code, "SHUTDOWN_UNCONFIRMED")
-                with board.store.db.read() as connection:
-                    self.assertEqual(connection.execute(
-                        "SELECT COUNT(*) FROM events WHERE task_id=? AND kind IN ('workflow.helper_cancelled','workflow.lead_task_cancelled')",
-                        (child["runId"],)).fetchone()[0], 1)
+        board = self.board()
+        root, claim = self.lead(board)
+        child = self.owned(board, claim)
+        self.finish_turn(board, {"claim": claim}, disposition="attention")
+        self.claim(board, run_id=child["runId"])
+        for _ in range(3):
+            with self.assertRaises(BoardError) as refused:
+                board.call("workflow_conclude", {"runId": root["runId"], "note": "Close the tree"})
+            self.assertEqual(refused.exception.code, "SHUTDOWN_UNCONFIRMED")
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.lead_task_cancelled'",
+                (child["runId"],)).fetchone()[0], 1)
 
     def test_conflict_boundary_does_not_advertise_conclude(self):
         board = self.board()
@@ -298,34 +279,3 @@ class RunningConclusionTests(WorkflowTestCase):
                     packet["artifactId"] = before["finalArtifactId"]
                 board.call("workflow_conclude", packet)
                 self.assertEqual(self.get(board, run_id)["hostConclusion"]["executionStatus"], status)
-
-    def test_worker_helper_tree_uses_the_same_stop_and_conclusion_path(self):
-        board = self.board()
-        run_id = self.submit(board)["runId"]
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        boundary = self.get(board, run_id)
-        approved = self.decide(board, boundary, boundary["activeRequest"]["requestId"], autoContinue=False,
-                              helpers=[{"title": "helper", "task": "Inspect a dependency",
-                                        "cwd": str(self.workdir("helper")),
-                                        "workspace": {"kind": "worktree", "access": "write"}}])
-        child_id = approved["children"][0]["taskId"]
-        claim = self.claim(board, claim_request_id="child", run_id=child_id)
-        packet = {"runId": run_id, "note": "Close the entire dependency"}
-        with self.assertRaises(BoardError) as refused:
-            board.call("workflow_conclude", packet)
-        self.assertEqual(refused.exception.code, "SHUTDOWN_UNCONFIRMED")
-        self.assertEqual(refused.exception.details["unconfirmedRunIds"], [child_id])
-        self.assertEqual(self.get(board, run_id)["state"], "cancelled")
-        self.assertEqual(self.get(board, child_id)["state"], "cancelled")
-        self.assertEqual(self.get(board, child_id)["task"]["stopInitiator"], "host")
-        self.assertIsNone(self.get(board, child_id)["hostConclusion"])
-        self.finish_turn(board, claim, runner_status="cancelled", seal=False)
-        concluded = board.call("workflow_conclude", packet)
-        self.assertEqual(concluded["state"], "concluded")
-        child = self.get(board, child_id)
-        self.assertEqual(child["state"], "concluded")
-        self.assertIsNone(child["hostConclusion"]["note"])
-        self.assertEqual(child["hostConclusion"]["reason"],
-                         {"code": "micro-task.owned-concluded", "params": {"runId": run_id}})
-        self.assertIsNone(child["cancellation"]["note"])
-        self.assertTrue(child["shutdown"]["selfConfirmed"])

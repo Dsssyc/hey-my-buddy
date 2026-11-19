@@ -183,26 +183,3 @@ class ReadSharingTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute(
                 "SELECT 1 FROM workflow_runs WHERE title='racing-reader'").fetchone())
-
-    def test_conflicting_helper_batch_revokes_snapshots_under_shared_locks(self):
-        board = self.board()
-        parent = self.submit(board, cwd=str(self.repo), kind="worktree")
-        self.finish_turn(board, self.claim(board, run_id=parent["runId"]), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        before_refs = self.git(self.repo, "for-each-ref")
-        before_state = sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
-                              for path in native_path(self.directory / "workspaces").rglob("*"))
-        with self.assertRaises(BoardError) as caught:
-            self.decide(board, view, view["activeRequest"]["requestId"], helpers=[
-                {"title": "helper-reader", "task": "read source", "cwd": str(self.repo),
-                 "workspace": {"kind": "existing", "access": "read"}},
-                {"title": "helper-writer", "task": "write source", "cwd": str(self.repo),
-                 "workspace": {"kind": "existing", "access": "write"}},
-            ])
-        self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
-        self.assertEqual(self.git(self.repo, "for-each-ref"), before_refs)
-        self.assertEqual(sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
-                                for path in native_path(self.directory / "workspaces").rglob("*")), before_state)
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
-

@@ -11,7 +11,7 @@ class HostNoteContractTests(BoardTestCase):
     def test_current_host_entry_points_accept_note_and_reject_reason(self):
         board = self.board()
         requests = {
-            "workflow_continue": {"runId": "missing", "requestId": "request", "decision": "approve"},
+            "workflow_continue": {"runId": "missing", "requestId": "request", "input": "Proceed with the work"},
             "workflow_cancel": {"runId": "missing"},
             "workflow_accept": {"runId": "missing", "artifactId": "missing-artifact",
                                 "notRequired": "no integration target"},

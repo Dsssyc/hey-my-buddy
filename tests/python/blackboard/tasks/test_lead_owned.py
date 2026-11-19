@@ -88,7 +88,6 @@ class LeadOwnedTests(WorkflowTestCase):
         listed = board.call("task_list", {"credential": claim["agentCredential"]})
         self.assertIn(child["runId"], [row["runId"] for row in listed["runs"]])
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
             event = db.execute("SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
                                (child["runId"],)).fetchone()
         self.assertEqual(tuple(event), ("lead", lead["runId"]))
@@ -223,9 +222,9 @@ class LeadOwnedTests(WorkflowTestCase):
                          child["runId"])
         board.call("artifact_list", {"runId": child["runId"], **credential})
         board.call("events_read", {"runId": child["runId"], **credential})
-        awaiting, _ = self.finish_owned(board, child, disposition="assistance")
-        continued = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"],
-                                decision="decline", note="Continue after review", **credential)
+        awaiting, _ = self.finish_owned(board, child, disposition="attention")
+        continued = self.continue_run(board, awaiting,
+                                input="Continue after review", **credential)
         self.assertEqual(continued["state"], "executing")
         next_claim = self.claim(board, "w2", claim_request_id="owned-next", run_id=child["runId"])
         self.finish_turn(board, next_claim, worker_id="w2")
@@ -280,82 +279,6 @@ class LeadOwnedTests(WorkflowTestCase):
                                                  "credential": replacement["agentCredential"]})
         self.assertEqual(stopped["state"], "cancelled")
         self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["leadOwnership"], original)
-
-    def test_lead_can_settle_helpers_inside_its_owned_micro_task(self):
-        board = self.board(max_concurrent=4)
-        with board.store.db.write() as db:
-            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
-                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
-        _, claim = self.lead(board)
-        owned = self.owned(board, claim)
-        view, _ = self.finish_owned(board, owned, disposition="assistance")
-        parent = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "title": name, "task": "Help owned work", "cwd": owned["microTask"]["cwd"],
-            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
-        } for name in ("accept-helper", "conclude-helper")], autoContinue=False,
-            credential=claim["agentCredential"])
-        helpers = []
-        for row in parent["children"]:
-            helper = board.call("workflow_get", {"runId": row["taskId"]})
-            delivered, _ = self.finish_owned(board, helper)
-            helpers.append(delivered)
-        first, second = helpers
-        credential = {"credential": claim["agentCredential"]}
-        accepted = board.call("workflow_accept", {"runId": owned["runId"], "targetRunId": first["runId"],
-                                                  "artifactId": first["finalArtifactId"], "note": "Reviewed helper output",
-                                                  "notRequired": "No separate integration target", **credential})
-        self.assertEqual(accepted["runId"], owned["runId"])
-        self.assertEqual(board.call("workflow_get", {"runId": first["runId"]})["state"], "accepted")
-        concluded = board.call("workflow_conclude", {"runId": owned["runId"], "targetRunId": second["runId"],
-                                                     "artifactId": second["finalArtifactId"],
-                                                     "note": "Concluded helper work", **credential})
-        self.assertEqual(concluded["runId"], owned["runId"])
-        self.assertEqual(board.call("workflow_get", {"runId": second["runId"]})["state"], "concluded")
-
-    def test_lead_can_answer_an_owned_helper_proxy_request(self):
-        board = self.board()
-        _, claim = self.lead(board)
-        owned = self.owned(board, claim)
-        awaiting, _ = self.finish_owned(board, owned, disposition="assistance")
-        parent = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"], helpers=[{
-            "title": "proxy-helper", "task": "Help owned work", "cwd": owned["microTask"]["cwd"],
-            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
-        }], autoContinue=False, credential=claim["agentCredential"])
-        helper = board.call("workflow_get", {"runId": parent["children"][0]["taskId"]})
-        self.finish_owned(board, helper, disposition="assistance")
-        proxy = board.call("workflow_get", {"runId": owned["runId"]})["activeRequest"]
-        self.assertEqual(proxy["childTaskId"], helper["runId"])
-        answered = self.decide(board, parent, proxy["requestId"], decision="decline",
-                               credential=claim["agentCredential"])
-        self.assertEqual(answered["runId"], owned["runId"])
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT state FROM workflow_requests WHERE request_id=?",
-                                        (proxy["requestId"],)).fetchone()[0], "declined")
-
-    def test_lead_cannot_target_a_foreign_helper_through_its_owned_root(self):
-        board = self.board(max_concurrent=4)
-        with board.store.db.write() as db:
-            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
-                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
-        _, claim = self.lead(board)
-        owned = self.owned(board, claim)
-        foreign = self.submit(board, request_id="foreign-root", cwd=str(self.workdir("foreign-root")),
-                              kind="worktree")
-        awaiting, _ = self.finish_owned(board, foreign, disposition="assistance")
-        created = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"], helpers=[{
-            "title": "foreign-helper", "task": "Help foreign work", "cwd": foreign["microTask"]["cwd"],
-            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
-        }], autoContinue=False)
-        helper_id = created["children"][0]["taskId"]
-        for operation, fields in (("workflow_cancel", {}),
-                                  ("workflow_accept", {"artifactId": "foreign-artifact", "note": "Cannot accept",
-                                                       "notRequired": "No integration target"}),
-                                  ("workflow_conclude", {"note": "Cannot conclude"})):
-            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": owned["runId"], "targetRunId": helper_id,
-                                       "credential": claim["agentCredential"], **fields})
-            self.assertEqual(caught.exception.code, "UNAUTHORIZED")
-        self.assertEqual(board.call("workflow_get", {"runId": helper_id})["state"], "executing")
 
     def test_owned_continuation_keeps_original_frozen_input(self):
         board = self.board()

@@ -10,7 +10,7 @@ from hey_my_buddy.errors import BoardError
 
 class MacroTaskGroupPagingTests(unittest.TestCase):
     def test_initial_read_includes_every_project_even_when_there_are_more_than_five(self):
-        recipe = fixture_module.Recipe(macros=7, members_per_macro=1, helpers=0, plain=0,
+        recipe = fixture_module.Recipe(macros=7, members_per_macro=1, plain=0,
                                        pending_roots=0, large_results=0, evidence_files=0,
                                        routed_roots=0, accepted_roots=0)
         with private_state_dir("macro-task-project-groups-") as root:
@@ -34,7 +34,7 @@ class MacroTaskGroupPagingTests(unittest.TestCase):
                                     for group in page["groups"]))
 
     def test_all_groups_and_project_local_pages(self):
-        recipe = fixture_module.Recipe(macros=7, members_per_macro=1, helpers=0, plain=0,
+        recipe = fixture_module.Recipe(macros=7, members_per_macro=1, plain=0,
                                        pending_roots=0, large_results=0, evidence_files=0,
                                        routed_roots=0, accepted_roots=0)
         with private_state_dir("macro-task-group-paging-") as root:

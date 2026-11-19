@@ -36,27 +36,14 @@ class CurrentSubmissionInputTests(unittest.TestCase):
                 "access": "write", "inputs": [], "writeScope": ["."],
                 "expectedSeconds": 1800}
 
-    def helper_params(self, root):
-        return {"title": "Check dependency", "task": "Check a dependency", "cwd": root,
-                "buddy": "route", "checkout": "existing", "access": "write",
-                "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}
-
     def parse_submit(self, params):
         return parse_request("submit", params, audience="service")
 
-    def parse_helpers(self, helpers):
-        return parse_request("continue", {"runId": "root", "requestId": "request",
-                                          "decision": "approve", "autoContinue": True,
-                                          "helpers": helpers}, audience="service")
-
-    def test_nested_spec_is_rejected_at_both_entries(self):
+    def test_nested_spec_is_rejected_at_submission(self):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaises(BoardError) as submitted:
                 self.parse_submit({**self.submit_params(root), "spec": {"task": "nested"}})
             self.assertEqual(submitted.exception.details["field"], "spec")
-            with self.assertRaises(BoardError) as helper:
-                self.parse_helpers([{**self.helper_params(root), "spec": {"task": "nested"}}])
-            self.assertIn("spec", helper.exception.details["field"])
 
     def test_retired_routing_and_authority_fields_are_rejected(self):
         removed = {"routingPreferences": [], "routingMode": "fast", "allowRoutingFallback": False,
@@ -71,18 +58,6 @@ class CurrentSubmissionInputTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
                 self.assertEqual(raised.exception.details["field"], key)
 
-    def test_helper_packet_has_no_inherited_preference_or_integrator_role(self):
-        with tempfile.TemporaryDirectory() as root:
-            helper = self.helper_params(root)
-            for key, value in (("inheritRoutingPreferences", True), ("integrator", True),
-                               ("role", "integrator"), ("requestId", "caller-helper"),
-                               ("requiredCapabilities", ["effort:high"])):
-                with self.subTest(field=key), self.assertRaises(BoardError) as raised:
-                    self.parse_helpers([{**helper, key: value}])
-                self.assertIn(key, raised.exception.details["field"])
-            approved = self.parse_helpers([helper, {**helper, "title": "another helper"}])
-            self.assertEqual(len(approved.helpers), 2)
-
     def test_complete_buddy_name_and_explicit_required_fields(self):
         with tempfile.TemporaryDirectory() as root:
             submitted = self.parse_submit({**self.submit_params(root), "buddy": " / ".join(BUDDY.values())})
@@ -94,7 +69,7 @@ class CurrentSubmissionInputTests(unittest.TestCase):
                     self.parse_submit(params)
                 self.assertIn(missing, raised.exception.message)
 
-    def test_execution_adapter_fields_are_rejected_at_both_entries(self):
+    def test_execution_adapter_fields_are_rejected_at_submission(self):
         with tempfile.TemporaryDirectory() as root:
             for key, value in (("adapter", "command"), ("argv", ["/usr/bin/true"]),
                                ("harness", "dsh"), ("model", "deepseek-flash")):
@@ -102,10 +77,6 @@ class CurrentSubmissionInputTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as submitted:
                         self.parse_submit({**self.submit_params(root), key: value})
                     self.assertEqual(submitted.exception.details["field"], key)
-                    with self.assertRaises(BoardError) as helper:
-                        self.parse_helpers([{**self.helper_params(root), key: value}])
-                    self.assertIn(key, helper.exception.details["field"])
-
 
 class DecisionCapabilityTests(unittest.TestCase):
     def test_a_declared_level_and_native_readiness_are_both_required(self):
@@ -276,38 +247,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         decision = board.call("selection_get", {"decisionId": view["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["policyCheck"])
-
-    def test_helper_approval_rejects_the_inheritance_flag(self):
-        board = self.board()
-        self.seed(board)
-        parent = self.submit(board)
-        self.register(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        current = board.call("workflow_get", {"runId": parent["runId"]})
-        with self.assertRaises(BoardError) as raised:
-            board.call("workflow_continue", {"runId": parent["runId"],
-                "requestId": current["activeRequest"]["requestId"], "decision": "approve",
-                "autoContinue": True,
-                "helpers": [{"title": "inherit-helper", "task": "Inspect first dependency",
-                             "cwd": str(self.workdir("inherit-helper")), "buddy": " / ".join(BUDDY.values()),
-                             "checkout": "worktree", "access": "write", "inputs": [],
-                             "writeScope": ["."], "expectedSeconds": 1800,
-                             "inheritRoutingPreferences": True}]})
-        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("inheritRoutingPreferences", raised.exception.message)
-        # A plain helper carries no preference slot in its micro task.
-        approved = self.decide(board, current, current["activeRequest"]["requestId"],
-                              helpers=[{"title": "plain-helper", "task": "Inspect second dependency",
-                                        "cwd": str(self.workdir("plain-helper")),
-                                        "checkout": "worktree", "access": "write"}])
-        with board.store.db.read() as connection:
-            children = {row["request_id"]: row["task_id"] for row in connection.execute(
-                "SELECT request_id,task_id FROM tasks WHERE task_id IN (SELECT child_task_id FROM workflow_children WHERE parent_run_id=?)",
-                (parent["runId"],),
-            )}
-        plain = board.call("workflow_get", {"runId": approved["children"][0]["taskId"], "includeAudit": True})
-        self.assertNotIn("routingPreferences", plain["audit"]["microTask"])
-        self.assertEqual(len(children), 1)
 
     def test_host_override_requires_reason_and_records_no_preferences(self):
         board = self.board()
