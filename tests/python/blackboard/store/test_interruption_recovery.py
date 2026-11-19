@@ -472,6 +472,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                      {'waitingReason': None, 'waitingReasonSeq': 0},
                      {'waitingReason': waiting, 'waitingReasonSeq': '1'},
                      {'waitingReason': None, 'waitingReasonSeq': 1.5},
+                     {'waitingReason': waiting, 'waitingReasonSeq': 2**63},
                      {'waitingReason': waiting, 'waitingReasonSeq': None}):
             with self.subTest(data=data), self.assertRaises(BoardError) as caught:
                 board.call('execution_progress', {**actor, 'data': data})

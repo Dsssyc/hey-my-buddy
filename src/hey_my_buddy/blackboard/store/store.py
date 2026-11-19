@@ -1906,7 +1906,7 @@ class BoardStore:
                 waiting_seq = data.get('waitingReasonSeq')
                 if ('waitingReasonSeq' not in data
                         or isinstance(waiting_seq, bool) or not isinstance(waiting_seq, int)
-                        or waiting_seq < 1):
+                        or waiting_seq < 1 or waiting_seq > (1 << 63) - 1):
                     raise BoardError("INVALID_ARGUMENT",
                                      "data.waitingReason travels with data.waitingReasonSeq, "
                                      "a positive integer that orders the attempt's waiting hints",

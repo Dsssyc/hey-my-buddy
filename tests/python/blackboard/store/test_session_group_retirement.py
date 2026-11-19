@@ -1,4 +1,5 @@
 """Frozen attempt file ownership survives the retirement of helper lineage."""
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -108,7 +109,12 @@ class SessionGroupRetirementTests(WorkflowTestCase):
         target.write_text('unowned data', encoding='utf-8')
         path = native_path(session_record_path(board.directory, group, attempt))
         path.parent.mkdir(parents=True)
-        path.symlink_to(target)
+        try:
+            path.symlink_to(target)
+        except OSError as error:
+            if os.name == 'nt' and getattr(error, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege is unavailable')
+            raise
         with patch.object(macro_task_deletion, '_delete_workspaces', return_value=[]):
             result = macro_task_deletion.delete(board.store, group, 1)
             self.assertEqual(result['state'], 'deleting')

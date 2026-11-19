@@ -1310,7 +1310,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                          [case['routerAttemptId']])
         for attempt in attempts:
             path = session_record_path(fixture['state'], 'run:' + case['parentRunId'], attempt['attempt_id'])
-            header, message = path.read_text(encoding='utf-8').splitlines()
+            header, message = native_path(path).read_text(encoding='utf-8').splitlines()
             self.assertEqual(SessionFormat.model_validate_json(header).protocol, 'acp')
             self.assertEqual(SessionNotification.model_validate_json(message).session_id, attempt['attempt_id'])
             self.assertIn(path.relative_to(fixture['state']).as_posix(), fixture['resourceFiles'])
@@ -1370,7 +1370,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 ('events', 'SELECT * FROM events ORDER BY rowid'),
             )
         }
-        files = {path: (fixture['state'] / path).read_bytes() for path in fixture['resourceFiles']}
+        files = {path: native_path(fixture['state'] / path).read_bytes() for path in fixture['resourceFiles']}
         expected_bindings = {
             row['continuation_id']: tuple(row)[1:] for row in db.execute(
                 'SELECT continuation_id,workspace_id,workspace_manifest_sha256,workspace_facts_role,'
@@ -1386,7 +1386,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         ):
             self.assertEqual([tuple(row) for row in db.execute(query)], evidence[table], table)
         for path, content in files.items():
-            self.assertEqual((fixture['state'] / path).read_bytes(), content, path)
+            self.assertEqual(native_path(fixture['state'] / path).read_bytes(), content, path)
         self.assertEqual({
             row['continuation_id']: tuple(row)[1:] for row in db.execute(
                 'SELECT continuation_id,workspace_id,workspace_manifest_sha256,workspace_facts_role,'
@@ -1452,6 +1452,22 @@ class UpgradeFixtureTests(unittest.TestCase):
                 db.execute('UPDATE workflow_requests SET resolution_json=? WHERE request_id=?', (invalid, closed_request))
         db.rollback()
 
+        # The legacy resolution form admits exactly the actor's own vocabulary.
+        legacy_request = ids['abandonBlocked']['requestId']
+        conflict = ids['abandonBlocked']['conflictId']
+        def legacy(action, state):
+            return _json({'legacy': True, 'resolution': {
+                'action': action, 'actor': {'role': 'host'}, 'conflictId': conflict, 'state': state}})
+        for action, state in (('keep', 'abandoned'), ('abandon', 'pending')):
+            with self.subTest(legacy=(action, state)), self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE workflow_requests SET state='resolved',response_kind=NULL,response_id=NULL,"
+                           'resolution_json=? WHERE request_id=?', (legacy(action, state), legacy_request))
+        db.execute("UPDATE workflow_requests SET state='resolved',response_kind=NULL,response_id=NULL,"
+                   'resolution_json=? WHERE request_id=?', (legacy('abandon', 'abandoned'), legacy_request))
+        self.assertEqual(json.loads(db.execute('SELECT resolution_json FROM workflow_requests WHERE request_id=?',
+                                               (legacy_request,)).fetchone()[0])['resolution']['action'], 'abandon')
+        db.rollback()
+
     def assert_helper_lead_wakeup(self, db, case, *, answered, migrated=False):
         kind = "NULL" if migrated else 'r.kind'
         row = db.execute(
@@ -1471,9 +1487,14 @@ class UpgradeFixtureTests(unittest.TestCase):
                             (case['wakeupContinuationId'],)).fetchone()
         self.assertEqual(tuple(wakeup)[:2], ('lead-wakeup', 'invalidated' if answered else 'recorded'))
         trigger = json.loads(wakeup['trigger_event_json'])
-        self.assertEqual((trigger['runId'], trigger['kind']), (case['ownedRunId'], 'workflow.turn_returned'))
-        self.assertEqual(db.execute('SELECT kind FROM events WHERE seq=? AND task_id=?',
-                                    (trigger['seq'], trigger['runId'])).fetchone()[0], trigger['kind'])
+        event = db.execute('SELECT kind,task_id FROM events WHERE seq=?', (trigger['seq'],)).fetchone()
+        if trigger['kind'] == 'service.issue':
+            # A global service issue wakes a Lead without naming a task.
+            self.assertEqual((trigger['runId'], event['task_id']), (case['ownedRunId'], None))
+        else:
+            self.assertEqual((trigger['runId'], trigger['kind']), (case['ownedRunId'], 'workflow.turn_returned'))
+            self.assertEqual(event['task_id'], trigger['runId'])
+        self.assertEqual(event['kind'], trigger['kind'])
 
     def test_helper_offline_stock_keeps_note_less_decisions_and_a_recorded_wakeup(self):
         fixture, db = self.helper_stock_board('offline-helpers', load_helper_offline_stock)
@@ -1510,6 +1531,102 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertIn(decision + 'd', row['input_text'])
                 self.assertEqual(tuple(row)[5:], ('superseded', None, None))
         self.assert_helper_lead_wakeup(db, ids['leadWakeupOpen'], answered=False, migrated=True)
+
+    def repoint_to_global_service_issue(self, db, case):
+        """Rewrite one Lead wakeup's trigger to the task-less issue that woke it."""
+        seq = db.execute('SELECT MAX(seq)+1 FROM events').fetchone()[0]
+        db.execute("INSERT INTO events(seq,kind,payload_json,created_at)"
+                   " VALUES(?,'service.issue',?,'2026-02-01T00:00:00.000Z')",
+                   (seq, '{"code":"FIXTURE_ISSUE","message":"global occurrence","stage":"upgrade-stock"}'))
+        db.execute("UPDATE workflow_continuations SET trigger_event_json=json_set(trigger_event_json,"
+                   "'$.kind','service.issue','$.seq',?) WHERE continuation_id=?",
+                   (seq, case['wakeupContinuationId']))
+        db.commit()
+        return seq
+
+    def test_global_service_issue_lead_wakeup_failure_survives_the_upgrade(self):
+        """Schema 41 also wakes a parked Lead with a task-less service issue."""
+        fixture, db = self.helper_stock_board('global-issue-wakeup', load_helper_offline_stock)
+        case = fixture['helperRetirementStock']['scenarios']['leadWakeupOpen']
+        self.repoint_to_global_service_issue(db, case)
+        # The open failure request is a Lead wakeup failure, not a pure proxy,
+        # so the offline upgrade keeps it instead of refusing the open request.
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assert_helper_lead_wakeup(db, case, answered=False, migrated=True)
+
+        fixture, db = self.helper_stock_board('global-issue-wakeup-answered', load_helper_retirement_stock)
+        case = fixture['helperRetirementStock']['scenarios']['leadWakeupAnswered']
+        self.repoint_to_global_service_issue(db, case)
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        # The answered request survives and keeps its consumed continuation bound to it.
+        self.assert_helper_lead_wakeup(db, case, answered=True, migrated=True)
+        continuation = db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
+                                  'WHERE continuation_id=?', (case['continuationId'],)).fetchone()
+        self.assertEqual(tuple(continuation), ('manual', 'consumed', case['leadRunId'], case['requestId']))
+
+    def pure_report_tree_board(self, name):
+        """A settled three-layer helper tree ending in a pure helper-report."""
+        fixture, db = self.helper_stock_board(name, load_helper_retirement_stock)
+        case = fixture['helperRetirementStock']['scenarios']['proxyFamily']
+        # Grow the settled tree one layer: the grandchild C is accepted like B.
+        grandchild = '00000000-0000-0000-0000-082f79cd9901'
+        project = db.execute('SELECT standalone_project_id FROM workflow_runs WHERE run_id=?',
+                             (case['parentRunId'],)).fetchone()[0]
+        spec = _json({'expectedSeconds': 600, 'task': 'Fixture helper task grandchild-helper'})
+        db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,"
+                   "adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,?,?,'codex',?,"
+                   "'completed',1,'2026-02-01T00:00:00.000Z','2026-02-01T00:00:00.000Z')",
+                   (grandchild, 'helper-' + 'a3' * 32, spec, 'f' * 64, 2, 'unused'))
+        db.execute("INSERT INTO workflow_runs(run_id,standalone_project_id,project_kind,checkout,title,"
+                   "buddy_json,buddy_revision,execution_workspace_json,state,created_at,updated_at,"
+                   "delegation_authority) VALUES(?,?,'git','existing','Helper retirement helper grandchild-helper',"
+                   "?,1,?,'accepted','2026-02-01T00:00:00.000Z','2026-02-01T00:00:00.000Z',0)",
+                   (grandchild, project,
+                    '{"effort":"high","harness":"codex","model":"fixture-alpha","provider":"openai"}',
+                    '{"access":"write","integrator":{"role":"host"},"kind":"existing"}'))
+        db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
+                   " VALUES(?,?,?,'succeeded','2026-02-01T00:00:00.000Z','2026-02-01T00:00:00.000Z')",
+                   (grandchild, case['childRunId'], case['assistanceRequestId']))
+        # B's boundary holds the pure report of its failed reschedule after C
+        # settled; the ancestor proxy names that report through both references.
+        db.execute("UPDATE workflow_requests SET kind='helper-report',reason_code='SHUTDOWN_UNCONFIRMED',"
+                   "reason_params_json='{}',decision_json=NULL,payload_json=? WHERE request_id=?",
+                   (_json({'helperOutcomes': [{'state': 'accepted', 'taskId': grandchild}]}),
+                    case['childRequestId']))
+        # With the leaf retired no sharer can own the consumed continuation's
+        # resolution any more: the parent held one proxy per child request.
+        db.execute("UPDATE workflow_requests SET decision_json=NULL WHERE response_kind='continue'"
+                   ' AND response_id=?', (case['continuationId'],))
+        db.commit()
+        return fixture, db, case
+
+    def test_settled_helper_tree_ending_in_a_pure_helper_report_upgrades(self):
+        """A proxy chain may legally end in the retired pure helper-report."""
+        fixture, db, case = self.pure_report_tree_board('pure-report-tree')
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        # The continuation keeps its own run; the retired source is cleared, not
+        # mistaken for a proxy/origin disagreement, and the retired rows are gone.
+        continuation = db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
+                                  'WHERE continuation_id=?', (case['continuationId'],)).fetchone()
+        self.assertEqual(tuple(continuation), ('manual', 'consumed', case['childRunId'], None))
+        for key in ('proxyRequestId', 'childRequestId'):
+            self.assertIsNone(db.execute('SELECT 1 FROM workflow_requests WHERE request_id=?',
+                                         (case[key],)).fetchone(), key)
+        sibling = db.execute('SELECT state,response_kind,response_id FROM workflow_requests WHERE request_id=?',
+                             (case['siblingRequestId'],)).fetchone()
+        self.assertEqual(tuple(sibling), ('superseded', 'continue', case['continuationId']))
+
+        # An origin naming any other request still refuses the upgrade.
+        fixture, db, case = self.pure_report_tree_board('pure-report-tree-mismatch')
+        db.execute("UPDATE workflow_requests SET payload_json=json_set(payload_json,'$.origin.requestId',?) "
+                   'WHERE request_id=?', (case['siblingRequestId'], case['proxyRequestId']))
+        db.commit()
+        board = fixture['state'] / 'board.sqlite3'
+        contents = board.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'proxy and origin name different requests') as caught:
+            upgrade_state(fixture['state'])
+        self.assertIn(case['proxyRequestId'], str(caught.exception))
+        self.assertEqual(board.read_bytes(), contents)
 
     def test_every_helper_reject_stock_loads_independently_with_its_guard_facts(self):
         # These queries select the old shape that the next schema must refuse.

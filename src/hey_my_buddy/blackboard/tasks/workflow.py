@@ -5483,7 +5483,10 @@ class WorkflowCoordinator:
         if "turn" in result or (requires_turn and params.get("shutdownConfirmed")):
             if turn_row is None:
                 raise BoardError("TURN_INVALID", "The micro-task attempt has no service-owned turn to import")
-            rejection = self._validate_turn(self.turn_outcome(result), turn_row, attempt)
+            # The settled history unwraps the stored report once and reads this
+            # result object's own turn; precheck must judge the same object.
+            turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
+            rejection = self._validate_turn(turn, turn_row, attempt)
             if rejection is not None:
                 raise BoardError("TURN_INVALID", rejection, turnId=turn_row["turn_id"])
         if run_row['checkout'] == 'none':

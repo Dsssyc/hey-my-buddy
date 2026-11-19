@@ -196,8 +196,8 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
                 AND json_type(resolution_json,'$.resolution') IS 'object'
                 AND json_type(resolution_json,'$.resolution.conflictId') IS 'text'
                 AND length(json_extract(resolution_json,'$.resolution.conflictId')) > 0
-                AND json_type(resolution_json,'$.resolution.action') IS 'text'
-                AND json_type(resolution_json,'$.resolution.state') IS 'text'
+                AND json_extract(resolution_json,'$.resolution.action') IN ('restore','adopt','abandon')
+                AND json_extract(resolution_json,'$.resolution.state') IN ('open','restored','adopted','abandoned')
                 AND json_type(resolution_json,'$.resolution.actor') IS 'object'
                 AND json_type(resolution_json,'$.parameters') IS NULL
                 AND json_type(resolution_json,'$.result') IS NULL
@@ -416,7 +416,10 @@ def _lead_failures(connection, requests, payloads):
           JOIN workflow_lead_tasks l ON l.lead_run_id=c.run_id
            AND l.owned_run_id=json_extract(c.trigger_event_json,'$.runId')
           JOIN events e ON e.seq=json_extract(c.trigger_event_json,'$.seq')
-           AND e.kind=json_extract(c.trigger_event_json,'$.kind') AND e.task_id=l.owned_run_id
+           AND e.kind=json_extract(c.trigger_event_json,'$.kind')
+           -- A global service issue wakes a Lead without naming a task; every
+           -- other trigger belongs to the owned run the doorbell named.
+           AND (e.task_id=l.owned_run_id OR (e.kind='service.issue' AND e.task_id IS NULL))
          WHERE c.kind='lead-wakeup' AND r.delegation_authority=1
            AND c.state IN ('recorded','invalidated','cancelled')
     """):
@@ -542,16 +545,23 @@ def _preflight(connection, requests, pure_proxies):
 
 
 def _source_request(request_id, requests, payloads, parents, pure_proxies, seen=frozenset()):
+    """Resolve one continuation request to its living source.
+
+    Returns ``(leaf, terminal_request_id)``: the request row a continuation
+    rebinds to, or ``None`` when the chain ends in the retired pure
+    ``helper-report``, together with the terminal request's own id so an
+    ancestor proxy can check its ``origin`` against what the chain reached.
+    """
     request = requests.get(request_id)
     if request is None or request_id in seen:
         _invalid('missing or cyclic continuation request', request_id)
     if request_id not in pure_proxies:
-        return request
+        return request, request_id
     payload = payloads[request_id]
     proxy = payload.get('proxy')
     origin = payload.get('origin')
     if origin is None and proxy is None and request['kind'] == 'helper-report':
-        return None
+        return None, request_id
 
     for reference in (proxy, origin):
         if reference is None:
@@ -576,11 +586,11 @@ def _source_request(request_id, requests, payloads, parents, pure_proxies, seen=
     reference = proxy if proxy is not None else origin
     if reference is None:
         _invalid('proxy has no source', request_id)
-    leaf = _source_request(reference['requestId'], requests, payloads, parents, pure_proxies,
-                           seen | {request_id})
-    if origin is not None and (leaf is None or origin['requestId'] != leaf['request_id']):
+    leaf, terminal = _source_request(reference['requestId'], requests, payloads, parents, pure_proxies,
+                                     seen | {request_id})
+    if origin is not None and origin['requestId'] != terminal:
         _invalid('proxy and origin name different requests', request_id, origin)
-    return leaf
+    return leaf, terminal
 
 
 def _replayable(continuation):
@@ -596,7 +606,7 @@ def _convert_continuations(connection, requests, payloads, decisions, parents, p
         request_id = row['request_id']
         input_text = row['input_text']
         if request_id is not None:
-            source = _source_request(request_id, requests, payloads, parents, pure_proxies)
+            source, _terminal = _source_request(request_id, requests, payloads, parents, pure_proxies)
             if source is None:
                 request_id = None
             elif source['run_id'] != row['run_id']:
@@ -664,7 +674,7 @@ def _check_resolution_proxies(requests, payloads, parents, pure_proxies, decisio
         proxy = requests[request_id]
         if proxy['response_kind'] != 'resolution':
             continue
-        leaf = _source_request(request_id, requests, payloads, parents, pure_proxies)
+        leaf, _terminal = _source_request(request_id, requests, payloads, parents, pure_proxies)
         if (leaf is None or leaf['response_kind'] != 'resolution'
                 or leaf['response_id'] != proxy['response_id']
                 or decisions.get(leaf['request_id']) != decisions.get(request_id)):
