@@ -146,11 +146,23 @@ def _profile_execute(control, handle, module, started):
                 stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
             break
         live_activity = None
+        launched = False
         with _inline_live(request, services, handle, event_seq_offset=event_seq_offset) as live_services:
-            result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
-                                 cancelled=handle.cancelled.is_set)
-            if live_services is not None and getattr(live_services, "live", None) is not None:
-                live_activity = live_services.live.current_activity()
+            if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
+                if result is None:
+                    result = RunResult(identity=request.identity, harness=request.harness,
+                        end=RunEnd(status="cancelled"),
+                        buddy=ResultBuddy(requested=request.buddy), native_request_sent=False,
+                        model_responded=False,
+                        stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+            else:
+                result = run_harness(module, request, observer=partial(handle.observe, observing),
+                                     services=live_services, cancelled=handle.cancelled.is_set)
+                launched = True
+                if live_services is not None and getattr(live_services, "live", None) is not None:
+                    live_activity = live_services.live.current_activity()
+        if not launched:
+            break
         launched_rounds += 1
         result = _offset_result_activity(result, event_seq_offset)
         event_seq_offset = _next_event_seq_offset(event_seq_offset, live_activity, result)
@@ -360,32 +372,38 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     check = check_prompt_input(select_input_limit(request.harness, version), parts)
     if input_error is None and check.blocked:
         input_error = BoardError(INPUT_REJECTED, "The initial prompt exceeds the harness's declared input limit")
-    if input_error is None:
-        model_wait = handle.model_response_wait
-        if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
-            result = RunResult(identity=request.identity, harness=request.harness,
-                end=RunEnd(status="cancelled"), harness_version=version,
-                buddy=ResultBuddy(requested=request.buddy), native_request_sent=False,
-                model_responded=False,
-                stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
-        else:
-            with _inline_live(request, services, handle) as live_services:
+    model_wait = handle.model_response_wait
+    if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
+        result = RunResult(identity=request.identity, harness=request.harness,
+            end=RunEnd(status="cancelled"), harness_version=version,
+            buddy=ResultBuddy(requested=request.buddy), native_request_sent=False,
+            model_responded=False,
+            stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+    elif input_error is None:
+        with _inline_live(request, services, handle) as live_services:
+            if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
+                result = RunResult(identity=request.identity, harness=request.harness,
+                    end=RunEnd(status="cancelled"), harness_version=version,
+                    buddy=ResultBuddy(requested=request.buddy), native_request_sent=False,
+                    model_responded=False,
+                    stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+            else:
                 result = run_harness(module, request, observer=partial(handle.observe, observer), services=live_services,
                                      cancelled=handle.cancelled.is_set)
-            if result.native_admission_error is not None:
-                native_error = result.native_admission_error.value
-                native_version = result.harness_version if result.harness_version is not None else version
-                native_check = (check_prompt_input(select_input_limit(request.harness, native_version), parts)
-                                if native_version != version else check)
-                failure = input_failure(native_check, stage="native-admission", harness=request.harness,
-                    version=native_version,
-                    native_request_sent=result.native_request_sent, model_responded=result.model_responded,
-                    native_error=native_error)
-                update = {"input_failure": FrozenJson(failure)}
-                if is_input_too_large(native_error):
-                    update["end"] = result.end.model_copy(update={"reason_code": INPUT_REJECTED})
-                    update["provider_rejection"] = None
-                result = result.model_copy(update=update)
+        if result.native_admission_error is not None:
+            native_error = result.native_admission_error.value
+            native_version = result.harness_version if result.harness_version is not None else version
+            native_check = (check_prompt_input(select_input_limit(request.harness, native_version), parts)
+                            if native_version != version else check)
+            failure = input_failure(native_check, stage="native-admission", harness=request.harness,
+                version=native_version,
+                native_request_sent=result.native_request_sent, model_responded=result.model_responded,
+                native_error=native_error)
+            update = {"input_failure": FrozenJson(failure)}
+            if is_input_too_large(native_error):
+                update["end"] = result.end.model_copy(update={"reason_code": INPUT_REJECTED})
+                update["provider_rejection"] = None
+            result = result.model_copy(update=update)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),

@@ -1118,6 +1118,12 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     the turn's end; the run loop owns every update, the cancel flag, the overall
     deadline and the role's feedback while it streams.
     """
+    if cancel.is_set() or _remaining(deadline) <= 0:
+        if _remaining(deadline) <= 0:
+            state.deadline_hit = True
+        raise NativeError("cancelled" if cancel.is_set() else "deadline",
+                          "the owned DSH execution was cancelled" if cancel.is_set()
+                          else "the run's overall deadline expired before the prompt")
     if session is not None:
         session.record.project(session.start_prompt, session_id, input_text,
                              f"{session_id}/{time.monotonic_ns()}")

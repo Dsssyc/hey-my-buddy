@@ -901,10 +901,13 @@ class Execution:
                 handle.grace_expired = True
                 self.log("Host stop grace reached; forcing the owned run to stop")
                 role_seam.worker_cancel(implementation, handle)
-        # The native session has ended: retire the live handle so a stop that
-        # arrives after the settled result cannot cancel it and distort the
-        # collected facts.
-        control.detach()
+        # Retire the handle before collection only when its whole owned tree is
+        # already confirmed gone: a settled inline failure cannot be distorted
+        # by a late stop, while an unproven handle (such as a root exit with
+        # living Job or session descendants) stays reachable to stops arriving
+        # during collection until the finally block below retires it.
+        if _handle_shutdown_confirmed(handle):
+            control.detach()
         if model_wait is not None and not timed_out:
             timed_out = model_wait.finished()
         unknown_reads = 0
@@ -922,6 +925,7 @@ class Execution:
                     self._wait_control_observation(claim, control, unknown_reads)
                     unknown_reads += 1
         finally:
+            control.detach()
             if waited:
                 # Same clearing as the prepare loop: cancellation or any other
                 # exit must not leave the ended wait queued for receipt delivery.
@@ -1144,13 +1148,13 @@ class _ExecutionControl(threading.Thread):
         """Retire the live handle once its native work has settled.
 
         If a stop was already accepted while the handle's owned process tree is
-        not yet confirmed gone (for example a root exited while Job or session
-        descendants remain alive), apply it before clearing the handle so a
-        fast detach never drops the stop; an already-confirmed stop is skipped
-        so a late stop cannot distort the settled result.
+        not yet confirmed gone, apply every pending request before clearing the
+        handle; an already-confirmed stop is skipped so a late stop cannot
+        distort the settled result.
         """
         with self._lock:
-            self._apply_pending_locked()
+            while self.handle is not None and self.requests > self.applied:
+                self._apply_pending_locked()
             self.handle = self.implementation = None
 
     def wait(self, seconds):

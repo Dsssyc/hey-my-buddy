@@ -602,6 +602,146 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual(len(stop_calls), 1)
             summary_run.assert_called_once()
 
+    def test_stop_arriving_during_collection_reaches_unconfirmed_process_handle(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "command", "cwd": directory, "command": ["true"]}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+
+            class LivingJob:
+                def active(self):
+                    return 1
+
+                def close(self, *, confirmed=False):
+                    pass
+
+            process = SimpleNamespace(pid=4244, returncode=7, poll=lambda: 7, _buddy_job=LivingJob())
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+            handle.wait = lambda timeout=None: 7
+            calls = []
+
+            class Executor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    calls.append(("stop", stop_initiator))
+                    owned.cancel_requested = True
+                    owned.stop_initiator = stop_initiator
+
+                def cancel(self, owned, **_kwargs):
+                    calls.append(("cancel", owned.stop_initiator))
+                    owned.cancel_requested = True
+
+            def collect(_impl, owned, _context):
+                # Console force-stop arrives AFTER wait() returned 7 while
+                # worker_collect is running against the still-active Job.
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while not calls and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                return AdapterOutcome(status="cancelled", shutdown_confirmed=True, exit_code=7)
+
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", side_effect=collect):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertIsNone(control.handle)
+            self.assertEqual(calls, [("cancel", "console")])
+            self.assertEqual(report["status"], "cancelled")
+            self.assertEqual(report["terminationReason"], "console-stop")
+
+    def test_prelaunch_stop_beats_input_rejection_live_bind_and_dsh_prompt(self):
+        from contextlib import contextmanager
+        import queue
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh_run
+        from hey_my_buddy.buddy.roles import inline_run, run_execution
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = {
+                "operation": "worker", "harness": "codex", "privateRoot": str(root / "worker"),
+                "nativeRoot": str(root / "native"), "stateDir": str(root),
+                "sessionRecordPath": None, "cwd": str(root),
+                "taskId": "task", "attemptId": "attempt", "generation": 1,
+                "spec": {"provider": "openai", "model": "gpt-6.2-sol", "effort": "high"},
+            }
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="w-1")
+            buddy = rc.RunBuddy(provider="openai", model="gpt-6.2-sol", effort="high")
+            req = SimpleNamespace(identity=identity, harness="codex", buddy=buddy, input_text="x")
+            parts = SimpleNamespace()
+
+            # (a) Accepted console stop beats preflight input_error/blocked.
+            h1 = run_execution.InlineRunHandle(control, identity)
+            h1.accepted_stop = lambda: {"stopInitiator": "console"}
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=True)), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run")):
+                res1, _, _, code1 = inline_run.execute(control, h1)
+            self.assertEqual((code1, res1.end.status), (1, "cancelled"))
+            self.assertIs(h1.cancel_requested, True)
+            self.assertEqual(h1.stop_initiator, "console")
+
+            # (b) Stop landing during _inline_live binding still blocks run_harness.
+            h2 = run_execution.InlineRunHandle(control, identity)
+            @contextmanager
+            def stopping_live(_req, _services, owned, **_kwargs):
+                owned.cancel_requested = True
+                owned.stop_initiator = "console"
+                owned.cancelled.set()
+                yield None
+
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=False)), \
+                 mock.patch.object(inline_run, "_inline_live", side_effect=stopping_live), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run")):
+                res2, _, _, code2 = inline_run.execute(control, h2)
+            self.assertEqual((code2, res2.end.status), (1, "cancelled"))
+            self.assertIs(res2.native_request_sent, False)
+
+            # (c) DSH _prompt_and_observe never sends a prompt when cancel is already set.
+            client = mock.Mock()
+            cancel = dsh_run.CancelFlag(lambda: True)
+            state = dsh_run._RunState()
+            activity = dsh_run.DshActivity()
+            with self.assertRaises(dsh_run.NativeError) as caught:
+                dsh_run._prompt_and_observe(
+                    client=client, pump=queue.Queue(), session_id="sess", input_text="hi",
+                    deadline=time.monotonic() + 60, cancel=cancel, state=state,
+                    fold=lambda _m: False, notify=lambda: None, activity=activity,
+                    denied=lambda: 0, send_cancel=lambda _s: None, session=None)
+            self.assertEqual(caught.exception.code, "cancelled")
+            client.prompt.assert_not_called()
+            self.assertIs(state.native_request_sent, False)
+
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             spec = {'adapter': 'codex'}
