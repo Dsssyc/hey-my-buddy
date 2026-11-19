@@ -1885,17 +1885,32 @@ class BoardStore:
         # turned into fake native progress.
         activity = None
         waiting_reason = None
+        waiting_seq = None
         data = params.get("data")
         if data is not None:
             if not isinstance(data, dict):
                 raise BoardError("INVALID_ARGUMENT", "data must be an object")
-            schemas.reject_unknown(data, {"activity", "waitingReason"}, "execution.progress.data")
+            schemas.reject_unknown(data, {"activity", "waitingReason", "waitingReasonSeq"},
+                                   "execution.progress.data")
             if data.get("activity") is not None:
                 activity = activity_module.normalize_activity(data["activity"])
                 if 'waitingReason' in activity:
                     validate_waiting_reason(activity['waitingReason'], activity=True)
-            if data.get('waitingReason') is not None:
-                waiting_reason = validate_waiting_reason(data['waitingReason'])
+            if 'waitingReason' in data:
+                waiting_seq = data.get('waitingReasonSeq')
+                if ('waitingReasonSeq' not in data
+                        or isinstance(waiting_seq, bool) or not isinstance(waiting_seq, int)
+                        or waiting_seq < 1):
+                    raise BoardError("INVALID_ARGUMENT",
+                                     "data.waitingReason travels with data.waitingReasonSeq, "
+                                     "a positive integer that orders the attempt's waiting hints",
+                                     field="data.waitingReasonSeq")
+                if data['waitingReason'] is not None:
+                    waiting_reason = validate_waiting_reason(data['waitingReason'])
+            elif 'waitingReasonSeq' in data:
+                raise BoardError("INVALID_ARGUMENT",
+                                 "data.waitingReasonSeq is only sent beside data.waitingReason",
+                                 field="data.waitingReasonSeq")
         with self.db.write() as connection:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
@@ -1935,14 +1950,20 @@ class BoardStore:
                     and attempt['execution_state'] not in ('finalizing', 'finished')
                     and attempt['result_json'] is None):
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
-                if attempt['waiting_reason'] != waiting_code:
+                if waiting_seq > attempt['waiting_hint_seq']:
                     # The wait is recorded on the attempt row even while its
                     # connection is unresolved: it reappears unaided after a
                     # reconnect and never overwrites the connection reason.
-                    connection.execute("UPDATE attempts SET waiting_reason=? WHERE attempt_id=?",
-                                       (waiting_code, attempt['attempt_id']))
-                    self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
-                                       attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
+                    # The sequence is the monotone barrier: only a newer hint
+                    # rewrites the reason, so a late replay of an older
+                    # dispatch cannot revive an already-cleared wait, and an
+                    # unchanged confirmation still advances the barrier.
+                    connection.execute(
+                        "UPDATE attempts SET waiting_hint_seq=?, waiting_reason=? WHERE attempt_id=?",
+                        (waiting_seq, waiting_code, attempt['attempt_id']))
+                    if attempt['waiting_reason'] != waiting_code:
+                        self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
+                                           attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
                     changed = True
             activity_state = None
             if activity is not None:

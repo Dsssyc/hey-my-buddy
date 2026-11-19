@@ -209,7 +209,8 @@ class UpgradeChainTests(unittest.TestCase):
         tasks = [dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')]
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 41, 'targetSchema': 42})
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')],
-                         [{**row, 'connection_reason': None, 'probe_unknown': 0, 'waiting_reason': None}
+                         [{**row, 'connection_reason': None, 'probe_unknown': 0, 'waiting_reason': None,
+                           'waiting_hint_seq': 0}
                           for row in attempts])
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')], tasks)
         attempt_id = self.db.execute('SELECT attempt_id FROM attempts ORDER BY rowid LIMIT 1').fetchone()[0]

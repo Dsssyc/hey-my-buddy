@@ -42,6 +42,7 @@ from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason
 from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
+from ..harnesses.base import AdapterOutcome
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Text, fail
@@ -137,6 +138,7 @@ class ModelResponseWait:
             if self.deadline is not None:
                 native_path(self.path).unlink()
                 self.deadline = None
+            return self.timed_out
 
     def expired(self, handle):
         with self.lock:
@@ -145,8 +147,21 @@ class ModelResponseWait:
                 return True
             if handle.model_responded:
                 self.responded(handle)
-            self.timed_out = self.deadline is not None and time.monotonic() >= self.deadline
+            return self.expired_now()
+
+    def expired_now(self):
+        """Remember a deadline reached before starting a native call."""
+        with self.lock:
+            self.raise_failure()
+            self.timed_out = self.timed_out or (self.deadline is not None
+                                                and time.monotonic() >= self.deadline)
             return self.timed_out
+
+    def mark_timeout(self, outcome: AdapterOutcome) -> None:
+        outcome.status = "failed"
+        outcome.error = f"the Router model did not start responding within {self.seconds}s"
+        outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
+                          "modelResponded": False}
 
 
 class LiveEndpointDescriptor(InternalModel):
@@ -411,8 +426,11 @@ class Execution:
         self._log = log or (lambda message: None)
         self.control = _ExecutionControl(self)
         self._hints: dict = {}
+        self._hint_seqs: dict = {}
+        self._hint_serial = 0
         self._hint_lock = threading.Lock()
         self._flush_lock = threading.Lock()
+        self._flusher = _HintFlusher(self)
         self._identity_pending: dict | None = None
         self._identity: dict | None = None
         self._next_hint_at = 0.0
@@ -433,18 +451,44 @@ class Execution:
         return self.control.cancel_view is not None
 
     def hint(self, **data):
+        """Record one hint under the short memory lock and wake the flusher.
+
+        Every write allocates a strictly increasing, never-reused sequence for
+        its key — including an explicit ``waitingReason=None`` clear — and the
+        waiting reason's sequence travels beside it as ``waitingReasonSeq``.
+        """
         with self._hint_lock:
-            self._hints.update(data)
+            for key, value in data.items():
+                if key == "activity":
+                    # A slower observation never overwrites a newer activity.
+                    current = self._hints.get(key)
+                    if current is None or activity_module.is_newer(value, current):
+                        self._hint_serial += 1
+                        self._hints[key] = value
+                        self._hint_seqs[key] = self._hint_serial
+                    continue
+                self._hint_serial += 1
+                self._hints[key] = value
+                self._hint_seqs[key] = self._hint_serial
+        self._flusher.wake()
 
     def flush_hints(self, *, delivering: bool = False) -> bool:
         with self._flush_lock:
             with self._hint_lock:
-                pending = dict(self._hints)
+                pending = {key: (self._hint_seqs[key], self._hints[key])
+                           for key in tuple(self._hints)}
             if not pending and self._identity_pending is None:
                 return True
             if time.monotonic() < self._next_hint_at:
                 return False
             attempt = self.claim["attempt"]
+            data = None
+            if pending:
+                data = {}
+                for key, (seq, value) in pending.items():
+                    data[key] = value
+                    if key == "waitingReason":
+                        data["waitingReasonSeq"] = seq
             try:
                 # Windows caches its own identity and carries it with every
                 # progress it already sends, so the first progress after a
@@ -453,7 +497,7 @@ class Execution:
                                      self.nonce,
                                      process_identity=self._identity if os.name == "nt" else self._identity_pending,
                                      phase="executing" if self._identity_pending else None,
-                                     data=pending or None)
+                                     data=data)
             except BoardError as error:
                 if is_retryable(error):
                     return self._defer_hints(error)
@@ -468,9 +512,14 @@ class Execution:
             self._hint_delay = 0.25
             with self._hint_lock:
                 self._identity_pending = None
-                for key, value in pending.items():
-                    if self._hints.get(key) == value:
-                        self._hints.pop(key)
+                for key, (seq, _value) in pending.items():
+                    # Only an unchanged sequence proves the acknowledged
+                    # snapshot is still the newest value for the key: value
+                    # equality would also drop a newer rewrite that happens
+                    # to compare equal.
+                    if self._hint_seqs.get(key) == seq:
+                        self._hints.pop(key, None)
+                        self._hint_seqs.pop(key, None)
             return True
 
     def _defer_hints(self, error: Exception) -> bool:
@@ -498,10 +547,18 @@ class Execution:
                 time.sleep(delay)
                 if not delivered:
                     delay = min(10.0, delay * 2)
-        receipt = self.execute()
-        if receipt["report"]["shutdownConfirmed"] is True:
-            native_path(self.directory / BUDGET).unlink(missing_ok=True)
-        self.control.raise_fatal()
+        # The identity is acknowledged: from here the flusher thread owns every
+        # periodic progress report, so control never waits on the transport.
+        self._flusher.start()
+        try:
+            receipt = self.execute()
+            if receipt["report"]["shutdownConfirmed"] is True:
+                native_path(self.directory / BUDGET).unlink(missing_ok=True)
+            self.control.raise_fatal()
+        finally:
+            # The receipt bytes are durable; the flusher stops its periodic
+            # loop so the delivery path below drains what is left itself.
+            self._flusher.stop()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
 
@@ -703,10 +760,10 @@ class Execution:
         set_profile_publisher(self._profile_answer)
 
         def notify_model_wait():
-            # Serialize acknowledgements so an older hint cannot erase this wake.
-            with self._flush_lock:
-                self.hint(waitingReason=None)
-            self.flush_hints()
+            # The budget file is already durable when this runs; recording the
+            # paired-seq hint wakes the flusher, whose progress call triggers
+            # the service's attempt wake. Nothing here waits on the transport.
+            self.hint(waitingReason=None)
 
         # The start wait judges only a protocol that can show the model's start
         # as it happens. A harness declared unable to see it — DSH's ACP channel
@@ -753,8 +810,7 @@ class Execution:
             if waited:
                 # Leaving the wait loop — normally or on cancellation/error — clears
                 # its hint so receipt delivery cannot flush an already-ended wait.
-                with self._flush_lock:
-                    self.hint(waitingReason=None)
+                self.hint(waitingReason=None)
         if not preparation.available:
             return self.receipt(
                 claim,
@@ -796,14 +852,24 @@ class Execution:
         if model_wait is not None:
             model_wait.begin()
         else:
-            with self._flush_lock:
-                self.hint(waitingReason=None)
+            self.hint(waitingReason=None)
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
         holder.pop("confirmed_stopped", None)
         holder.pop("handle", None)
         control.raise_fatal()
+        if self.stop_requested():
+            # A stop that won the race past the last wait check must not launch
+            # a native child at all; the receipt records the cancelled stop.
+            return self._preflight_cancelled(claim, directory, None, self.control.cancel_view)
+        if model_wait is not None and model_wait.expired_now():
+            outcome = AdapterOutcome("failed", result={"nativeRequestSent": False}, shutdown_confirmed=True)
+            model_wait.mark_timeout(outcome)
+            report = outcome.to_report()
+            report["terminationReason"] = TERMINATION_DEADLINE
+            report["elapsedSeconds"] = round(time.monotonic() - started, 1)
+            return self.receipt(claim, report, directory)
         holder["start_invoked"] = True
         handle = role_seam.worker_start(implementation, context)
         holder["handle"] = handle
@@ -814,8 +880,6 @@ class Execution:
             control.raise_fatal()
             finished = handle.wait(timeout=0.25) is not None
             if finished:
-                if model_wait is not None:
-                    model_wait.finished()
                 break
             if model_wait is not None and model_wait.expired(handle):
                 timed_out = True
@@ -828,6 +892,12 @@ class Execution:
                 handle.grace_expired = True
                 self.log("Host stop grace reached; forcing the owned run to stop")
                 role_seam.worker_cancel(implementation, handle)
+        # The native session has ended: retire the live handle so a stop that
+        # arrives after the settled result cannot cancel it and distort the
+        # collected facts.
+        control.detach()
+        if model_wait is not None and not timed_out:
+            timed_out = model_wait.finished()
         unknown_reads = 0
         waited = False
         try:
@@ -846,8 +916,7 @@ class Execution:
             if waited:
                 # Same clearing as the prepare loop: cancellation or any other
                 # exit must not leave the ended wait queued for receipt delivery.
-                with self._flush_lock:
-                    self.hint(waitingReason=None)
+                self.hint(waitingReason=None)
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
         if result is not None and result.activity is not None:
@@ -868,10 +937,7 @@ class Execution:
             holder.pop('handle', None)
             raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
         if timed_out:
-            outcome.status = "failed"
-            outcome.error = f"the Router model did not start responding within {wait_seconds}s"
-            outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
-                              "modelResponded": False}
+            model_wait.mark_timeout(outcome)
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
@@ -935,8 +1001,7 @@ class Execution:
         control.raise_fatal()
         if control.cancel_view is not None or self.stop_requested():
             raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
-        with self._flush_lock:
-            self.hint(waitingReason=make_reason('router-input-unknown'))
+        self.hint(waitingReason=make_reason('router-input-unknown'))
         control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
         control.raise_fatal()
         if control.cancel_view is not None or self.stop_requested():
@@ -960,6 +1025,38 @@ class Execution:
         return receipt
 
 
+class _HintFlusher(threading.Thread):
+    """The execution's one progress reporter, on its own thread.
+
+    A suspended service or connection can hold only this thread: the control
+    thread keeps applying stops and recording activity while the flusher is
+    inside ``client.progress``, and a refused hint becomes the execution's
+    fatal error through the control's failure channel.
+    """
+
+    def __init__(self, execution):
+        super().__init__(name="hey-my-buddy-execution-hints", daemon=True)
+        self.execution = execution
+        self._wake = threading.Event()
+        self._done = threading.Event()
+
+    def wake(self):
+        self._wake.set()
+
+    def stop(self):
+        self._done.set()
+        self._wake.set()
+
+    def run(self):
+        try:
+            while not self._done.is_set():
+                self.execution.flush_hints()
+                self._wake.wait(0.25)
+                self._wake.clear()
+        except BaseException as error:  # noqa: BLE001 - the refusal must end the run
+            self.execution.control.fail(error)
+
+
 class _ExecutionControl(threading.Thread):
     """Observe only local native activity and received signals; no lease or stop polling."""
     def __init__(self, execution):
@@ -980,6 +1077,13 @@ class _ExecutionControl(threading.Thread):
     def raise_fatal(self):
         if self.fatal is not None:
             raise self.fatal
+
+    def fail(self, error):
+        # The hint flusher reports a refused hint here; the next checkpoint of
+        # the main flow raises it exactly like the control loop's own failure.
+        self.fatal = error
+        self._interrupted.set()
+        self._wake.set()
 
     def request_stop(self, initiator, deadline, *, force=False, from_signal=False):
         # Signal handlers only update lock-free local facts; the control thread
@@ -1002,6 +1106,15 @@ class _ExecutionControl(threading.Thread):
             self._activity = None
         self._wake.set()
 
+    def detach(self):
+        """Retire the live handle once its native work has settled.
+
+        A stop request arriving after the collected result is complete must not
+        reach ``worker_stop``/``worker_cancel`` and distort that result.
+        """
+        with self._lock:
+            self.handle = self.implementation = None
+
     def wait(self, seconds):
         deadline = time.monotonic() + max(0.0, seconds)
         while True:
@@ -1016,16 +1129,17 @@ class _ExecutionControl(threading.Thread):
         try:
             self._run_control()
         except BaseException as error:
-            self.fatal = error
-            self._interrupted.set()
-            self._wake.set()
+            self.fail(error)
 
     def _run_control(self):
+        # This loop never touches the transport: reporting a hint is the
+        # flusher thread's work, so a suspended service or connection can
+        # never delay a stop or the light activity collection here.
         while not self._done.is_set():
             with self._lock:
                 handle, implementation = self.handle, self.implementation
-            if handle is not None:
-                if self.requests > self.applied:
+                # Retiring a handle waits for any stop already being applied.
+                if handle is not None and self.requests > self.applied:
                     requested = self.requests
                     if self.applied or requested > 1:
                         handle.stop_initiator = self.cancel_view["stopInitiator"]
@@ -1034,6 +1148,7 @@ class _ExecutionControl(threading.Thread):
                         role_seam.worker_stop(implementation, handle,
                             stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
                     self.applied = requested
+            if handle is not None:
                 try:
                     endpoint = getattr(handle, "live_endpoint", None)
                     if endpoint is not None:
@@ -1044,7 +1159,6 @@ class _ExecutionControl(threading.Thread):
                 except Exception as error:
                     # A failed live observation never disables native stop handling.
                     self.execution.log(f"live activity unavailable: {error!r}")
-            self.execution.flush_hints()
             self._wake.wait(0.25)
             self._wake.clear()
 

@@ -49,25 +49,34 @@ def _profile_execute(control, handle, module, started):
     errors = None
     result = request = observer = None
     round_index = 0
+    model_wait = handle.model_response_wait
     while round_index <= 2:
         if handle.cancelled.is_set():
             break
         if round_index:
+            # A stop, or a model-response wait that already expired or timed
+            # out, must not launch a fresh native session for the next round.
+            if model_wait is not None and model_wait.expired_now():
+                break
             handle.model_responded = False
-            if handle.model_response_wait is not None:
-                handle.model_response_wait.begin()
+            if model_wait is not None:
+                model_wait.begin()
         invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
         next_control = {**control, "invocationId": uuid.uuid4().hex,
                         "privateRoot": str(invocation_root)}
-        request, services, observing, observer, parts = run_execution.profile_request(
+        next_request, services, observing, observer, parts = run_execution.profile_request(
             next_control, module, round_index=round_index, previous_raw=previous_raw,
             errors=errors)
+        record = selected(next_request.harness, environment_for())
+        version = record.get("version") if record is not None else None
+        blocked = check_prompt_input(select_input_limit(next_request.harness, version), parts).blocked
+        if round_index and (handle.cancelled.is_set() or (model_wait is not None and model_wait.expired_now())):
+            break
+        request = next_request
         handle.request = request
         handle.role_run_active_control = next_control
         handle.role_run_active_identity = request.identity
-        record = selected(request.harness, environment_for())
-        version = record.get("version") if record is not None else None
-        if check_prompt_input(select_input_limit(request.harness, version), parts).blocked:
+        if blocked:
             result = RunResult(identity=request.identity, harness=request.harness,
                 end=RunEnd(status="error", reason_code="input-rejected",
                            message="The profile prompt exceeds the harness input limit"),

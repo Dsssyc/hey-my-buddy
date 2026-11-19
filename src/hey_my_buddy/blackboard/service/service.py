@@ -860,8 +860,10 @@ class BoardService(_BaseResource):
             verify = self.execution_scheduler.verify_identity if self.execution_scheduler is not None else None
             response = self.store.execution_progress(params, verify_identity=verify)
             if self.execution_scheduler is not None:
-                # A budget notification can be an unchanged waitingReason hint,
-                # which commits without advancing the store's event head.
+                # A budget notification is an unchanged waitingReason hint with a
+                # new waitingReasonSeq: it advances the attempt's monotone barrier
+                # without adding a store event, and the budget observation still
+                # needs its wake on every accepted progress.
                 self.execution_scheduler.wake_attempt(params["attemptId"])
             return response
         return self._guard("execution.progress", request_json, handler)

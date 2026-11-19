@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     connection_reason TEXT CHECK (connection_reason IN ('attempt-uncertain-after-restart','execution-connection-unknown')),
     probe_unknown     INTEGER NOT NULL DEFAULT 0 CHECK (probe_unknown IN (0,1)),
     waiting_reason    TEXT CHECK (waiting_reason IN ('router-input-unknown')),
+    -- The monotone barrier of the execution's waiting hints: every hint carries
+    -- a per-attempt sequence, and only a higher one rewrites waiting_reason,
+    -- so a late replay of an older dispatch cannot revive a cleared wait.
+    waiting_hint_seq  INTEGER NOT NULL DEFAULT 0 CHECK (waiting_hint_seq >= 0),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
     -- Frozen model-service identity (harness/provider/model, no effort dimension).
@@ -130,9 +134,10 @@ def upgrade(connection):
     connection.execute('DROP TABLE attempts')
     connection.execute(ATTEMPTS_DDL)
     attempt_columns = [row[1] for row in connection.execute('PRAGMA table_info(attempts)')]
-    # Idle stock has no live waiting fact: the new columns start empty and the
-    # probe flag starts clear.
-    defaults = {'connection_reason': 'NULL', 'probe_unknown': '0', 'waiting_reason': 'NULL'}
+    # Idle stock has no live waiting fact: the new columns start empty, the
+    # probe flag starts clear and the monotone hint barrier starts at zero.
+    defaults = {'connection_reason': 'NULL', 'probe_unknown': '0', 'waiting_reason': 'NULL',
+                'waiting_hint_seq': '0'}
     select_columns = [defaults.get(column, column) for column in attempt_columns]
     connection.execute(
         f'INSERT INTO attempts(rowid,{",".join(attempt_columns)})'

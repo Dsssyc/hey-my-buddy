@@ -829,6 +829,32 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(observed_activity(endpoint), result.activity.value)
         self.assertEqual(publish.call_args.args[0], result.activity.value)
 
+    def test_correction_rounds_keep_the_attempt_activity_sequence_monotone(self):
+        self.set_case("readonly-repair")
+        prompt = "Select from the frozen packet"
+        request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        endpoint = activity_endpoint(request.identity)
+        rule = ReviewCorrection(REVIEW_SCHEMA, prompt)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=rule.observer, services=RunServices(live=endpoint),
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.correction_count, 1)
+        payloads = [call.args[0] for call in publish.call_args_list]
+        sequences = [payload["eventSeq"] for payload in payloads]
+        # Every published observation of the same attempt advances one
+        # sequence: the correction round continues it instead of restarting at
+        # its own per-turn count, so the first round's later events can never
+        # shadow the round that follows.
+        self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
+        first = [payload for payload in payloads if payload["counts"]["modelTurns"] == 1]
+        second = [payload for payload in payloads if payload["counts"]["modelTurns"] == 2]
+        self.assertTrue(first and second)
+        self.assertGreater(min(payload["eventSeq"] for payload in second),
+                           max(payload["eventSeq"] for payload in first))
+        self.assertEqual(sequences, sorted(sequences))
+        self.assertEqual(observed_activity(endpoint), result.activity.value)
+
     def test_a_completed_review_stream_stays_complete_without_a_confirmed_stop(self):
         # The Host probe's shape: the real halt executed, its recorded
         # confirmation says unconfirmed, and the completed round's stream fact

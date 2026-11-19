@@ -258,9 +258,12 @@ class ExecutionEndpointTests(unittest.TestCase):
 
             client.progress.side_effect = blocked_progress
             execution.hint(waitingReason={'code': 'router-input-unknown', 'params': {}})
+            flusher = execution._flusher
+            flusher.start()
             control.start()
+            thread = None
             try:
-                self.assertTrue(progress_entered.wait(2), 'control thread did not block in progress')
+                self.assertTrue(progress_entered.wait(2), 'hint flusher did not enter progress')
                 entered = threading.Event()
                 finished = threading.Event()
 
@@ -275,10 +278,14 @@ class ExecutionEndpointTests(unittest.TestCase):
                 time.sleep(0.05)
                 execution.request_stop('unknown', None, force=True, from_signal=True)
                 self.assertTrue(finished.wait(1.0), 'wait did not observe signal stop while progress blocked')
-                thread.join(1.0)
             finally:
+                flusher.stop()
                 release_progress.set()
                 control.stop()
+                flusher.join(2)
+                control.join(2)
+                if thread is not None:
+                    thread.join(2)
 
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:

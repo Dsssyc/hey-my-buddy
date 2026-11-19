@@ -8,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -21,6 +23,7 @@ from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
+from hey_my_buddy.protocol.input_limit import PromptParts
 from hey_my_buddy.protocol.transport import local_rpc_error
 from private_acl import assert_private_path
 
@@ -77,46 +80,144 @@ class ExecutionDeliveryTests(unittest.TestCase):
              mock.patch.object(entry.role_seam, "worker_start", side_effect=start), \
              mock.patch.object(entry.role_seam, "worker_collect", return_value=AdapterOutcome("ok", shutdown_confirmed=True)):
             return execution._execute_selected(claim, claim["task"], claim["task"]["spec"],
-                claim["attempt"], execution.directory, {"preflightControl": mock.Mock()})
+                claim["attempt"], execution.directory, {"preflightControl": mock.Mock(cancel_view=None)})
 
-    def test_budget_is_notified_before_native_start_and_offline_notice_is_retained(self):
-        for offline in (False, True):
-            with self.subTest(offline=offline):
-                client = mock.Mock()
-                execution, claim = self.budget_execution(client, suffix=f"-{int(offline)}")
-                delivered = []
-                def progress(*_args, **kwargs):
-                    budget = json.loads(native_path(execution.directory / entry.BUDGET).read_bytes())
-                    self.assertEqual(budget["binding"], {"taskId": claim["task"]["taskId"],
-                        "attemptId": claim["attempt"]["attemptId"], "generation": 1})
-                    self.assertEqual(kwargs["data"], {"waitingReason": None})
-                    if offline and client.progress.call_count == 1:
-                        raise BoardError("SERVICE_UNAVAILABLE", "offline")
-                    delivered.append(budget["deadline"])
-                client.progress.side_effect = progress
-                def start():
-                    self.assertEqual(client.progress.call_count, 1)
-                    if offline:
-                        self.assertIn("waitingReason", execution._hints)
-                        with mock.patch.object(entry.time, "monotonic", return_value=execution._next_hint_at):
-                            self.assertTrue(execution.flush_hints())
-                    self.assertEqual(len(delivered), 1)
-                receipt = self.execute_budget(execution, claim, start)
-                self.assertEqual(receipt["report"]["status"], "ok")
+    def test_budget_file_is_durable_before_its_wake_hint_reaches_the_service(self):
+        client = mock.Mock()
+        execution, claim = self.budget_execution(client)
+        seen = []
+        def progress(*_args, **kwargs):
+            seen.append(kwargs["data"])
+        client.progress.side_effect = progress
+        def start():
+            # The notify records its wake hint only after the budget file is
+            # durable, and no longer blocks on a synchronous progress call.
+            self.assertTrue(native_path(execution.directory / entry.BUDGET).exists())
+            self.assertEqual(execution._hints, {"waitingReason": None})
+            self.assertEqual(client.progress.call_count, 0)
+        receipt = self.execute_budget(execution, claim, start)
+        self.assertEqual(receipt["report"]["status"], "ok")
+        # The pending wake still travels, with its attempt-scoped sequence.
+        self.assertTrue(execution.flush_hints())
+        self.assertEqual(seen, [{"waitingReason": None, "waitingReasonSeq": 1}])
+        self.assertEqual(execution._hints, {})
 
-    def test_an_older_identical_hint_ack_cannot_erase_the_budget_notification(self):
+    def test_initial_start_checks_stop_and_deadline_after_publishing_budget(self):
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                execution, claim = self.budget_execution(mock.Mock(), suffix=f'-before-start-{stop}')
+                clock = [0.0]
+                publish = entry.fsync_json
+
+                def fsync(path, *args, **kwargs):
+                    publish(path, *args, **kwargs)
+                    if path.name == entry.BUDGET:
+                        if stop:
+                            execution.request_stop('console', None)
+                        else:
+                            clock[0] = 61.0
+
+                start = mock.Mock(side_effect=AssertionError('native start must not be called'))
+                with mock.patch.object(entry, 'fsync_json', side_effect=fsync), \
+                     mock.patch.object(entry, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                    receipt = self.execute_budget(execution, claim, start)
+                start.assert_not_called()
+                self.assertEqual(read_execution_receipt(execution.directory), receipt)
+                report = receipt['report']
+                self.assertTrue(report['shutdownConfirmed'])
+                if stop:
+                    self.assertEqual((report['status'], report['terminationReason']), ('cancelled', 'console-stop'))
+                else:
+                    self.assertEqual((report['status'], report['terminationReason']), ('failed', 'deadline'))
+                    self.assertEqual(report['result']['code'], 'router-not-responding')
+                    self.assertIs(report['result']['nativeRequestSent'], False)
+
+    def test_profile_correction_checks_stop_and_deadline_after_rearming_budget(self):
+        from hey_my_buddy.buddy.harnesses import runtime_selection
+        from hey_my_buddy.buddy.roles import inline_run
+
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                execution, claim = self.budget_execution(mock.Mock(), suffix=f'-profile-{stop}')
+                clock = [0.0]
+                handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
+                    result=None, evidence_retention_failure=None, model_responded=False, cancelled=threading.Event())
+                first = SimpleNamespace(harness='codex', identity=object())
+                second = SimpleNamespace(harness='codex', identity=object())
+                prior = SimpleNamespace(end=SimpleNamespace(status='ok'), value=SimpleNamespace(raw='draft'),
+                    model_responded=True, native_request_sent=True, tool_evidence=None, native_identity=None,
+                    usage=None, stop_evidence=SimpleNamespace(native=SimpleNamespace(group_state='gone')))
+                publish = entry.fsync_json
+                budgets = []
+
+                def fsync(path, *args, **kwargs):
+                    publish(path, *args, **kwargs)
+                    if path.name == entry.BUDGET:
+                        budgets.append(path)
+                        if len(budgets) == 2:
+                            if stop:
+                                handle.stop_initiator = 'console'
+                                handle.cancel_requested = True
+                                handle.cancelled.set()
+                            else:
+                                clock[0] = 61.0
+
+                def run(_module, request, **_kwargs):
+                    self.assertIs(request, first)
+                    handle.model_response_wait.responded(handle)
+                    return prior
+
+                def start(_executor, context):
+                    handle.model_response_wait = context.model_response_wait
+                    result, request, _verdict, code = inline_run._profile_execute(
+                        {'privateRoot': str(execution.directory)}, handle, object(), time.monotonic())
+                    self.assertIs(result, prior)
+                    self.assertIs(request, first)
+                    handle.wait.return_value = code
+                    return handle
+
+                feedback = {'accepted': False, 'errors': ['correct the profile']}
+                parts = PromptParts('', 'profile', '', '', '', '')
+                with mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={}), \
+                     mock.patch.object(entry.role_seam, 'worker_executor'), \
+                     mock.patch.object(entry.role_seam, 'prepare_worker_run',
+                                       return_value=entry.role_seam.WorkerPreparation(True)), \
+                     mock.patch.object(entry.role_seam, 'worker_start', side_effect=start), \
+                     mock.patch.object(entry.role_seam, 'worker_collect',
+                                       return_value=AdapterOutcome('failed', shutdown_confirmed=True)), \
+                     mock.patch.object(entry, 'fsync_json', side_effect=fsync), \
+                     mock.patch.object(entry, 'time', SimpleNamespace(monotonic=lambda: clock[0])), \
+                     mock.patch.object(runtime_selection, 'selected', return_value=None), \
+                     mock.patch.object(inline_run, '_inline_live', return_value=nullcontext(None)), \
+                     mock.patch.object(inline_run, 'run_harness', side_effect=run) as native, \
+                     mock.patch.object(inline_run.run_execution, 'profile_request', side_effect=[
+                         (request, None, None, None, parts) for request in (first, second)]), \
+                     mock.patch.object(execution, '_profile_answer', return_value=feedback):
+                    receipt = execution._execute_selected(claim, claim['task'], claim['task']['spec'],
+                        claim['attempt'], execution.directory, {'preflightControl': execution.control})
+                self.assertEqual(len(budgets), 2)
+                native.assert_called_once()
+                report = receipt['report']
+                self.assertTrue(report['shutdownConfirmed'])
+                if stop:
+                    self.assertEqual((report['status'], report['terminationReason']), ('cancelled', 'console-stop'))
+                else:
+                    self.assertEqual((report['status'], report['terminationReason']), ('failed', 'deadline'))
+                    self.assertEqual(report['result']['code'], 'router-not-responding')
+
+    def test_a_suspended_older_hint_ack_cannot_erase_the_budget_notification(self):
         client = mock.Mock()
         execution, claim = self.budget_execution(client)
         entered, release, published = threading.Event(), threading.Event(), threading.Event()
-        seen_budget, errors = [], []
         def progress(*_args, **_kwargs):
-            seen_budget.append(native_path(execution.directory / entry.BUDGET).exists())
             if client.progress.call_count == 1:
                 entered.set()
-                if not release.wait(2):
+                if not release.wait(5):
                     raise RuntimeError("fixture hint acknowledgement remained gated")
         client.progress.side_effect = progress
-        execution.hint(waitingReason=None)
+        # An older waiting hint is already inside progress when the budget
+        # notification records its newer wake.
+        execution.hint(waitingReason={"code": "router-input-unknown", "params": {}})
         older = threading.Thread(target=execution.flush_hints, daemon=True)
         original_publish = entry.fsync_json
         def publish(path, *args, **kwargs):
@@ -124,31 +225,31 @@ class ExecutionDeliveryTests(unittest.TestCase):
             if path.name == entry.BUDGET:
                 published.set()
         def start():
-            self.assertEqual(seen_budget, [False, True])
-        def run():
-            try:
-                self.execute_budget(execution, claim, start)
-            except BaseException as error:
-                errors.append(error)
-        current = threading.Thread(target=run, daemon=True)
+            self.assertTrue(published.wait(2))
+            with execution._hint_lock:
+                self.assertEqual((execution._hints.get("waitingReason"),
+                                  execution._hint_seqs.get("waitingReason")), (None, 2))
+            self.assertTrue(older.is_alive())
         with mock.patch.object(entry, "fsync_json", side_effect=publish):
             older.start()
             try:
                 self.assertTrue(entered.wait(2))
-                current.start()
-                self.assertTrue(published.wait(2))
+                receipt = self.execute_budget(execution, claim, start)
+                self.assertEqual(receipt["report"]["status"], "ok")
                 release.set()
                 older.join(2)
-                current.join(2)
                 self.assertFalse(older.is_alive())
-                self.assertFalse(current.is_alive())
-                self.assertEqual(errors, [])
-                self.assertEqual(seen_budget, [False, True])
             finally:
                 release.set()
                 older.join(2)
-                if current.ident is not None:
-                    current.join(2)
+        # The acknowledged older snapshot does not pop the newer wake: it is
+        # still the pending value, and the next flush sends it with its own
+        # sequence.
+        self.assertEqual(execution._hints, {"waitingReason": None})
+        self.assertTrue(execution.flush_hints())
+        self.assertEqual(client.progress.call_args.kwargs["data"],
+                         {"waitingReason": None, "waitingReasonSeq": 2})
+        self.assertEqual(execution._hints, {})
 
     def test_receipt_is_private_durable_and_has_no_authority_secret(self):
         report = {"status": "failed", "shutdownConfirmed": True,
@@ -630,10 +731,12 @@ class ExecutionDeliveryTests(unittest.TestCase):
         with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
             self.assertTrue(self.execution.flush_hints())
         self.assertEqual(client.progress.call_count, 2)
-        self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': None})
+        self.assertEqual(client.progress.call_args.kwargs['data'],
+                         {'waitingReason': None, 'waitingReasonSeq': 2})
         self.assertEqual(self.execution._hints, {})
+        self.assertEqual(self.execution._hint_seqs, {})
 
-    def test_unknown_progress_failure_keeps_a_running_control_alive_and_retries(self):
+    def test_the_flusher_keeps_the_latest_hint_through_backoff_and_retries(self):
         for error in (BoardError('INTERNAL_ERROR', 'store defect'),
                       BoardError('INVALID_RESPONSE', 'reply lost'), RuntimeError('transport defect')):
             with self.subTest(error=error):
@@ -642,23 +745,18 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 client.progress.side_effect = [error, {}]
                 execution = entry.Execution(CLAIM, self.state, 'n' * 64, client=client, log=logs.append)
                 execution.hint(activity=ACTIVITY)
-                control = execution.control
-                control.handle = SimpleNamespace(live_endpoint=None)
-                with mock.patch.object(entry.time, 'monotonic', return_value=10.0), \
-                     mock.patch.object(control._wake, 'wait', side_effect=lambda _timeout: control.stop()), \
-                     mock.patch.object(entry.role_seam, 'worker_cancel') as cancel, \
-                     mock.patch.object(entry.role_seam, 'worker_stop') as stop:
-                    control.run()
-                self.assertIsNone(control.fatal)
-                self.assertIsNone(control.cancel_view)
-                cancel.assert_not_called()
-                stop.assert_not_called()
-                self.assertEqual(execution._hints, {'activity': ACTIVITY})
-                self.assertTrue(any('execution progress pending' in line for line in logs))
-                with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
-                    self.assertTrue(execution.flush_hints())
+                execution._flusher.start()
+                try:
+                    deadline = time.monotonic() + 5
+                    while client.progress.call_count < 2 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                finally:
+                    execution._flusher.stop()
                 self.assertEqual(client.progress.call_count, 2)
+                self.assertIsNone(execution.control.fatal)
+                self.assertEqual(client.progress.call_args.kwargs['data'], {'activity': ACTIVITY})
                 self.assertEqual(execution._hints, {})
+                self.assertTrue(any('execution progress pending' in line for line in logs))
 
     def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
@@ -744,11 +842,250 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 # The ended wait was cleared on the exceptional exit so receipt
                 # delivery never publishes router-input-unknown after cancellation.
                 self.assertEqual(execution._hints, {'waitingReason': None})
+                clear_seq = execution._hint_seqs['waitingReason']
                 receipt = execution.receipt(claim, {'status': 'cancelled', 'shutdownConfirmed': True},
                                             execution.directory)
                 self.assertTrue(deliver_receipt(
                     client, receipt, execution.directory, nonce='n' * 64,
                     flush_hints=execution._flush_delivery_hints))
                 self.assertEqual(client.progress.call_count, 1)
-                self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': None})
+                self.assertEqual(client.progress.call_args.kwargs['data'],
+                                 {'waitingReason': None, 'waitingReasonSeq': clear_seq})
                 client.submit_result.assert_called_once()
+
+    def test_wait_clearing_and_the_cancelled_receipt_never_wait_for_a_suspended_progress(self):
+        # A gated fake client really blocks the flusher thread inside the
+        # progress RPC: recording and clearing the wait hint, and writing the
+        # durable cancelled receipt, must all complete while it hangs; only the
+        # delivery below waits for the transport, and its clear hint precedes
+        # the submitted result.
+        for stage in ('prepare', 'collect'):
+            with self.subTest(stage=stage):
+                client = mock.Mock()
+                entered, release = threading.Event(), threading.Event()
+                calls = []
+                def progress(*_args, **kwargs):
+                    calls.append(('progress', kwargs.get('data')))
+                    if client.progress.call_count == 1:
+                        entered.set()
+                        if not release.wait(5):
+                            raise RuntimeError('gated progress was never released')
+                    return {}
+                client.progress.side_effect = progress
+                def submit_result(*_args):
+                    calls.append(('result', None))
+                    return {}
+                client.submit_result.side_effect = submit_result
+                client.call.return_value = {'harness': {'harness': 'codex', 'status': 'ready'}}
+                execution, claim = self.budget_execution(client, suffix=f'-gated-{stage}')
+                control = execution.control
+                def cancel_while_waiting(_timeout):
+                    control.cancel_view = {'cancelRequested': True, 'stopInitiator': 'host'}
+                handle = SimpleNamespace(wait=lambda timeout=None: 0, grace_deadline=None,
+                                         force_stop_requested=False, result=None,
+                                         live_endpoint=None, stop_initiator=None,
+                                         cancel_requested=False, model_responded=False)
+                unknown_err = BoardError('router-input-unknown', 'cannot read Router input')
+                prepare_result = (SimpleNamespace(available=True, error=unknown_err) if stage == 'prepare'
+                                  else SimpleNamespace(available=True, error=None))
+                execution.hint(waitingReason={'code': 'router-input-unknown', 'params': {}})
+                execution._flusher.start()
+                try:
+                    self.assertTrue(entered.wait(2))
+                    with mock.patch.object(control, 'wait', side_effect=cancel_while_waiting), \
+                         mock.patch.object(entry.role_seam, 'worker_executor', return_value=object()), \
+                         mock.patch.object(entry.role_seam, 'prepare_worker_run', return_value=prepare_result), \
+                         mock.patch.object(entry.role_seam, 'worker_start', return_value=handle), \
+                         mock.patch.object(entry.role_seam, 'worker_collect', side_effect=unknown_err), \
+                         mock.patch('hey_my_buddy.install.runtime.resolve_runtime', return_value=object()):
+                        receipt = execution.execute()
+                    # The durable cancelled receipt exists while the RPC still hangs.
+                    self.assertEqual(receipt['report']['status'], 'cancelled')
+                    self.assertEqual(read_execution_receipt(execution.directory), receipt)
+                    self.assertEqual([call[0] for call in calls], ['progress'])
+                    with execution._hint_lock:
+                        clear_seq = execution._hint_seqs['waitingReason']
+                    self.assertEqual(execution._hints, {'waitingReason': None})
+                    delivered = []
+                    def deliver():
+                        delivered.append(deliver_receipt(
+                            client, receipt, execution.directory, nonce='n' * 64,
+                            flush_hints=execution._flush_delivery_hints))
+                    delivery = threading.Thread(target=deliver, daemon=True)
+                    delivery.start()
+                    time.sleep(0.3)
+                    # Delivery holds at the suspended transport, not before it.
+                    self.assertEqual([call[0] for call in calls], ['progress'])
+                    release.set()
+                    delivery.join(5)
+                    self.assertFalse(delivery.is_alive())
+                    self.assertEqual(delivered, [True])
+                    result_at = calls.index(('result', None))
+                    progresses = [index for index, call in enumerate(calls[:result_at])
+                                  if call[0] == 'progress']
+                    self.assertEqual(calls[progresses[-1]][1],
+                                     {'waitingReason': None, 'waitingReasonSeq': clear_seq})
+                finally:
+                    release.set()
+                    execution.control.stop()
+                    execution._flusher.stop()
+
+    def test_the_control_thread_applies_a_native_stop_while_progress_is_suspended(self):
+        client = mock.Mock()
+        entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+        def progress(*_args, **_kwargs):
+            if client.progress.call_count == 1:
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError('gated progress was never released')
+            return {}
+        client.progress.side_effect = progress
+        execution, _claim = self.budget_execution(client, suffix='-stop')
+        control = execution.control
+        handle = SimpleNamespace(live_endpoint=None)
+        execution.hint(activity=ACTIVITY)
+        execution._flusher.start()
+        control.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            control.attach(handle, object())
+            execution.request_stop('host', None)
+            # The stop reaches the native handle within one control cycle even
+            # though the flusher is still inside the suspended RPC.
+            with mock.patch.object(entry.role_seam, 'worker_stop',
+                                   side_effect=lambda *_args, **_kwargs: stopped.set()) as native_stop:
+                self.assertTrue(stopped.wait(2))
+                native_stop.assert_called_once()
+        finally:
+            release.set()
+            control.stop()
+            execution._flusher.stop()
+        control.join(2)
+        self.assertFalse(control.is_alive())
+
+    def test_repeated_budget_wake_hints_advance_the_sequence(self):
+        client = mock.Mock()
+        execution, claim = self.budget_execution(client)
+        def start():
+            # begin() recorded the first wake; the unchanged second wake still
+            # allocates the next sequence, so the service re-wakes its budget
+            # observation instead of reading it as an idempotent repeat.
+            execution.hint(waitingReason=None)
+            self.assertEqual(execution._hint_seqs['waitingReason'], 2)
+            self.assertTrue(execution._flusher._wake.is_set())
+        receipt = self.execute_budget(execution, claim, start)
+        self.assertEqual(receipt['report']['status'], 'ok')
+        self.assertTrue(execution.flush_hints())
+        self.assertEqual(client.progress.call_args.kwargs['data'],
+                         {'waitingReason': None, 'waitingReasonSeq': 2})
+
+    def test_a_late_stop_after_native_completion_retires_the_handle(self):
+        client = mock.Mock()
+        execution, claim = self.budget_execution(client, suffix='-retired')
+        control = execution.control
+        stops = []
+        handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
+                           result=None, evidence_retention_failure=None, model_responded=False,
+                           live_endpoint=None)
+        handle.wait.return_value = 0
+        with mock.patch('hey_my_buddy.install.runtime.resolve_runtime', return_value={"identity": "fixture"}), \
+             mock.patch.object(entry.role_seam, 'worker_executor', return_value=object()), \
+             mock.patch.object(entry.role_seam, 'prepare_worker_run',
+                               return_value=SimpleNamespace(available=True, error=None)), \
+             mock.patch.object(entry.role_seam, 'worker_start', return_value=handle), \
+             mock.patch.object(entry.role_seam, 'worker_collect',
+                               return_value=AdapterOutcome('ok', shutdown_confirmed=True)), \
+             mock.patch.object(entry.role_seam, 'worker_stop',
+                               side_effect=lambda *_args, **_kwargs: stops.append('stop')), \
+             mock.patch.object(entry.role_seam, 'worker_cancel',
+                               side_effect=lambda *_args, **_kwargs: stops.append('cancel')):
+            control.start()
+            try:
+                receipt = execution._execute_selected(
+                    claim, claim['task'], claim['task']['spec'], claim['attempt'],
+                    execution.directory, {'preflightControl': control})
+                self.assertEqual(receipt['report']['status'], 'ok')
+                # The completed native work retired the handle atomically; a
+                # late stop request can no longer cancel the settled run.
+                self.assertIsNone(control.handle)
+                execution.request_stop('host', None, force=True)
+                time.sleep(0.5)
+                self.assertEqual(stops, [])
+                self.assertIsNone(control.fatal)
+            finally:
+                control.stop()
+        control.join(2)
+        self.assertFalse(control.is_alive())
+
+    def test_retirement_waits_for_inflight_stop_and_fences_late_force(self):
+        execution = self.execution
+        control = execution.control
+        old = SimpleNamespace(live_endpoint=None)
+        replacement = SimpleNamespace(live_endpoint=None)
+        executor = object()
+        stopping, release_stop, retire_attempted = (threading.Event() for _ in range(3))
+        applied_force = threading.Event()
+        contended = []
+        lock = control._lock
+        retire = threading.Thread(target=control.detach, daemon=True)
+
+        class ObserveRetirementLock:
+            def __enter__(self):
+                if threading.current_thread() is not retire:
+                    lock.acquire()
+                    return
+                acquired = lock.acquire(blocking=False)
+                contended.append(not acquired)
+                retire_attempted.set()
+                if not acquired:
+                    lock.acquire()
+
+            def __exit__(self, *_args):
+                lock.release()
+
+        def stop(*_args, **_kwargs):
+            stopping.set()
+            if not release_stop.wait(5):
+                raise RuntimeError('native stop stayed gated')
+
+        with mock.patch.object(control, '_lock', ObserveRetirementLock()), \
+             mock.patch.object(entry.role_seam, 'worker_stop', side_effect=stop) as native_stop, \
+             mock.patch.object(entry.role_seam, 'worker_cancel',
+                               side_effect=lambda *_: applied_force.set()) as native_cancel:
+            control.attach(old, executor)
+            control.start()
+            try:
+                execution.request_stop('host', None)
+                self.assertTrue(stopping.wait(2))
+                retire.start()
+                self.assertTrue(retire_attempted.wait(2))
+                self.assertEqual(contended, [True])
+                release_stop.set()
+                retire.join(2)
+                self.assertFalse(retire.is_alive())
+                self.assertIsNone(control.handle)
+                execution.request_stop('host', None, force=True)
+                # Prove the control loop processes the force request against
+                # the next handle, so an absent call on the old one is observable.
+                control.attach(replacement, executor)
+                self.assertTrue(applied_force.wait(2))
+                native_stop.assert_called_once_with(executor, old, stop_initiator='host', grace_deadline=None)
+                native_cancel.assert_called_once_with(executor, replacement)
+                self.assertIsNone(control.fatal)
+            finally:
+                release_stop.set()
+                control.stop()
+                control.join(2)
+                if retire.ident is not None:
+                    retire.join(2)
+
+    def test_an_older_activity_observation_never_overwrites_a_newer_pending_one(self):
+        newer = {'phase': 'tool-running', 'eventSeq': 5}
+        older = {'phase': 'waiting-model', 'eventSeq': 2}
+        self.execution.hint(activity=newer)
+        self.execution.hint(activity=older)
+        self.assertEqual(self.execution._hints, {'activity': newer})
+        # An identical repeat leaves the pending value and its sequence alone.
+        sequence = self.execution._hint_seqs['activity']
+        self.execution.hint(activity=dict(newer))
+        self.assertEqual(self.execution._hint_seqs['activity'], sequence)

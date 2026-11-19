@@ -245,7 +245,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         activity = {'phase': 'tool-running', 'observedAt': '2026-10-16T00:00:00Z', 'eventSeq': 1}
         progress = {**actor, 'processIdentity': IDENTITY,
-                    'data': {'activity': activity, 'waitingReason': None}}
+                    'data': {'activity': activity, 'waitingReason': None, 'waitingReasonSeq': 1}}
         self.assertEqual(board.call('execution_progress', progress)['activity'], 'recorded')
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
             self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
@@ -309,7 +309,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                                       ('disconnect', 'execution-connection-unknown')):
             with self.subTest(mode=mode):
                 board, client, task, _, actor = self.claimed()
-                payload = {**actor, 'data': {'waitingReason': waiting}}
+                payload = {**actor, 'data': {'waitingReason': waiting, 'waitingReasonSeq': 1}}
                 board.call('execution_progress', payload)
                 self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
                 if mode == 'restart':
@@ -342,7 +342,8 @@ class InterruptionRecoveryTests(BoardTestCase):
         for order in ('reconnect-then-receipt', 'receipt-then-reconnect'):
             with self.subTest(order=order):
                 board, client, task, _, actor = self.claimed()
-                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting}})
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 1}})
                 self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
                 reference = publish_result_receipt(board.directory, {
                     **actor, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'text': 'done'}})
@@ -441,7 +442,8 @@ class InterruptionRecoveryTests(BoardTestCase):
                 head = board.store.head()
                 # A wait recorded while the connection is unresolved changes no
                 # connection fact and appends its own event.
-                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting}})
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 1}})
                 self.assertEqual(board.store.head(), head + 1)
                 with board.store.db.read() as db:
                     attempt = board.store._attempt_row(db, actor['attemptId'])
@@ -449,15 +451,102 @@ class InterruptionRecoveryTests(BoardTestCase):
                 self.assertEqual(attempt['connection_reason'], expected_reason)
                 self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
                 # Clearing the wait is the same honest row update.
-                board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                                    'waitingReasonSeq': 2}})
                 with board.store.db.read() as db:
                     attempt = board.store._attempt_row(db, actor['attemptId'])
                 self.assertIsNone(attempt['waiting_reason'])
                 self.assertEqual(attempt['connection_reason'], expected_reason)
                 # After a reconnect the last recorded wait reappears unaided.
-                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting}})
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 3}})
                 self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
                 self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+
+    def test_waiting_hints_require_their_paired_sequence(self):
+        board, _, _, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for data in ({'waitingReason': waiting},
+                     {'waitingReasonSeq': 1},
+                     {'waitingReason': None, 'waitingReasonSeq': True},
+                     {'waitingReason': None, 'waitingReasonSeq': 0},
+                     {'waitingReason': waiting, 'waitingReasonSeq': '1'},
+                     {'waitingReason': None, 'waitingReasonSeq': 1.5},
+                     {'waitingReason': waiting, 'waitingReasonSeq': None}):
+            with self.subTest(data=data), self.assertRaises(BoardError) as caught:
+                board.call('execution_progress', {**actor, 'data': data})
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 0))
+
+    def test_waiting_hint_sequences_advance_monotonically_and_ignore_old_ones(self):
+        board, client, task, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+
+        def hint(reason, seq):
+            return board.call('execution_progress', {**actor, 'data': {
+                'waitingReason': reason, 'waitingReasonSeq': seq}})
+
+        head = board.store.head()
+        hint(waiting, 2)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']),
+                         ('router-input-unknown', 2))
+        self.assertEqual(board.store.head(), head + 1)
+        # An unchanged confirmation with a newer sequence advances the barrier
+        # without a second event: the budget observation's wake fact.
+        head = board.store.head()
+        hint(None, 5)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 5))
+        self.assertEqual(board.store.head(), head + 1)
+        head = board.store.head()
+        hint(None, 6)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 6))
+        self.assertEqual(board.store.head(), head)
+        # A late replay of an older dispatch never rewrites the cleared wait.
+        self.assertTrue(hint(waiting, 5)['recorded'])
+        self.assertTrue(hint(waiting, 1)['recorded'])
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 6))
+        self.assertEqual(board.store.head(), head)
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+
+    def test_an_out_of_order_clear_keeps_a_late_old_waiting_hint_from_reviving_the_wait(self):
+        from support import publish_result_receipt
+
+        board, client, task, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        # The higher-sequence clear lands first; the older in-flight wait replay
+        # of a dispatch_uncertain redelivery arrives afterwards.
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                             'waitingReasonSeq': 3}})
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                             'waitingReasonSeq': 4}})
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                             'waitingReasonSeq': 3}})
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 4))
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+        # After the receipt is received no waiting hint is accepted at all, so
+        # an even later replay cannot revive the wait either.
+        reference = publish_result_receipt(board.directory, {
+            **actor, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'text': 'done'}})
+        self.assertEqual(board.call('execution_result', reference), {'received': True})
+        self.assertTrue(board.call('execution_progress', {**actor, 'data': {
+            'waitingReason': waiting, 'waitingReasonSeq': 9}})['recorded'])
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 4))
 
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
@@ -479,7 +568,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(view['selectedAttempt']['ownership'], 'uncertain')
         self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
         board.call('execution_progress', {**actor, 'data': {'waitingReason':
-                   {'code': 'router-input-unknown', 'params': {}}}})
+                   {'code': 'router-input-unknown', 'params': {}}, 'waitingReasonSeq': 1}})
         board.store.execution_connection(actor['attemptId'], connected=True)
         self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
 
@@ -645,7 +734,8 @@ class InterruptionRecoveryTests(BoardTestCase):
         scheduler = Mock()
         board.service.execution_scheduler = scheduler
         head = board.store.head()
-        response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
+        response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                                       'waitingReasonSeq': 1}})
         self.assertTrue(response['recorded'])
         self.assertEqual(board.store.head(), head)
         scheduler.wake_attempt.assert_called_once_with(actor['attemptId'])
@@ -1120,7 +1210,8 @@ class QueueReasonProjectionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE attempts SET probe_unknown=1 WHERE attempt_id=?", (actor["attemptId"],))
         self.assert_views(board, run_id, "harness-probe-unknown", lead_id=lead_id)
-        board.call("execution_progress", {**actor, "data": {"waitingReason": waiting}})
+        board.call("execution_progress", {**actor, "data": {"waitingReason": waiting,
+                                                             "waitingReasonSeq": 1}})
         self.assert_views(board, run_id, "router-input-unknown", lead_id=lead_id)
         # A disconnect outranks both while it lasts and returns to the wait.
         self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=False))

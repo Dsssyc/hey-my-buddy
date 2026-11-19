@@ -191,6 +191,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     connection_reason TEXT CHECK (connection_reason IN ('attempt-uncertain-after-restart','execution-connection-unknown')),
     probe_unknown     INTEGER NOT NULL DEFAULT 0 CHECK (probe_unknown IN (0,1)),
     waiting_reason    TEXT CHECK (waiting_reason IN ('router-input-unknown')),
+    -- The monotone barrier of the execution's waiting hints: every hint carries
+    -- a per-attempt sequence, and only a higher one rewrites waiting_reason,
+    -- so a late replay of an older dispatch cannot revive a cleared wait.
+    waiting_hint_seq  INTEGER NOT NULL DEFAULT 0 CHECK (waiting_hint_seq >= 0),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
     -- Frozen model-service identity (harness/provider/model, no effort dimension).

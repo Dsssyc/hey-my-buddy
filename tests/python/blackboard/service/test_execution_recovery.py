@@ -556,8 +556,15 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 # Publish as the execution does: an authenticated progress hint
                 # wakes the observer even when waitingReason is unchanged.
                 startup = json.loads(native_path(budget.parent / "execution-start.json").read_bytes())
+                store = BoardStore(self.directory)
+                try:
+                    with store.db.read() as db:
+                        waiting_seq = db.execute("SELECT waiting_hint_seq FROM attempts WHERE attempt_id=?",
+                                                 (attempt["attemptId"],)).fetchone()["waiting_hint_seq"]
+                finally:
+                    store.db.close()
                 self.client().progress(attempt["attemptId"], attempt["generation"], startup["nonce"],
-                                       data={"waitingReason": None})
+                                       data={"waitingReason": None, "waitingReasonSeq": waiting_seq + 1})
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)
                 self.assertIsNotNone(forced)

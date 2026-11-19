@@ -432,7 +432,8 @@ class _ActivityWriter:
         self.last_payload: dict | None = None
 
     def write(self, evidence: TurnEvidence, phase: str, tool: str | None = None, *,
-              model_turns_base: int = 0, tool_calls: int | None = None) -> None:
+              model_turns_base: int = 0, tool_calls: int | None = None,
+              event_seq_base: int = 0) -> None:
         if evidence is None:
             return
         state, tick, now = self.state, time.monotonic(), utc_now()
@@ -442,7 +443,11 @@ class _ActivityWriter:
             state["toolName"] = tool
         if state.get("phase") == phase and tick - state.get("lastWrite", 0) < 2:
             return
-        payload = {"phase": phase, "observedAt": now, "eventSeq": evidence.event_seq,
+        # A correction round's own TurnEvidence restarts its per-turn count, so
+        # the attempt's accumulated events offset it: the published sequence
+        # stays strictly monotone across every round of the same attempt and an
+        # earlier round's later events can never look newer than this round's.
+        payload = {"phase": phase, "observedAt": now, "eventSeq": event_seq_base + evidence.event_seq,
                    "nativeSessionId": evidence.thread_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": evidence.model_turns + model_turns_base,
                               "toolCalls": evidence.tool_calls if tool_calls is None else tool_calls}}
@@ -1484,6 +1489,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
     """
     input_text = request.input_text
     round_index = 0
+    event_seq_base = 0
     while True:
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
@@ -1522,7 +1528,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
             chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
         else:
 
-            def carrier(message: dict, _evidence=evidence, _turn_id=turn_id, _round=round_index) -> None:
+            def carrier(message: dict, _evidence=evidence, _turn_id=turn_id, _round=round_index,
+                        _base=event_seq_base) -> None:
                 params = message.get("params")
                 if not isinstance(params, dict) or params.get("threadId") != thread_id \
                         or params.get("turnId") not in (None, _turn_id):
@@ -1533,7 +1540,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                 observed = _evidence.observe(message)
                 if observed:
                     activity.write(_evidence, observed[0], observed[1], model_turns_base=_round,
-                                   tool_calls=chain.projector.tool_calls)
+                                   tool_calls=chain.projector.tool_calls, event_seq_base=_base)
             chain.bind(carrier)
         if chain.facts.dirty:
             connection.after_pump()
@@ -1565,6 +1572,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
             state.correction_count += 1
             input_text = feedback.input_text
             state.rounds_complete = False
+            # The finished round's events are the next round's sequence offset.
+            event_seq_base = state.event_count
             round_index += 1
             continue
         break
