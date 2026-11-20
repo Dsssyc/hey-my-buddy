@@ -14,14 +14,13 @@ export function ExecutionTabs({ routingMode, taskText, checkoutRoot, children, c
   active: boolean; tab: DetailTab; onTab: (tab: DetailTab) => void;
 }) {
   const { t } = useTranslation("taskDetail");
-  // The session coverage control lives at the right end of this tab row; the
-  // session panel, mounted only under its own tab, is the one that knows it.
+  // The session panel supplies the summary and coverage at the end of the tab row.
   const [tabsSide, setTabsSide] = useState<HTMLSpanElement | null>(null);
   return <Tabs data-slot="detail-tabs" value={tab} onValueChange={value => onTab(value as DetailTab)} className="min-h-0 min-w-0 flex-1 gap-0">
-    <TabsList variant="line" aria-label={t("tabs.label")} className="h-8 w-full shrink-0 justify-start gap-6 border-0 border-b border-line2 px-6">
-      <TabsTrigger value="overview" className="flex-none text-xs text-ink">{t("tabs.overview")}</TabsTrigger>
-      <TabsTrigger value="session" className="flex-none text-xs text-ink">{t("sessionView.title")}</TabsTrigger>
-      <span ref={setTabsSide} data-slot="detail-tabs-side" className="ml-auto inline-flex items-center"/>
+    <TabsList variant="line" aria-label={t("tabs.label")} className="h-[34px] w-full shrink-0 justify-start gap-6 border-0 border-b border-line2 px-6 group-data-[orientation=horizontal]/tabs:h-[34px] @max-[440px]:gap-3">
+      <TabsTrigger value="overview" className="flex-none text-xs text-ink group-data-[variant=line]/tabs-list:h-full">{t("tabs.overview")}</TabsTrigger>
+      <TabsTrigger value="session" className="flex-none text-xs text-ink group-data-[variant=line]/tabs-list:h-full">{t("sessionView.title")}</TabsTrigger>
+      <span ref={setTabsSide} data-slot="detail-tabs-side" className="ml-auto inline-flex min-w-0 items-center gap-2"/>
     </TabsList>
     <TabsPrimitive.Content value="overview" forceMount className="view-presence flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
     <TabsPrimitive.Content value="session" className="view-presence flex min-h-0 min-w-0 flex-1 flex-col pt-4 outline-none">

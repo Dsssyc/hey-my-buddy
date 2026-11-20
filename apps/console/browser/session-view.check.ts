@@ -60,6 +60,9 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       expect(gap).toBeLessThan(20);
       const coverageButton = tabs(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true });
       await expect(coverageButton).toBeVisible();
+      const summary = tabsList.locator('[data-slot="session-summary"]');
+      await expect(summary).toHaveText(language === "zh" ? /\d+ 次调用 · \d+ 条消息/ : /\d+ calls · \d+ messages/);
+      await expect(coverageButton.locator("svg")).toHaveAttribute("aria-hidden", "true");
       await overviewTab(page, language).click();
       await expect(coverageButton).toHaveCount(0);
       await sessionTab(page, language).click();
@@ -100,7 +103,21 @@ test.describe("session content and navigation", () => {
 
     await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
     await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
-    await panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"] [data-slot="trace-collapsible-trigger"]').first().click();
+    const group = panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"]');
+    const groupTrigger = group.locator('[data-slot="trace-collapsible-trigger"]').first();
+    const hoverColor = await groupTrigger.evaluate(node => {
+      const probe = node.appendChild(document.createElement("span"));
+      probe.style.backgroundColor = "var(--selected-row)";
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    await groupTrigger.hover();
+    await expect(groupTrigger).toHaveCSS("background-color", hoverColor);
+    await groupTrigger.click();
+    await expect(groupTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect(groupTrigger).toHaveCSS("background-color", hoverColor);
+    await expect(group.locator('[data-slot="session-call-group"]')).toHaveCSS("border-left-width", "1px");
     const failed = await expandTool(page, "codex-failed-command");
     await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
     await expect(failed).toContainText("command not found");

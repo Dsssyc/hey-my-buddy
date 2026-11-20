@@ -59,14 +59,14 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
   const output = [...block.segments.values()].join("");
   const result = tool.rawOutput !== null && typeof tool.rawOutput === "object" && !Array.isArray(tool.rawOutput) ? Object.entries(tool.rawOutput).filter(([, value]) => value !== null) : tool.rawOutput == null ? [] : [[t("sessionView.resultValue"), tool.rawOutput] as [string, unknown]];
   return <TraceCollapsible open={open} onOpenChange={value => expansion.toggle(key, value)} data-session-tool={key}>
-    <TraceCollapsibleTrigger className="h-[30px] w-full rounded-none">
-      <TraceLine className="w-full gap-2 text-[13px]">
+    <TraceCollapsibleTrigger className="h-[32px] w-full bg-transparent px-2 hover:bg-selected-row focus-visible:ring-inset">
+      <TraceLine className="w-full gap-2">
         <TraceIcon><Icon size={13}/></TraceIcon>
-        <TraceTitle ref={titleRef} className="flex-1 text-left font-mono text-ink">{title}</TraceTitle>
+        <TraceTitle ref={titleRef} className="flex-1 text-left font-mono text-[12px] text-ink">{title}</TraceTitle>
         <CallStatus status={tool.status}/><Disclosure open={open} className="size-3.5"/>
       </TraceLine>
     </TraceCollapsibleTrigger>
-    <TraceCollapsibleContent className="mt-0 mb-2 ml-6 border-0 pr-0 pl-0 text-[12px]">
+    <TraceCollapsibleContent className="mt-0 mb-2 ml-6 border-t border-l-2 border-line border-l-line2 bg-sunk px-3.5 py-2.5 text-[12px]">
       {tool.kind === "execute" && truncated && typeof input.command === "string" && <div className="mb-2 whitespace-pre-wrap wrap-anywhere font-mono text-ink">$ {unwrappedCommand(input.command)}</div>}
       <ToolFields fields={fields} checkoutRoot={checkoutRoot}/>
       {output ? <Output text={output} id={`${key}:output`} expansion={expansion} language={tool.kind === "execute" ? "ansi" : "text"}/> : <ToolFields fields={result} checkoutRoot={checkoutRoot} result/>}

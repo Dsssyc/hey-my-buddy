@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next";
-import { ChevronRight, Brain, Minus } from "lucide-react";
+import { ChevronDown, ChevronRight, Brain, Minus } from "lucide-react";
 import { Message, MessageContent } from "../components/ui/message";
 import { Marker, MarkerContent } from "../components/ui/marker";
-import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceLine, TraceIcon } from "../components/ui/trace";
+import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } from "../components/ui/trace";
 import { Disclosure } from "../components/ui/collapsible";
 import { CodeBlockCopyButton } from "../components/ui/code-block";
 import { MessageResponse } from "./Markdown";
@@ -21,7 +21,11 @@ export function CallSummary({ group }: { group: CallGroup }) {
     markers.set(type, (markers.get(type) ?? 0) + 1);
   }
   for (const [type, count] of markers) counts.push(t("sessionView.markerCount", { name: markerName(type, t), count }));
-  return <><span className="min-w-0 flex-1 text-left wrap-anywhere">{counts.join(t("sessionView.groupSeparator"))}</span>{group.failed > 0 && <span className="shrink-0 text-fail">{t("sessionView.failures", { count: group.failed })}</span>}<CallStatus status={groupStatus(group)}/></>;
+  return <>
+    <span className="min-w-0 flex-1 text-left wrap-anywhere">{counts.join(t("sessionView.groupSeparator"))}</span>
+    {group.failed > 0 && <span className="shrink-0 bg-fail-wash px-1.5 py-0.5 text-xs font-medium tabular-nums text-fail">{t("sessionView.failures", { count: group.failed })}</span>}
+    <CallStatus status={groupStatus(group)}/>
+  </>;
 }
 export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routingMode }: { rows: SessionRow[]; expansion: Expansion; taskText: string; checkoutRoot: string; routingMode?: "fast" | "review" | null }) {
   const { t } = useTranslation("taskDetail");
@@ -30,15 +34,19 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
       const { key } = row;
       const open = expansion.expanded.has(key);
       let body;
-      if (row.type === "calls") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
-        <TraceCollapsibleTrigger className="min-h-[30px] w-full gap-2 rounded-none text-[13px] text-ink2">
-          <ChevronRight size={13} aria-hidden className={open ? "shrink-0 rotate-90" : "shrink-0"}/>
-          <span className="flex shrink-0 gap-1" aria-hidden>{Object.keys(row.counts).map(kind => { const Icon = kindIcon(kind as ToolKind); return <Icon key={kind} size={13}/>; })}</span>
+      if (row.type === "calls") body = <TraceCollapsible className="border-y border-line" open={open} onOpenChange={next => expansion.toggle(key, next)}>
+        <TraceCollapsibleTrigger className="min-h-[36px] w-full gap-2.5 bg-transparent px-2.5 py-1.5 text-[13px] text-ink2 hover:bg-selected-row hover:text-ink focus-visible:ring-inset">
+          <Disclosure open={open} className="size-[13px]"/>
+          <span className="inline-flex shrink-0 items-center gap-1 border border-line bg-card px-1.5 py-0.5 text-ink3" aria-hidden>{Object.keys(row.counts).map(kind => { const Icon = kindIcon(kind as ToolKind); return <Icon key={kind} size={13}/>; })}</span>
           <CallSummary group={row}/>
         </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent className="mt-0 mb-0 ml-1.5 pl-4 pr-0"><div data-slot="session-call-group">{row.items.map(item => item.type === "tool" ? <ToolRow key={item.key} block={item} expansion={expansion} checkoutRoot={checkoutRoot}/> : <Marker key={item.key} className="py-1 text-xs text-ink3"><MarkerContent>{markerName(item.update._meta?.nativeType, t)}</MarkerContent></Marker>)}</div></TraceCollapsibleContent>
-      </TraceCollapsible></Trace>;
-      else if (row.type === "tool") body = <Trace><ToolRow block={row.tool} markers={row.markers} expansion={expansion} checkoutRoot={checkoutRoot}/></Trace>;
+        <TraceCollapsibleContent className="m-0 border-0 p-0">
+          <div data-slot="session-call-group" className="ml-[17px] border-l border-line2 py-0.5 pl-3.5 [&>*]:border-b [&>*]:border-line [&>*:last-child]:border-b-0">
+            {row.items.map(item => item.type === "tool" ? <ToolRow key={item.key} block={item} expansion={expansion} checkoutRoot={checkoutRoot}/> : <Marker key={item.key} className="px-2 py-1 text-xs text-ink3"><MarkerContent>{markerName(item.update._meta?.nativeType, t)}</MarkerContent></Marker>)}
+          </div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>;
+      else if (row.type === "tool") body = <div className="border-y border-line"><ToolRow block={row.tool} markers={row.markers} expansion={expansion} checkoutRoot={checkoutRoot}/></div>;
       else if (row.type === "blackboard") body = <div className="-my-3"><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
         <TraceCollapsibleTrigger className="min-h-[24px] rounded-none text-xs text-ink3"><Minus size={13} aria-hidden/>{t(`sessionView.blackboard.${row.action}`)}</TraceCollapsibleTrigger>
         <TraceCollapsibleContent className="border-0"><Output text={JSON.stringify({ input: row.tool.update.rawInput, result: row.tool.update.rawOutput, output: [...row.tool.segments.values()].join("") }, null, 2)} id={`${key}:detail`} expansion={expansion} language="json"/></TraceCollapsibleContent>
@@ -49,16 +57,31 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
         const text = row.message.update.content.text;
         if (row.type === "task") {
           const excerpt = taskExcerpt(taskText);
-          body = <div data-slot="session-task" className="rounded-md bg-sunk px-4 py-3">
-            <p className="mb-1 text-xs text-ink3">{t("sessionView.task")}</p>
-            <h3 className="text-[14px] font-semibold wrap-anywhere">{routingMode !== undefined ? t(`sessionView.routingTask.${routingMode === "review" ? "review" : "fast"}`) : excerpt.title}</h3>
-            <div className="mt-1 line-clamp-2 text-[13px] leading-[1.65] text-ink2 wrap-anywhere"><MessageResponse>{routingMode !== undefined ? [excerpt.title, excerpt.opening].filter(Boolean).join("\n") : excerpt.opening}</MessageResponse></div>
-            <TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><div className="mt-2 flex items-center justify-between gap-3 border-t border-line pt-2">
-              <span className="text-xs tabular-nums text-ink3">{t("sessionView.promptLength", { count: [...text].length })}</span>
-              <TraceCollapsibleTrigger className="px-1 py-0.5 text-xs"><Disclosure open={open} className="size-3"/>{t(open ? "sessionView.hidePrompt" : "sessionView.fullPrompt")}</TraceCollapsibleTrigger>
-            </div><TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={text} id={`${key}:prompt`} expansion={expansion} preview={false}/></TraceCollapsibleContent></TraceCollapsible>
-          </div>;
-        } else if (row.type === "reasoning") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><TraceCollapsibleTrigger className="text-xs"><TraceLine><TraceIcon><Brain size={13}/></TraceIcon>{t("sessionView.reasoning")}</TraceLine></TraceCollapsibleTrigger><TraceCollapsibleContent className="text-sm"><MessageResponse>{text}</MessageResponse></TraceCollapsibleContent></TraceCollapsible></Trace>;
+          body = <TraceCollapsible data-slot="session-task" className="overflow-hidden rounded-md border border-line border-l-2 border-l-line2 bg-card" open={open} onOpenChange={next => expansion.toggle(key, next)}>
+            <div className="flex items-center gap-2.5 border-b border-line bg-sunk px-4 py-2 text-[11.5px] text-ink3">
+              <span className="font-medium text-ink2">{t("sessionView.task")}</span>
+              <span className="font-mono text-[11px] tabular-nums text-ink3">{t("sessionView.promptLength", { count: [...text].length })}</span>
+              <TraceCollapsibleTrigger className="ml-auto px-1.5 py-0.5 text-[11.5px] text-ink3 hover:bg-selected-row hover:text-ink focus-visible:ring-inset">
+                {t(open ? "sessionView.hidePrompt" : "sessionView.fullPrompt")}
+                <ChevronDown aria-hidden className="size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none group-aria-expanded/trace-collapsible-trigger:rotate-180"/>
+              </TraceCollapsibleTrigger>
+            </div>
+            <div className="px-4 py-3">
+              <h3 className="text-[14px] font-semibold leading-[1.45] wrap-anywhere text-ink">{routingMode !== undefined ? t(`sessionView.routingTask.${routingMode === "review" ? "review" : "fast"}`) : excerpt.title}</h3>
+              <div className="mt-1.5 line-clamp-2 text-[13px] leading-[1.65] text-ink2 wrap-anywhere"><MessageResponse>{routingMode !== undefined ? [excerpt.title, excerpt.opening].filter(Boolean).join("\n") : excerpt.opening}</MessageResponse></div>
+            </div>
+            <TraceCollapsibleContent className="m-0 border-l-0 border-t border-line bg-sunk px-4 py-3">
+              <Output text={text} id={`${key}:prompt`} expansion={expansion} preview={false}/>
+            </TraceCollapsibleContent>
+          </TraceCollapsible>;
+        } else if (row.type === "reasoning") body = <TraceCollapsible className="border-l-2 border-line pl-3.5" open={open} onOpenChange={next => expansion.toggle(key, next)}>
+          <TraceCollapsibleTrigger className="gap-1.5 text-xs text-ink3 hover:bg-transparent hover:text-ink2">
+            <Disclosure open={open} className="size-3"/>
+            <Brain aria-hidden className="size-[13px] shrink-0"/>
+            {t("sessionView.reasoning")}
+          </TraceCollapsibleTrigger>
+          <TraceCollapsibleContent className="m-0 border-0 p-0 pt-1.5 text-[13px] leading-[1.7] text-ink3"><MessageResponse>{text}</MessageResponse></TraceCollapsibleContent>
+        </TraceCollapsible>;
         else if (row.type === "marker") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
           <TraceCollapsibleTrigger className="min-h-[30px] text-xs"><ChevronRight size={13} aria-hidden className={open ? "rotate-90" : undefined}/>{markerName(row.message.update._meta?.nativeType, t)}</TraceCollapsibleTrigger>
           <TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={markerBody(row.message)} id={`${key}:body`} expansion={expansion} language={row.message.update._meta?.nativeType === "turn/diff/updated" ? "diff" : "text"}/></TraceCollapsibleContent>

@@ -2,7 +2,7 @@ import { AliasTag, useNamedBuddy, accessibleBuddyName } from "../components/Alia
 import { useContext, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode, Ref } from "react";
-import { ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
@@ -72,7 +72,8 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
   if (display.tab !== tab) setDisplay({ tab, open: expanded });
   const show = (open: boolean) => setDisplay({ tab, open });
   const timelineId = useId();
-  const thumbnail = useViewport<HTMLButtonElement>(300);
+  const [timelineToggle, setTimelineToggle] = useState<HTMLButtonElement | null>(null);
+  const thumbnail = useViewport<HTMLSpanElement>(300);
   const links = useContext(DetailLinks)!;
   const focusedKey = links.origin && stepForItem(steps, links.origin, timeline) === selected ? links.origin : null;
   const { viewport, setViewport, width } = useViewport(640);
@@ -103,7 +104,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
   const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, Math.max(1, width - SLACK * 2), row.runId, viewportRef,
     steps.steps[selected]?.at ?? null, nowMs, SLACK);
   useTimelineGestures(gestureArea, ruler, zoomAt, () => zoom(0), true, {
-    element: expanded ? null : thumbnail.viewport, reveal: () => show(true),
+    element: expanded ? null : timelineToggle, reveal: () => show(true),
   });
   useEffect(() => {
     if (centered.current || !scale || !viewport) return;
@@ -171,8 +172,8 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     else if (event.key === "-") { event.preventDefault(); zoom(-1); }
     else if (event.key === "0") { event.preventDefault(); zoom(0); }
   }} className="select-none">
-    <div data-slot="step-bar" className="flex min-h-9 min-w-0 items-center gap-2 pl-1.5 pr-3 text-xs sm:pr-6">
-      <div data-slot="step-navigation" className="flex shrink-0 items-center">
+    <div data-slot="step-bar" className="flex h-[38px] min-w-0 items-stretch pl-1.5 text-xs">
+      <div data-slot="step-navigation" className="flex shrink-0 items-center border-r border-line pr-2">
         <Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.previous")} aria-disabled={selected === 0 || undefined} onClick={() => { if (selected > 0) onStep(selected); }}>
           <ChevronLeft aria-hidden="true"/>
         </Button>
@@ -181,21 +182,24 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
           <ChevronRight aria-hidden="true"/>
         </Button>
       </div>
-      <button ref={thumbnail.setViewport} type="button" data-slot="timeline-toggle" aria-expanded={expanded} aria-controls={timelineId}
+      <button ref={setTimelineToggle} type="button" data-slot="timeline-toggle" aria-expanded={expanded} aria-controls={timelineId}
         aria-label={expanded ? t("strip.hide") : input.domain ? t("strip.show") : `${t("strip.show")} · ${t("strip.empty")}`}
         onClick={() => show(!expanded)}
-        className="flex h-7 w-[clamp(200px,32cqw,420px)] max-w-[calc(100cqw-13rem)] @min-[700px]:max-w-[calc(100cqw-25rem)] shrink-0 cursor-pointer items-center justify-center overflow-hidden border-l border-line bg-sunk text-ink2 outline-none transition-colors duration-150 motion-reduce:transition-none hover:text-ink focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        {expanded ? <span className="flex min-w-0 items-center gap-1 px-2"><span className="truncate">{t("strip.hide")}</span><ChevronUp className="size-3 shrink-0" aria-hidden="true"/></span>
-          : <TimelineThumbnail input={input} width={thumbnail.width} spans={spans} events={events} steps={steps.steps} runId={row.runId}
-              selectedKey={thumbnailSelection} buddyColors={buddyColors} wait={wait} failed={isFailedRow(row)} nowMs={nowMs}/>}
+        className="group flex h-full w-[clamp(200px,32cqw,420px)] max-w-[calc(100cqw-13rem)] @min-[700px]:max-w-[calc(100cqw-25rem)] shrink-0 cursor-pointer items-center gap-2 overflow-hidden border-r border-line bg-sunk px-2.5 text-ink2 outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-selection hover:text-ink aria-expanded:bg-selection aria-expanded:text-ink aria-expanded:hover:bg-selection/80 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        <span ref={thumbnail.setViewport} className="min-w-0 flex-1 truncate">
+          {expanded ? t("strip.hide")
+            : <TimelineThumbnail input={input} width={thumbnail.width} spans={spans} events={events} steps={steps.steps} runId={row.runId}
+                selectedKey={thumbnailSelection} buddyColors={buddyColors} wait={wait} failed={isFailedRow(row)} nowMs={nowMs}/>}
+        </span>
+        <ChevronDown className="size-3 shrink-0 text-ink3 transition-[color,rotate] duration-150 motion-reduce:transition-none group-hover:text-ink group-aria-expanded:rotate-180" aria-hidden="true"/>
       </button>
-      <div data-slot="step-readout" className="flex min-w-0 flex-1 items-center gap-2 @max-[640px]:flex-wrap @max-[640px]:gap-x-2 @max-[640px]:gap-y-0">
-        <span className="shrink-0 font-medium">{title}</span>
-        {buddy && <span className="flex min-w-0 items-center text-ink2 @max-[520px]:hidden">
-          {color && <span aria-hidden="true" className="mr-1.5 size-2.5 shrink-0" style={{ backgroundColor: color }}/>}
+      <div data-slot="step-readout" className="flex min-w-0 flex-1 items-center gap-2.5 px-4 @max-[640px]:flex-wrap @max-[640px]:gap-y-0 @max-[440px]:pr-2">
+        <span className="shrink-0 font-semibold text-ink">{title}</span>
+        {buddy && <span className="flex min-w-0 items-center font-mono text-[11.5px] text-ink2 @max-[520px]:hidden">
+          {color && <span aria-hidden="true" className="mr-1.5 size-2.5 shrink-0 rounded-[2px]" style={{ backgroundColor: color }}/>}
           <span className="truncate">{modelEffort(buddy)}</span><AliasTag alias={named(buddy)?.alias}/>
         </span>}
-        {step?.at != null && <span data-slot="step-clock" className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap tabular-nums text-ink3 @max-[520px]:hidden">
+        {step?.at != null && <span data-slot="step-clock" className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap tabular-nums text-ink3 @max-[520px]:hidden">
           <span>{formatClock(step.at)}{end !== null && ` – ${formatClock(end)}`}</span>
           {step.ms !== null && <span className="text-ink">{formatDuration(step.ms, "fine")}</span>}
         </span>}
@@ -205,13 +209,13 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
       className="grid grid-rows-[0fr] overflow-hidden motion-safe:transition-[grid-template-rows] motion-safe:duration-200 data-[expanded=true]:grid-rows-[1fr]"
       data-expanded={expanded}>
       <div className="min-h-0 overflow-hidden">
-        <div ref={setGestureArea} data-slot="detail-timeline" className="relative flex" style={{ height: TIMELINE_AXIS_PX + STRIP_PX }}>
+        <div ref={setGestureArea} data-slot="detail-timeline" className="relative flex border-t border-line bg-background" style={{ height: TIMELINE_AXIS_PX + STRIP_PX + 2 }}>
             <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
               {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
-                <ZoomRuler ref={setRuler} className="bg-transparent" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
+                <ZoomRuler ref={setRuler} className="border-b border-line bg-sunk" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
                   <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
                 </ZoomRuler>
-                <div className="relative">
+                <div className="relative [&>[data-slot=timeline-track]]:border-t-0">
                   <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
                     selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection} itemLinks={links.items}
                     onOpen={(_runId, key) => links.onItem(key)} onSelect={() => {}}

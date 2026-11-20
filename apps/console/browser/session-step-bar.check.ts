@@ -25,6 +25,11 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     const panels = page.getByRole("tab", { name: session, exact: true });
     await expect(panels).toHaveAttribute("aria-selected", "true");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(bar).toHaveCSS("height", "38px");
+    await expect(toggle).toHaveCSS("height", "38px");
+    await expect(toggle).toHaveCSS("border-right-width", "1px");
+    await expect(bar.locator('[data-slot="step-navigation"]')).toHaveCSS("border-right-width", "1px");
+    await expect(page.locator('[data-slot="session-summary"]')).toHaveCount(0);
     await settle(page);
     const before = (await toggle.boundingBox())!;
     if (width === 1440) {

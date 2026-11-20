@@ -22,12 +22,22 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
     expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
     await expect(strip).toHaveCSS("border-bottom-width", "0px");
+    await expect(tabs).toHaveCSS("height", "34px");
     await expect(tabs).toHaveCSS("border-bottom-width", "1px");
-    await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    const paper = await page.evaluate(() => {
-      const probe = document.createElement("span"); probe.style.backgroundColor = "var(--paper)"; document.body.append(probe);
-      const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color;
+    const [paper, sunk, line] = await page.evaluate(() => {
+      const probe = document.body.appendChild(document.createElement("span"));
+      const colors = ["--paper", "--sunk", "--line"].map(token => {
+        probe.style.backgroundColor = `var(${token})`;
+        return getComputedStyle(probe).backgroundColor;
+      });
+      probe.remove();
+      return colors;
     });
+    const timeline = strip.locator('[data-slot=detail-timeline]');
+    await expect(timeline).toHaveCSS("border-top-color", line);
+    await expect(timeline).toHaveCSS("background-color", paper);
+    await expect(ruler).toHaveCSS("border-bottom-color", line);
+    await expect(ruler).toHaveCSS("background-color", sunk);
     await expect(band).toHaveCSS("background-color", paper);
     await expect(band).toHaveCSS("border-bottom-width", "1px");
     // The workspace is the page's own ground, and the header bar carries the ruler's.

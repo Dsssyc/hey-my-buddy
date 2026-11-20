@@ -65,6 +65,7 @@ export default {
     routingTask: { fast: "为此微任务选择 buddy", review: "为此微任务选择 buddy（审阅模式）" },
     routerAnswer: { domainNodeId: "领域节点", taskType: "任务类型", buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
     task: "任务", answer: "回答", fullPrompt: "展开任务提示全文", hidePrompt: "收起任务提示全文", promptLength: "{{count}} 字",
+    summary: { calls_one: "{{count}} 次调用", calls_other: "{{count}} 次调用", messages_one: "{{count}} 条消息", messages_other: "{{count}} 条消息" },
     moreLines: "展开其余 {{count}} 行", collapseOutput: "收起输出", groupSeparator: " · ", failures_one: "{{count}} 次失败", failures_other: "{{count}} 次失败",
     blackboard: { checkpoint: "查看 Host 的问题", answer_inquiry: "回答 Host 的问题", finish_turn: "交回结果" },
     counts: { read_one: "读取 {{count}} 个文件", read_other: "读取 {{count}} 个文件", edit_one: "修改 {{count}} 个文件", edit_other: "修改 {{count}} 个文件", delete_one: "删除 {{count}} 个文件", delete_other: "删除 {{count}} 个文件", move_one: "移动 {{count}} 个文件", move_other: "移动 {{count}} 个文件", search_one: "搜索 {{count}} 次", search_other: "搜索 {{count}} 次", execute_one: "执行 {{count}} 条命令", execute_other: "执行 {{count}} 条命令", fetch_one: "获取 {{count}} 次", fetch_other: "获取 {{count}} 次", think_one: "推理 {{count}} 次", think_other: "推理 {{count}} 次", switch_mode_one: "切换模式 {{count}} 次", switch_mode_other: "切换模式 {{count}} 次", other_one: "调用 {{count}} 次", other_other: "调用 {{count}} 次" },

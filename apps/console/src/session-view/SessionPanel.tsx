@@ -18,7 +18,7 @@ import type { SessionClient } from "./use-session";
 export type SessionPanelProps = {
   routingMode?: "fast" | "review" | null; taskText: string; checkoutRoot: string; client: SessionClient; taskId: string; attemptId: string; harness: string;
   active: boolean;
-  /** The right end of the turn tab row, where the session coverage control sits. */
+  /** The right end of the turn tab row, for the summary and coverage. */
   tabsSide?: HTMLSpanElement | null;
 };
 
@@ -44,7 +44,16 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
   const [newContent, setNewContent] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set<string>());
   const previousAfter = useRef<number | null>(null);
-  const rows = useMemo(() => sessionRows(sessionBlocks(data?.events ?? [])), [data?.events]);
+  const { rows, calls, messages } = useMemo(() => {
+    const blocks = sessionBlocks(data?.events ?? []);
+    let calls = 0;
+    let messages = 0;
+    for (const block of blocks) {
+      if (block.type === "tool") calls++;
+      if (block.type === "message" && !block.update._meta?.marker && block.update.sessionUpdate !== "agent_thought_chunk") messages++;
+    }
+    return { rows: sessionRows(blocks), calls, messages };
+  }, [data?.events]);
   useLayoutEffect(() => {
     if (!active || !data) return;
     if (data.change === "earlier" && prependEnd.current !== null) {
@@ -80,8 +89,15 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
 
   const errors = ["SESSION_NOT_INTEGRATED", "SESSION_NOT_RECORDED", "SESSION_DELETED", "SESSION_INVALID_RECORD", "SESSION_UNREADABLE"] as const;
   const failure = errors.find(code => error instanceof ApiError && code === error.code) ?? "SESSION_UNREADABLE";
+  const summary = [
+    calls > 0 && t("sessionView.summary.calls", { count: calls }),
+    messages > 0 && t("sessionView.summary.messages", { count: messages }),
+  ].filter(Boolean).join(t("sessionView.groupSeparator"));
   return <section data-slot="session-view" aria-label={t("sessionView.title")} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {tabsSide && !error && data && createPortal(<SessionCoverage harness={harness} coverage={data.coverage}/>, tabsSide)}
+      {tabsSide && !error && data && createPortal(<>
+        {summary && <span data-slot="session-summary" className="truncate text-xs tabular-nums text-ink3">{summary}</span>}
+        <SessionCoverage harness={harness} coverage={data.coverage}/>
+      </>, tabsSide)}
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>
           : <div className="relative flex min-h-0 flex-1 flex-col">

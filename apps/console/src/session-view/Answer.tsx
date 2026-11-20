@@ -31,10 +31,13 @@ export function Answer({ content, copyText, id, routing }: { content: AnswerCont
   }
   const { t } = useTranslation("taskDetail");
   return <div className="group/message relative min-w-0">
-    <Marker className="mb-3 border-t border-line pt-4 text-xs text-ink3"><MarkerContent>{t("sessionView.answer")}</MarkerContent></Marker>
+    <Marker className="mb-3 gap-3 text-xs font-medium text-ink3">
+      <MarkerContent>{t("sessionView.answer")}</MarkerContent>
+      <span aria-hidden className="h-px flex-1 bg-line2"/>
+    </Marker>
     <Message><MessageContent className="text-[14.5px] leading-[1.72]"><div className="pr-7">
       {content.format === "markdown" ? <MessageResponse>{content.text}</MessageResponse> : entries.length ? <Fields entries={entries} router={routing}/> : <Value value={content.value}/>}
     </div></MessageContent></Message>
-    <div className="absolute top-12 right-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100"><CodeBlockCopyButton value={copyText}/></div>
+    <div className="absolute top-7 right-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100"><CodeBlockCopyButton value={copyText}/></div>
   </div>;
 }
