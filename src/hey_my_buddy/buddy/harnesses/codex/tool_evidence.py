@@ -195,9 +195,8 @@ class CodexToolEventProjector:
             return
         if kind == "dynamicToolCall" and self.session_tools:
             # The typed item carries the native call id in ``item["id"]`` —
-            # exactly the ``item/tool/call`` request's ``callId`` — while the
-            # raw item of the same call names the tool (Codex CLI 0.169.1,
-            # probes note 2026-11-19). The two fold into one observed call.
+            # exactly the ``item/tool/call`` request's ``callId``. Codex CLI
+            # 0.169.1 can name the tool on the typed item or a matching raw item.
             self._snapshot_typed(params, item, method)
         if kind in TYPED_TOOL_OUTPUTS:
             # A rendered output starts no call. Its completed item is only an
@@ -212,8 +211,10 @@ class CodexToolEventProjector:
             # stays incomplete, so the call cannot pass as either.
             self._incomplete(params, tool_name=kind, phase=None)
             return
+        name = item.get("tool") if kind == "dynamicToolCall" else None
         self._observe(params, phase="start" if method == "item/started" else "end",
-                      tool_name=kind, call_id=item.get("id") or item.get("call_id"),
+                      tool_name=name if isinstance(name, str) and name else kind,
+                      call_id=item.get("id") or item.get("call_id"),
                       outcome=_native_outcome(item, kind) if method == "item/completed" else "unknown")
 
     def _snapshot_typed(self, params, item: dict, method: str) -> None:

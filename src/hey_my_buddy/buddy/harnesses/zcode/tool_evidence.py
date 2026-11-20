@@ -33,6 +33,8 @@ HARNESS = "zcode"
 #: that is retained as an incomplete fact, never guessed into a phase.
 _START_KINDS = frozenset({"scheduled"})
 _END_KINDS = frozenset({"result", "error"})
+_METADATA_PHASES = ("scheduled", "started", "progress", "completed", "failed")
+_STREAMED_TOOL_KINDS = ("tool_call", "tool_input_start", "tool_input_delta", "tool_input_end")
 
 
 def _identity_of(params: dict) -> dict | None:
@@ -47,6 +49,17 @@ def _identity_of(params: dict) -> dict | None:
         if isinstance(value, str) and value:
             identity[key] = value
     return identity if len(identity) == 2 else None
+
+
+def _child_tool_frame(params: dict) -> bool:
+    return any(record.get(field) not in (None, False, "")
+               for record in (params, params.get("payload")) if isinstance(record, dict)
+               for field in ("parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background"))
+
+
+def _tool_call_id(frame: dict) -> str | None:
+    call_id = frame.get("toolCallId")
+    return call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
 
 
 class ZcodeToolFacts:
@@ -70,6 +83,7 @@ class ZcodeToolFacts:
         #: observed native calls the driver later verifies against the ledger.
         self.session_tools = frozenset(session_tools)
         self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
+        self._streamed_names: dict[tuple[str, str, str], str] = {}
         self._snapshot_inputs: dict[tuple[str, str, str], tuple[str, dict]] = {}
         self._session_starts: set[tuple[str, str, str]] = set()
         self._names: dict[tuple[str, str, str], str] = {}
@@ -121,15 +135,8 @@ class ZcodeToolFacts:
                 self.evidence.close_root(identity)
                 self._closed.add((identity['sessionId'], identity['turnId']))
             return
-        if self.session_tools and isinstance(params, dict) and params.get("type") == "model.streaming":
-            identity = _identity_of(params)
-            payload = params.get("payload")
-            if identity is not None and isinstance(payload, dict) and payload.get("kind") == "tool_call":
-                name, call_id, arguments = payload.get("toolName"), payload.get("toolCallId"), payload.get("input")
-                if (isinstance(name, str) and name in self.session_tools
-                        and isinstance(call_id, str) and isinstance(arguments, dict)):
-                    key = (identity["sessionId"], identity["turnId"], call_id)
-                    self._snapshot_inputs[key] = (name, arguments)
+        if isinstance(params, dict) and params.get("type") == "model.streaming":
+            self._streamed_tool(params)
             return
         if not isinstance(params, dict) or params.get("type") != "tool.updated":
             return
@@ -206,6 +213,34 @@ class ZcodeToolFacts:
             return
         self._incomplete(params, identity, call_id, phase, name)
 
+    def _streamed_tool(self, params: dict) -> None:
+        identity = _identity_of(params)
+        payload = params.get("payload")
+        if (identity not in self.roots or not isinstance(payload, dict)
+                or _child_tool_frame(params)
+                or payload.get("kind") not in ("tool_input_start", "tool_call")):
+            return
+        call_id, name = _tool_call_id(payload), payload.get("toolName")
+        if call_id is None or not isinstance(name, str) or not name:
+            return
+        key = (identity["sessionId"], identity["turnId"], call_id)
+        self._streamed_names.setdefault(key, name)
+        arguments = payload.get("input")
+        if payload["kind"] == "tool_call" and name in self.session_tools and isinstance(arguments, dict):
+            self._snapshot_inputs[key] = (name, arguments)
+
+    def _metadata_key(self, params: dict, identity: dict | None,
+                      call_id: str | None) -> tuple[str, str, str] | None:
+        if call_id is None:
+            return None
+        if identity is not None:
+            return identity["sessionId"], identity["turnId"], call_id
+        if params.get("turnId") is None and isinstance(params.get("sessionId"), str):
+            matches = [key for key in self._names if key[0] == params["sessionId"] and key[2] == call_id]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
     def _metadata_tool(self, method: str, params: dict) -> None:
         """Pair native projections with canonical facts, never manufacture an end.
 
@@ -224,20 +259,14 @@ class ZcodeToolFacts:
                 return
             phase = params.get("phase")
         identity = _identity_of(params)
-        call_id = params.get("toolCallId")
-        call_id = call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
+        call_id = _tool_call_id(params)
         raw = params.get("toolName")
         name = raw if isinstance(raw, str) and 0 < len(raw) <= 512 else None
-        key = (identity["sessionId"], identity["turnId"], call_id) if identity and call_id else None
-        if (key is None and params.get("turnId") is None and call_id
-                and isinstance(params.get("sessionId"), str)):
-            matches = [known for known in self._names
-                       if known[0] == params["sessionId"] and known[2] == call_id]
-            key = matches[0] if len(matches) == 1 else None
-        if any(params.get(field) not in (None, False, "") for field in (
-                "parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background")):
+        key = self._metadata_key(params, identity, call_id)
+        if _child_tool_frame(params):
             self._incomplete(params, identity, call_id, None, name)
-        if (phase not in ("scheduled", "started", "progress", "completed", "failed")
+            return
+        if (phase not in _METADATA_PHASES
                 or key is None or key[:2] in self._closed or key in self._ended
                 or raw is not None and name is None):
             self._incomplete(params, identity, call_id, None, name)
@@ -251,6 +280,8 @@ class ZcodeToolFacts:
             self._names.setdefault(key, name)
             self._metadata_starts.add(key)
             if identity is not None:
+                if name in self.session_tools:
+                    self._session_starts.add(key)
                 self.evidence.observe(normalize_tool_event(HARNESS, {
                     "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": "start"}))
             return
@@ -360,29 +391,49 @@ class ZcodeToolFacts:
     # -- receipt ---------------------------------------------------------------
     def explains_tool_frame(self, message: dict, *, read: bool) -> bool:
         params = message.get("params")
-        if message.get("method") != "session/event" or not isinstance(params, dict):
+        if not isinstance(params, dict) or _child_tool_frame(params):
             return False
+        method = message.get("method")
         identity = _identity_of(params)
-        payload = params.get("payload")
-        if identity is None or not isinstance(payload, dict):
-            return False
-        if params.get("type") == "tool.updated" and payload.get("kind") == "batch":
-            ids = payload.get("toolCallIds")
-        elif params.get("type") == "tool.updated":
-            ids = [payload.get("toolCallId")]
-        elif params.get("type") == "model.streaming" and payload.get("kind") == "tool_call":
-            name = payload.get("toolName")
-            if isinstance(name, str) and (name in self.session_tools
-                                          or read and classify_tool_name(HARNESS, name)
-                                          in PERMISSION_TOOL_CATEGORIES["read"]):
-                return isinstance(payload.get("toolCallId"), str)
-            ids = [payload.get("toolCallId")]
-        else:
-            return False
         names = self._names if read else self._session_starts
+        if (method == "computer-use/operation-event" and params.get("kind") in ("tool-scheduled", "tool-started")
+                or method == "v4/telemetry/event" and params.get("kind") == "tool.lifecycle"
+                and params.get("phase") in _METADATA_PHASES):
+            key = self._metadata_key(params, identity, _tool_call_id(params))
+            if key not in names or {"sessionId": key[0], "turnId": key[1]} not in self.roots:
+                return False
+            known, name = self._names[key], params.get("toolName")
+            return (name is None or name == known) and (read or known in self.session_tools)
+
+        if identity not in self.roots:
+            return False
+        root = (identity["sessionId"], identity["turnId"])
+        payload = params.get("payload")
+        kind = params.get("type")
+        if (method == "v4/telemetry/event" and params.get("kind") == "turn.terminal"
+                or method == "session/event" and kind == "turn.completed"):
+            counts = [record[field] for record in (params, payload) if isinstance(record, dict)
+                      for field in ("toolCallCount", "toolCalls") if field in record]
+            observed = sum(key[:2] == root for key in names)
+            return bool(counts) and all(type(count) is int and 0 <= count <= observed for count in counts)
+
+        if method != "session/event" or not isinstance(payload, dict):
+            return False
+        if kind == "model.streaming" and payload.get("kind") in _STREAMED_TOOL_KINDS:
+            call_id = _tool_call_id(payload)
+            if call_id is None:
+                return False
+            known = self._streamed_names.get((*root, call_id))
+            raw_name = payload.get("toolName")
+            name = known if raw_name is None else raw_name
+            return (isinstance(name, str) and (known is None or name == known)
+                    and (name in self.session_tools or read and classify_tool_name(HARNESS, name)
+                         in PERMISSION_TOOL_CATEGORIES["read"]))
+        if kind != "tool.updated":
+            return False
+        ids = payload.get("toolCallIds") if payload.get("kind") == "batch" else [payload.get("toolCallId")]
         return isinstance(ids, list) and bool(ids) and all(
-            isinstance(call_id, str) and (identity["sessionId"], identity["turnId"], call_id) in names
-            for call_id in ids)
+            isinstance(call_id, str) and (*root, call_id) in names for call_id in ids)
 
     @property
     def tool_calls(self) -> int:

@@ -532,7 +532,8 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         policy = result.effective_policy
         self.assertEqual(policy.tools.requested.value, {"permissionMode": "read-only"})
-        self.assertTrue(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
+        patch = native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json")
+        self.assertFalse(any(row.get("disabled") for row in json.loads(patch.read_text(encoding="utf-8"))))
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertEqual(observed["home"], str(self.home))
         self.assertEqual(observed["dshHome"], os.environ["DSH_HOME"])
@@ -578,7 +579,7 @@ class FastSeamTests(NativeRunCase):
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         disabled = [row["id"] for row in rows[2:]]
         self.assertEqual(disabled, [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
-                                    native_run.PLAN_MODE_ROW])
+                                    native_run.MCP_RESOURCES_ROW, native_run.PLAN_MODE_ROW])
         self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
         self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
@@ -598,9 +599,7 @@ class FastSeamTests(NativeRunCase):
                 patch = json.loads(native_path(Path(request.private_state.invocation_root) /
                                                "dsh-launch-patch.json").read_text())
                 disabled = {row["id"] for row in patch if row.get("disabled")}
-                expected_disabled = set(inventory) - retained | {"plan-mode"}
-                if scope == "none":
-                    expected_disabled.add(native_run.MCP_RESOURCES_ROW)
+                expected_disabled = set(inventory) - retained | {native_run.MCP_RESOURCES_ROW, native_run.PLAN_MODE_ROW}
                 self.assertEqual(disabled, expected_disabled)
                 self.assertTrue(all(row["disabled"] is True for row in patch[2:]))
 
@@ -932,7 +931,7 @@ class WorkerSeamTests(NativeRunCase):
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in rows[2:]],
                          [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
-                          native_run.PLAN_MODE_ROW])
+                          native_run.MCP_RESOURCES_ROW, native_run.PLAN_MODE_ROW])
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"disabledRows": [row["id"] for row in rows[2:]]})
 

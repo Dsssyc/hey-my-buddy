@@ -13,6 +13,7 @@ from hey_my_buddy.buddy.roles.run_observers import (
     FastCorrection, MaintenanceCorrection, ReviewObserver, selection_validator,
 )
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.router_selection import answer_schema
 
 
@@ -57,14 +58,17 @@ class CodexSnapshotTests(codex.SeamCase):
         self.assertNotIn(request.input_text, trace["turns"][1]["input"][0]["text"])
 
 
-    def test_snapshot_tools_also_mount_in_read(self):
+    def test_code_mode_dynamic_calls_verify_in_read_without_raw_function_frames(self):
         codex.select_fixture(os.environ, self.base, "codex", codex.FAST_FIXTURE)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "read-trace.json")
         request = mount_snapshot(self.request(permission="read", output_schema=codex.FAST_SCHEMA, prompt="Pick a buddy"))
-        self.set_case("snapshot")
+        self.set_case("snapshot-exec")
         result = codex.run(request, observer=lambda _facts: codex.FEEDBACK_CONTINUE,
                            services=None, cancelled=lambda: False)
         assert_snapshot_run(self, request, result, rounds=1)
+        self.assertTrue(result.tool_evidence.value["streamComplete"])
+        self.assertEqual(result.tool_evidence.value["toolSummary"],
+                         [{"toolName": "query_task", "calls": 2, "failed": 1, "unknown": 0}])
 
 
 class DshSnapshotTests(dsh.NativeRunCase):
@@ -78,22 +82,61 @@ class DshSnapshotTests(dsh.NativeRunCase):
                 result = dsh.run(request, observer=correction.observer, services=None, cancelled=lambda: False)
                 assert_snapshot_run(self, request, result, rounds=2)
                 self.assertEqual(result.value.raw, '{"choice":"a"}')
-                if scope == "none":
-                    self.assertIn("mcp-resources", result.effective_policy.tools.requested.value["disabledRows"])
+                policy = result.effective_policy.tools.requested.value
+                patch = native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json")
+                disabled = [row["id"] for row in json.loads(patch.read_text(encoding="utf-8")) if row.get("disabled")]
+                self.assertEqual(disabled, policy["disabledRows"])
+                self.assertEqual(disabled[-2:], ["mcp-resources", "plan-mode"])
+                if scope == "read":
+                    self.assertEqual(policy, {"permissionMode": "read-only", "disabledRows": ["mcp-resources", "plan-mode"]})
 
 
 class ZcodeSnapshotTests(zcode.NativeRunCase):
+    def snapshot_setup(self, scope, *, fault=""):
+        os.environ["HMB_ZCODE_TEST_CASE"] = f"snapshot-{scope}{'-' + fault if fault else ''}"
+        schema = answer_schema("review") if scope == "read" else zcode.SCHEMA
+        prompt = structured_prompt("Choose a buddy", schema)
+        request = self.fast_request(prompt).model_copy(update={"permission": scope, "output_schema": schema})
+        if scope == "none":
+            observer = FastCorrection(schema, prompt)
+        else:
+            validator = selection_validator({"routingMode": "review", "domainNodes": [], "buddies": []})
+            observer = ReviewObserver(schema, prompt, can_correct=True, validator=validator)
+        return mount_snapshot(request), observer
+
     def test_snapshot_allowlist_and_signed_failed_pages_survive_fresh_sessions(self):
         for scope in ("none", "read"):
             with self.subTest(scope=scope):
-                os.environ["HMB_ZCODE_TEST_CASE"] = f"snapshot-{scope}"
-                prompt = structured_prompt("Choose a buddy", zcode.SCHEMA)
-                request = mount_snapshot(self.fast_request(prompt).model_copy(update={"permission": scope}))
-                correction = FastCorrection(zcode.SCHEMA, prompt)
-                result = zcode.run(request, observer=correction.observer, services=None, cancelled=lambda: False)
+                request, observer = self.snapshot_setup(scope)
+                result = zcode.run(request, observer=observer.observer, services=None, cancelled=lambda: False)
                 assert_snapshot_run(self, request, result, rounds=2)
-                self.assertEqual(result.value.raw, '{"choice":"a"}')
+                self.assertTrue(result.tool_evidence.value["streamComplete"])
+                if scope == "read":
+                    self.assertIsNone(json.loads(result.value.raw)["buddyId"])
+                else:
+                    self.assertEqual(result.value.raw, '{"choice":"a"}')
                 self.assertEqual(result.usage.value["nativeRecords"], 2)
+
+    def test_snapshot_observers_stop_on_the_first_unexplained_frame(self):
+        for scope, code in (("none", "no-tool-violation"), ("read", "router-tools-forbidden")):
+            for fault, expected_calls in (("rogue", 0), ("child", 0), ("permission", 1), ("count", 2)):
+                with self.subTest(scope=scope, fault=fault):
+                    request, observer = self.snapshot_setup(scope, fault=fault)
+                    stopped = []
+
+                    def observe(facts):
+                        feedback = observer.observer(facts)
+                        if feedback.action == "stop":
+                            stopped.append(facts)
+                        return feedback
+
+                    result = zcode.run(request, observer=observe, services=None, cancelled=lambda: False)
+                    self.assertEqual(result.end.reason_code, "observer-interrupt", result.end.message)
+                    self.assertEqual(observer.stop_reason, code)
+                    self.assertFalse(stopped[0]["settled"])
+                    self.assertEqual(stopped[0]["toolMarkerFrames"], 1)
+                    self.assertEqual(stopped[0]["toolCalls"], expected_calls)
+                    self.assertFalse(result.tool_evidence.value["streamComplete"])
 
 
 

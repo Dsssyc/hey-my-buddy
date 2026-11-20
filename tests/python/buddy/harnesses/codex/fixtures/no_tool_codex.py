@@ -81,7 +81,7 @@ def main():
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
                        "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
-            if case == "snapshot":
+            if case in ("snapshot", "snapshot-exec"):
                 receipt.update(cwd=params["cwd"], sandbox={"type": "readOnly", "networkAccess": True})
             if case == "missing-model":
                 del receipt["model"]
@@ -141,24 +141,32 @@ def main():
             if case == "foreign-thread-started":
                 send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
-            if case in ("snapshot", "router-facts"):
-                tool_name = "query_task" if case == "snapshot" else "query_compare"
+            if case in ("snapshot", "snapshot-exec", "router-facts"):
+                tool_name = "query_compare" if case == "router-facts" else "query_task"
                 assert tool_name in {tool["name"] for tool in dynamic_tools}
-                queries = (("page", {"limit": 5}), ("error", {"offset": 999})) if case == "snapshot" else (("page", {"limit": 1}),)
+                queries = (("page", {"limit": 5}), ("error", {"offset": 999}))
+                if case == "router-facts":
+                    queries = (("page", {"limit": 1}),)
                 for call_id, args in queries:
-                    event("item/started", turn_id, item={"type": "dynamicToolCall", "id": call_id})
-                    event("rawResponseItem/completed", turn_id, item={
-                        "type": "function_call", "name": tool_name, "call_id": call_id})
+                    item = {"type": "dynamicToolCall", "id": call_id}
+                    # Code-mode exec emits the typed name without a raw function pair.
+                    if case == "snapshot-exec":
+                        item.update(tool=tool_name, status="inProgress")
+                    event("item/started", turn_id, item=item)
+                    if case != "snapshot-exec":
+                        event("rawResponseItem/completed", turn_id, item={
+                            "type": "function_call", "name": tool_name, "call_id": call_id})
                     send({"id": "tool-" + call_id, "method": "item/tool/call", "params": {
                         "threadId": "thread-1", "turnId": turn_id, "callId": call_id,
                         "tool": tool_name, "arguments": args}})
                     reply = json.loads(sys.stdin.readline())["result"]
                     assert reply["success"] is (call_id == "page")
                     event("item/completed", turn_id, item={
-                        "type": "dynamicToolCall", "id": call_id, **reply,
+                        **item, **reply,
                         "status": "completed" if reply["success"] else "failed"})
-                    event("rawResponseItem/completed", turn_id, item={
-                        "type": "function_call_output", "call_id": call_id})
+                    if case != "snapshot-exec":
+                        event("rawResponseItem/completed", turn_id, item={
+                            "type": "function_call_output", "call_id": call_id})
             if case.startswith("protocol-"):
                 for method, item in item_frames(case.removeprefix("protocol-")):
                     event(method, turn_id, item=item)

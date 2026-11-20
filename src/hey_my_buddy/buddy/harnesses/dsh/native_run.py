@@ -202,13 +202,13 @@ def _launch_policy(request: RunRequest, state: _RunState, deadline: float) -> tu
                 raise NativeError(problem, f"DSH CLI {version or 'unknown'}: tool inventory {detail}; {request.permission} scope unavailable")
         retained = (NONE_SCOPE_RETAINED_ROWS if request.permission == "none" else WEB_SCOPE_RETAINED_ROWS)
         rows = [{"id": name, "disabled": True} for name in (inventory or ()) if name not in retained]
-        if request.permission == "none":
-            # The resource row is outside the tool-* inventory, so only this
-            # explicit row keeps the none scope from exposing the built-in
-            # read-only MCP resource tools.
-            rows.append({"id": MCP_RESOURCES_ROW, "disabled": True})
+        # The built-in MCP resource row is outside the tool-* inventory.
+        rows.append({"id": MCP_RESOURCES_ROW, "disabled": True})
         return [*rows, {"id": PLAN_MODE_ROW, "disabled": True}], {}
-    return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
+    rows = []
+    if request.permission == "read" and request.snapshot_query is not None:
+        rows = [{"id": MCP_RESOURCES_ROW, "disabled": True}, {"id": PLAN_MODE_ROW, "disabled": True}]
+    return rows, {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
 
 # -- the role-facing service binding ---------------------------------------------
@@ -1709,8 +1709,11 @@ def _value_and_completion(evidence: RootTurnEvidence | None,
 def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
     """The permission's native launch configuration, reported as a fact."""
     if state.permission_mode is not None:
+        requested = {"permissionMode": state.permission_mode}
+        if state.scope_rows:
+            requested["disabledRows"] = [row["id"] for row in state.scope_rows]
         return EffectivePolicy(
-            tools=PolicyFact(requested=_json_package({"permissionMode": state.permission_mode})))
+            tools=PolicyFact(requested=_json_package(requested)))
     if not state.session_opened:
         return EffectivePolicy()
     if request.permission in ("none", "web"):

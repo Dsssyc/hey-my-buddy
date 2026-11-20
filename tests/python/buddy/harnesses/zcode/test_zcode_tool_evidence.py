@@ -42,6 +42,8 @@ sys.stdin.reconfigure(encoding='utf-8')
 if '--version' in sys.argv:
     print('fixture-0.16.9'); sys.exit(0)
 case = os.environ.get('HMB_ZCODE_TEST_CASE', 'ok')
+snapshot_scope, _, snapshot_fault = case.removeprefix('snapshot-').partition('-')
+snapshot_name = 'mcp__hey_my_buddy_snapshot__query_task'
 session = 0
 subscribed = False
 closed = False
@@ -75,7 +77,7 @@ for line in sys.stdin:
             service = SnapshotService.from_file(Path(server['args'][-1]))
             exact = ['mcp__hey_my_buddy_snapshot__' + tool['name'] for tool in service.tools]
             assert set(p['toolAllowlist']) == set(exact + (
-                ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch'] if case == 'snapshot-read' else []))
+                ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch'] if snapshot_scope == 'read' else []))
         elif case in ('write-final', 'write-post-close'):
             assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
@@ -158,22 +160,55 @@ for line in sys.stdin:
             send({'method':'v4/telemetry/event','params':{'sessionId':f's-{session}',
                   'turnId':f't-{session}','kind':'turn.started','eventSeq':1}})
         event('turn.started',1,{'inputId':ident})
+        if case == 'unmounted-stream':
+            event('model.streaming', 2, {'kind': 'tool_input_start', 'toolCallId': 'page',
+                  'toolName': snapshot_name})
+            continue
         if case.startswith('snapshot-'):
             seq = 1
             for call_id, args in (('page', {'limit': 5}), ('error', {'offset': 999})):
+                name = 'rogue_tool' if snapshot_fault == 'rogue' else snapshot_name
+                tool = {'toolCallId': call_id, 'toolName': name}
+                start = {'kind': 'tool_input_start', **tool}
+                if snapshot_fault == 'child':
+                    start['parentToolCallId'] = 'parent'
+                event('model.streaming', seq + 1, start)
+                event('model.streaming', seq + 2, {'kind': 'tool_input_delta', 'toolCallId': call_id,
+                      'delta': json.dumps(args)})
+                event('model.streaming', seq + 3, {'kind': 'tool_input_end', 'toolCallId': call_id})
+                event('model.streaming', seq + 4, {'kind': 'tool_call', **tool, 'input': args, 'done': False})
+                root = {'sessionId': f's-{session}', 'turnId': f't-{session}'}
+                for index, phase in enumerate(('scheduled', 'started')):
+                    send({'method': 'computer-use/operation-event', 'params': {
+                        **root, **tool, 'kind': 'tool-' + phase, 'sequenceNumber': seq + index}})
+                for index, phase in enumerate(('scheduled', 'started', 'progress')):
+                    send({'method': 'v4/telemetry/event', 'params': {
+                        **root, **tool, 'kind': 'tool.lifecycle', 'phase': phase, 'eventSeq': seq + index}})
+                event('tool.updated', seq + 5, {'kind': 'scheduled', **tool, 'inputOmitted': True})
+                if snapshot_fault == 'permission':
+                    send({'method': 'v4/telemetry/event', 'params': {
+                        **root, **tool, 'kind': 'permission.lifecycle', 'phase': 'requested',
+                        'eventSeq': seq + 3}})
                 reply = service.mcp_call('query_task', args)
-                name = 'mcp__hey_my_buddy_snapshot__query_task'
-                event('model.streaming', seq + 1, {'kind': 'tool_call', 'toolCallId': call_id,
-                      'toolName': name, 'input': args, 'done': False})
-                event('tool.updated', seq + 2, {'kind': 'scheduled', 'toolCallId': call_id,
-                      'toolName': name, 'inputOmitted': True})
+                send({'method': 'v4/telemetry/event', 'params': {
+                    **root, **tool, 'kind': 'tool.lifecycle', 'phase': 'completed', 'eventSeq': seq + 4}})
                 prefix = 'MCP tool returned an error:' + chr(10) if reply['isError'] else ''
-                event('tool.updated', seq + 3, {'kind': 'result', 'toolCallId': call_id,
+                event('tool.updated', seq + 6, {'kind': 'result', 'toolCallId': call_id,
                       'result': {'success': True, 'content': prefix + reply['content'][0]['text']}})
-                seq += 3
-            answer = ('{"buddyId":"legal","domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
-                      if case == 'snapshot-route' else 'wrong' if session == 1 else '{"choice":"a"}')
-            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident, 'response': answer})
+                seq += 6
+            send({'method': 'v4/telemetry/event', 'params': {
+                **root, 'kind': 'turn.terminal', 'eventSeq': seq,
+                'toolCallCount': 3 if snapshot_fault == 'count' else 2}})
+            if case == 'snapshot-route':
+                answer = '{"buddyId":"legal","domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
+            elif session == 1:
+                answer = 'wrong'
+            elif snapshot_scope == 'read':
+                answer = '{"buddyId":null,"domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
+            else:
+                answer = '{"choice":"a"}'
+            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident, 'response': answer,
+                  'toolCalls': 2})
             send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
             continue
         if case in ('usage-quota', 'usage-projection-quota', 'usage-correct-quota'):
@@ -304,6 +339,65 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package['toolCalls'], 1)
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]['phases'], ['end', 'start'])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'read', state_dir=self.state_dir))
+
+    def test_streamed_fragments_use_the_full_native_call_identity(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.add_root("s-1", "t-2")
+        start = frame({"kind": "tool_input_start", "toolCallId": "call", "toolName": name},
+                      kind="model.streaming")
+        facts.observe(start)
+        for read in (False, True):
+            with self.subTest(read=read):
+                self.assertTrue(facts.explains_tool_frame(start, read=read))
+                for turn, call_id in (("t-1", "call"), ("t-2", "call"), ("t-1", "other")):
+                    delta = frame({"kind": "tool_input_delta", "toolCallId": call_id},
+                                  kind="model.streaming", turn=turn)
+                    self.assertIs(facts.explains_tool_frame(delta, read=read),
+                                  (turn, call_id) == ("t-1", "call"))
+            for kind in ("tool_input_delta", "tool_input_end"):
+                with self.subTest(read=read, kind=kind, tool_name=None):
+                    fragment = frame({"kind": kind, "toolCallId": "call", "toolName": None},
+                                     kind="model.streaming")
+                    self.assertTrue(facts.explains_tool_frame(fragment, read=read))
+
+    def test_metadata_start_counts_for_the_observer_but_still_requires_a_canonical_start(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        scheduled = {"method": "computer-use/operation-event", "params": {
+            **ROOT, "kind": "tool-scheduled", "toolCallId": "call", "toolName": name}}
+        facts.observe(scheduled)
+        self.assertTrue(facts.explains_tool_frame(scheduled, read=False))
+        self.assertEqual((facts.tool_calls, facts.session_tool_calls), (1, 1))
+        started = {"method": "computer-use/operation-event", "params": {
+            "sessionId": "s-1", "kind": "tool-started", "toolCallId": "call"}}
+        facts.observe(started)
+        self.assertTrue(facts.explains_tool_frame(started, read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            {**started, "params": {**started["params"], "toolName": "Read"}}, read=False))
+        facts.observe(frame({"kind": "result", "toolCallId": "call", "result": {"success": True}}))
+        package = facts.finish(True)
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertFalse(package["streamComplete"])
+
+    def test_terminal_counts_are_bounded_by_explained_calls_in_each_root(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.add_root("s-1", "t-2")
+        for turn, tool_name in (("t-1", name), ("t-1", "Read"), ("t-2", name)):
+            facts.observe(frame({"kind": "scheduled", "toolCallId": tool_name, "toolName": tool_name}, turn=turn))
+        for read, count, expected in ((False, 1, True), (False, 2, False), (True, 2, True),
+                                      (True, 3, False), (True, True, False), (True, -1, False)):
+            with self.subTest(read=read, count=count):
+                for terminal in (
+                    {"method": "v4/telemetry/event",
+                     "params": {**ROOT, "kind": "turn.terminal", "toolCallCount": count}},
+                    frame({"toolCalls": count}, kind="turn.completed"),
+                ):
+                    self.assertIs(facts.explains_tool_frame(terminal, read=read), expected)
 
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
         for payload in ({'kind': 'started', 'toolCallId': 'foreign'},

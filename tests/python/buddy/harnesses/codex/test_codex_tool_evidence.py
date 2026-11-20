@@ -12,9 +12,11 @@ from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
+from hey_my_buddy.buddy.harnesses.snapshot_mount import mounted_snapshot, prepare_snapshot_mount, verify_mounted_calls
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_files import publish_snapshot
 from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.protocol import tool_evidence
 from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
@@ -66,6 +68,49 @@ class CodexToolEventProjectionTests(unittest.TestCase):
 
     def observe_root(self, projector):
         projector.observe_root("thread-1", "turn-1")
+
+    def test_typed_dynamic_calls_verify_signed_success_and_error_without_raw_frames(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        reference, _ = publish_snapshot(state_dir, "routing", "codex-dynamic", {
+            "task": "Frozen fixture input", "domainNodes": [], "buddies": [], "preferences": [],
+        }, round=1)
+        with tempfile.TemporaryDirectory() as directory:
+            mount = prepare_snapshot_mount(
+                invocation_root=Path(directory), state_dir=state_dir, identity=BINDING, input_sha256="a" * 64,
+                snapshot={"namespace": "routing", "owner": "codex-dynamic", "round": 1, "reference": reference})
+            service = mounted_snapshot(mount)
+            projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=mount.tool_names)
+            self.observe_root(projector)
+            for call_id, arguments, status in (("page", {"limit": 5}, "completed"),
+                                               ("error", {"offset": 999}, "failed")):
+                item = {"type": "dynamicToolCall", "id": call_id, "tool": "query_task"}
+                projector.observe_notification(frame("item/started", item))
+                projector.observe_snapshot_request(ROOT, call_id, "query_task", arguments)
+                reply = service.direct_call("query_task", arguments, native_identity=ROOT, call_id=call_id)
+                projector.observe_notification(frame("item/completed", {**item, **reply, "status": status}))
+            verified, coverage = verify_mounted_calls(mount, projector.snapshot_calls, projector.roots)
+            self.assertEqual(len(verified), 2)
+            self.assertEqual(len(coverage), 1)
+            self.assertEqual(projector.evidence.read_tool_violations, 0)
+            package = projector.finish(True, verified_session_calls=verified)
+        self.assertTrue(package["streamComplete"])
+        self.assertEqual(package["toolSummary"], [{"toolName": "query_task", "calls": 2, "failed": 1, "unknown": 0}])
+        self.assertTrue(all(call["sessionServiceVerified"] for call in calls(package, state_dir=state_dir)))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir))
+
+    def test_unmounted_dynamic_tool_name_is_a_read_violation(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=("query_task",))
+        self.observe_root(projector)
+        item = {"type": "dynamicToolCall", "id": "call-1", "tool": "rogue_tool"}
+        projector.observe_notification(frame("item/started", item))
+        projector.observe_notification(frame("item/completed", {**item, "status": "completed"}))
+        self.assertEqual(projector.evidence.read_tool_violations, 1)
+        package = projector.finish(True)
+        self.assertEqual(package["toolSummary"][0]["toolName"], "rogue_tool")
+        self.assertFalse(calls(package, state_dir=state_dir)[0]["sessionServiceVerified"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
+                         "router-tools-forbidden")
 
     def test_protocol_variants_and_future_items_in_both_router_modes(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
