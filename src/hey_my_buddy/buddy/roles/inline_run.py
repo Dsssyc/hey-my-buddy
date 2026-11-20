@@ -315,6 +315,8 @@ def _summary_run(control, request, result, module, deadline, handle):
         return control, request, result, False, time.monotonic() >= deadline
     try:
         with _inline_live(next_request, services, handle) as live_services:
+            if summary_cancelled():
+                return control, request, result, False, time.monotonic() >= deadline
             summary = run_harness(module, next_request, observer=partial(handle.observe, observer), services=live_services,
                                   cancelled=summary_cancelled)
     except Exception as error:

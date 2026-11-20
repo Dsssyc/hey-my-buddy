@@ -619,13 +619,20 @@ class ExecutionEndpointTests(unittest.TestCase):
             control = execution.control
 
             class LivingJob:
+                def __init__(self):
+                    self.active_count = 1
+
                 def active(self):
-                    return 1
+                    return self.active_count
+
+                def terminate(self):
+                    self.active_count = 0
 
                 def close(self, *, confirmed=False):
                     pass
 
-            process = SimpleNamespace(pid=4244, returncode=7, poll=lambda: 7, _buddy_job=LivingJob())
+            job = LivingJob()
+            process = SimpleNamespace(pid=4244, returncode=7, poll=lambda: 7, _buddy_job=job)
             handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
             handle.wait = lambda timeout=None: 7
             calls = []
@@ -635,19 +642,23 @@ class ExecutionEndpointTests(unittest.TestCase):
                     calls.append(("stop", stop_initiator))
                     owned.cancel_requested = True
                     owned.stop_initiator = stop_initiator
+                    job.terminate()
 
                 def cancel(self, owned, **_kwargs):
                     calls.append(("cancel", owned.stop_initiator))
                     owned.cancel_requested = True
+                    job.terminate()
 
             def collect(_impl, owned, _context):
-                # Console force-stop arrives AFTER wait() returned 7 while
-                # worker_collect is running against the still-active Job.
+                # Emulate command.py reading shutdown_confirmed=False BEFORE
+                # the console force-stop arrives and terminates the Job.
+                self.assertFalse(owned.shutdown_confirmed(settle_seconds=0))
                 execution.request_stop("console", None, force=True)
                 deadline = time.monotonic() + 2
                 while not calls and time.monotonic() < deadline:
                     time.sleep(0.01)
-                return AdapterOutcome(status="cancelled", shutdown_confirmed=True, exit_code=7)
+                return AdapterOutcome(status="failed", shutdown_confirmed=False, exit_code=7,
+                                      result={"status": "nonzero", "processState": {"shutdownConfirmed": False}})
 
             control.start()
             try:
@@ -665,6 +676,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             control.join(2)
             self.assertIsNone(control.handle)
             self.assertEqual(calls, [("cancel", "console")])
+            self.assertTrue(report["shutdownConfirmed"])
+            self.assertTrue(report["result"]["processState"]["shutdownConfirmed"])
+            self.assertEqual(report["result"]["status"], "cancelled")
             self.assertEqual(report["status"], "cancelled")
             self.assertEqual(report["terminationReason"], "console-stop")
 
@@ -686,7 +700,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             }
             identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="w-1")
             buddy = rc.RunBuddy(provider="openai", model="gpt-6.2-sol", effort="high")
-            req = SimpleNamespace(identity=identity, harness="codex", buddy=buddy, input_text="x")
+            req = SimpleNamespace(identity=identity, harness="codex", buddy=buddy, input_text="x",
+                                  session_record_failure=None)
+            req.model_copy = lambda update=None: req
             parts = SimpleNamespace()
 
             # (a) Accepted console stop beats preflight input_error/blocked.
@@ -727,7 +743,8 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual((code2, res2.end.status), (1, "cancelled"))
             self.assertIs(res2.native_request_sent, False)
 
-            # (c) DSH _prompt_and_observe never sends a prompt when cancel is already set.
+            # (c) DSH _prompt_and_observe never sends a prompt when cancel is already set,
+            # and never sends session/cancel before session/prompt when cancelled mid-launch.
             client = mock.Mock()
             cancel = dsh_run.CancelFlag(lambda: True)
             state = dsh_run._RunState()
@@ -741,6 +758,52 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "cancelled")
             client.prompt.assert_not_called()
             self.assertIs(state.native_request_sent, False)
+
+            order = []
+            cancelled_now = [False]
+            real_thread = dsh_run.threading.Thread
+
+            class DelayedStartThread(real_thread):
+                def start(self):
+                    cancelled_now[0] = True
+                    super().start()
+
+            state2 = dsh_run._RunState()
+            client2 = mock.Mock()
+            client2.prompt.side_effect = lambda *_a, **_k: order.append("prompt")
+            with mock.patch.object(dsh_run.threading, "Thread", DelayedStartThread), \
+                 self.assertRaises(dsh_run.NativeError) as caught2:
+                dsh_run._prompt_and_observe(
+                    client=client2, pump=queue.Queue(), session_id="sess", input_text="hi",
+                    deadline=time.monotonic() + 60, cancel=dsh_run.CancelFlag(lambda: cancelled_now[0]),
+                    state=state2, fold=lambda _m: False, notify=lambda: None,
+                    activity=dsh_run.DshActivity(), denied=lambda: 0,
+                    send_cancel=lambda _s: order.append("cancel"), session=None)
+            self.assertEqual(caught2.exception.code, "cancelled")
+            self.assertEqual(order, [])
+            self.assertIs(state2.native_request_sent, False)
+
+            # (d) _summary_run rechecks summary_cancelled after _inline_live binds.
+            h3 = run_execution.InlineRunHandle(control, identity)
+            first_result = rc.RunResult(identity=identity, harness="codex",
+                end=rc.RunEnd(status="cancelled"), buddy=rc.ResultBuddy(requested=buddy),
+                native_identity=rc.NativeIdentity(session_id="sess-1"),
+                continuation=rc.ContinuationFacts(resumable=True),
+                stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+
+            @contextmanager
+            def force_stopping_live(_req, _services, owned, **_kwargs):
+                owned.force_cancelled.set()
+                yield None
+
+            with mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "_inline_live", side_effect=force_stopping_live), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run summary")):
+                _c, _r, res3, ok3, _exp = inline_run._summary_run(
+                    control, req, first_result, object(), time.monotonic() + 60, h3)
+            self.assertIs(res3, first_result)
+            self.assertFalse(ok3)
 
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:

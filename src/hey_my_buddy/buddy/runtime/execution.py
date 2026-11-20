@@ -930,6 +930,16 @@ class Execution:
                 # Same clearing as the prepare loop: cancellation or any other
                 # exit must not leave the ended wait queued for receipt delivery.
                 self.hint(waitingReason=None)
+        if not outcome.shutdown_confirmed and _handle_shutdown_confirmed(handle):
+            # A stop dispatched during collection or detach finished stopping
+            # the surviving process tree after collect() read shutdown_confirmed.
+            outcome.shutdown_confirmed = True
+            if isinstance(outcome.result, dict):
+                process_state = outcome.result.get("processState")
+                if isinstance(process_state, dict):
+                    outcome.result["processState"] = {**process_state, "shutdownConfirmed": True}
+                if handle.cancel_requested and outcome.result.get("status") == "nonzero":
+                    outcome.result["status"] = "cancelled"
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
         if result is not None and result.activity is not None:
