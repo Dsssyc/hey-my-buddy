@@ -1,6 +1,6 @@
 [project]
 name = "hey-my-buddy"
-version = "0.71.0"
+version = "0.72.0"
 description = "A local blackboard where a Host buddy delegates micro tasks to Worker buddies in other coding harnesses and accepts every result itself."
 requires-python = ">=3.12,<3.13"
 dynamic = ["readme"]
@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "c-two==0.10.1",
+    "c-two==0.11.0",
     "portalocker>=3,<4",
     "psutil>=7,<8",
     "pywin32; sys_platform == 'win32'",

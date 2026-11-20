@@ -40,7 +40,7 @@ class _RecoveredExecution:
 
 @dataclass
 class _ConnectionWatch:
-    observation: cc.ConnectionObservation
+    observation: cc.observe.ConnectionObservation
     error: Exception | None = None
 
 
@@ -71,13 +71,13 @@ class ExecutionScheduler:
         self._observed: dict[str, _ExecutionObservation] = {}
         self._handles: dict[str, tuple[object, dict | None]] = {}
         self._threads: set[threading.Thread] = set()
-        self._connection_events: cc.ConnectionEvents | None = None
+        self._connection_events: cc.observe.ConnectionEvents | None = None
         self._connection_thread = threading.Thread(
             target=self._consume_connection_events, name="execution-connections", daemon=True)
         self._thread = threading.Thread(target=self._run, name="execution-scheduler", daemon=True)
 
     def start(self) -> None:
-        self._connection_events = cc.connection_events()
+        self._connection_events = cc.observe.connection_events()
         try:
             self._connection_thread.start()
             self._thread.start()
@@ -400,11 +400,11 @@ class ExecutionScheduler:
                 event = self._connection_events.recv()
             except StopIteration:
                 return
-            except cc.ConnectionEventsLagged:
+            except cc.observe.ConnectionEventsLagged:
                 with self._condition:
                     if self._stopping.is_set():
                         return
-                    self._connection_events = cc.connection_events()
+                    self._connection_events = cc.observe.connection_events()
                     for key, watch in tuple(self._connections.items()):
                         closed = watch.observation.snapshot()
                         if closed is not None:
@@ -413,7 +413,7 @@ class ExecutionScheduler:
             if event.side == "client" and event.kind == "closed":
                 self._connection_closed(event.connection_id, event.value)
 
-    def _connection_closed(self, key: int, closed: cc.ConnectionClosed) -> None:
+    def _connection_closed(self, key: int, closed: cc.observe.ConnectionClosed) -> None:
         with self._condition:
             watch = self._connections.pop(key, None)
             if watch is None:

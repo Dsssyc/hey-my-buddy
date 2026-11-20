@@ -320,10 +320,10 @@ class _ExecutionLive:
 
     def start(self, process_identity: dict) -> None:
         cc.register(ExecutionLive, self, name=self.name,
-                    concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                    concurrency=cc.ConcurrencyConfig(mode="parallel"))
         self._started = True
         address = cc.server_address()
-        credential = cc.server_credential()
+        credential = cc.endpoint.server_credential()
         if credential is None:
             raise BoardError("LIVE_UNAVAILABLE", "Registered execution endpoint credential is absent")
         descriptor = LiveEndpointDescriptor(address=address, name=self.name,

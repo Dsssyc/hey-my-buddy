@@ -182,16 +182,16 @@ def serve():
                     fixture.own_handle(handle)
                     channel = fixture.ready_channel(handle)
                     if os.name == 'nt':
-                        fixture.assertIsNone(cc.local_endpoint_context().root,
+                        fixture.assertIsNone(cc.endpoint.local_endpoint_context().root,
                                              "Windows uses C-Two's named-pipe domain")
                     else:
-                        fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
+                        fixture.assertEqual(Path(cc.endpoint.local_endpoint_context().root), state / "ipc",
                                             "holder must use its own actual process-level IPC domain")
                     facts = {"attemptId": context.attempt_id, "ownerPid": os.getpid(),
                              "controllerPid": handle.pid,
                              "state": str(state), "runtime": str(runtime), "home": str(home),
-                             "ipcRoot": cc.local_endpoint_context().root,
-                             "ipcNamespace": cc.local_endpoint_context().namespace_id,
+                             "ipcRoot": cc.endpoint.local_endpoint_context().root,
+                             "ipcNamespace": cc.endpoint.local_endpoint_context().namespace_id,
                              "live": handle.exit_code is None}
                 elif operation == "live":
                     channel = fixture.ready_channel(handle)

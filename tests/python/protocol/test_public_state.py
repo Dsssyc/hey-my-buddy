@@ -364,7 +364,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             evidence["serviceStateDir"] = service_state
             # This is the native public context after real local I/O, not a mock
             # report inferred from the directory supplied to configure_client.
-            native_root = transport.cc.local_endpoint_context().root
+            native_root = transport.cc.endpoint.local_endpoint_context().root
             evidence["nativeRoot"] = None if native_root is None else str(native_root)
             assert evidence["nativeRoot"] == (None if os.name == 'nt' else str(state / 'ipc'))
             if os.name == 'nt':
@@ -538,7 +538,7 @@ class FixtureRepairTests(unittest.TestCase):
                 patch.object(transport, "_read_endpoint", return_value=endpoint), \
                 patch.object(transport, "_attach_read_only", return_value=endpoint), \
                 patch.object(transport, "_request", side_effect=request), \
-                patch.object(transport.cc, "local_endpoint_context", return_value=MagicMock(root=str(state / "ipc"))), \
+                patch.object(transport.cc.endpoint, "local_endpoint_context", return_value=MagicMock(root=str(state / "ipc"))), \
                 patch(__name__ + ".stop_private_service", side_effect=stop), \
                 patch(__name__ + ".shutdown_private_rpc") as shutdown:
             with self.assertRaises(BoardError if target_fails else AssertionError) as caught:

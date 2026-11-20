@@ -11,6 +11,7 @@ from .. import locking, private_dirs
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import subprocess
 import sys
@@ -121,7 +122,9 @@ def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     elif kind in ('not_found', 'connection_refused') and details.get('transport_phase') != 'dispatch_uncertain':
         code = 'SERVICE_UNAVAILABLE'
     elif isinstance(error, CCError):
-        code = 'C_TWO_' + error.code.name.removeprefix('ERROR_')
+        # ErrorCode members are PascalCase (ResourceClosed, ClientCallingResource);
+        # the Host boundary keeps the C_TWO_<UPPER_SNAKE> spelling.
+        code = 'C_TWO_' + re.sub(r'(?<!^)(?=[A-Z])', '_', error.code.name).upper()
     else:
         code = 'C_TWO_' + error.category.upper()
     return ServiceError(code, str(error), **details)
@@ -133,10 +136,10 @@ def is_transient_ipc_error(error: BoardError, *, pre_dispatch_only: bool = False
     if pre_dispatch_only and details.get("transport_phase") == "dispatch_uncertain":
         return False
     if error.code in ("SERVICE_UNAVAILABLE", "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
-                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
+                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND"):
         return True
     phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
-    return (error.code in ("C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT")
+    return (error.code in ("C_TWO_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT")
             and details.get("category") == "transport"
             and details.get("transport_kind") == "ipc"
             and details.get("io_kind") not in ("other", "address_in_use", "permission_denied")

@@ -153,7 +153,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         return value
 
     def endpoint_status(self, address):
-        return cc.inspect_endpoint(address, context=cc.local_endpoint_context(root=str(self.state / "ipc")))
+        return cc.endpoint.inspect_endpoint(address, context=cc.endpoint.local_endpoint_context(root=str(self.state / "ipc")))
 
     def assert_private_endpoints(self):
         for label, address in self.descriptors.items():
@@ -254,7 +254,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         path = self.root / "startup-credential.json"
         result = self.until(lambda: json.loads(path.read_text(encoding="utf-8")) if path.exists() else None,
                             "execution did not obtain its listener credential under the namespace lock")
-        self.assertEqual(cc.EndpointCredential.from_json(result["credential"]).address, result["address"])
+        self.assertEqual(cc.endpoint.EndpointCredential.from_json(result["credential"]).address, result["address"])
         return result
 
     def test_execution_publishes_its_credential_while_the_namespace_gate_is_held(self):
@@ -306,7 +306,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         release()
         # The forced startup had no published descriptor. Retire only its exact
         # owned native endpoint after its process was independently observed gone.
-        reaped = cc.reap_endpoint(credential["address"], cc.EndpointCredential.from_json(credential["credential"]))
+        reaped = cc.endpoint.reap_endpoint(credential["address"], cc.endpoint.EndpointCredential.from_json(credential["credential"]))
         self.assertIn(reaped["status"], ("reaped", "already-absent"), reaped)
 
     def stop_owned(self):

@@ -111,7 +111,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             def harness_prepare(operation, params):
                 calls.append((operation, dict(params)))
                 if len(calls) == 1:
-                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE", "IPC client closed",
+                    raise BoardError("C_TWO_CLIENT_CALLING_RESOURCE", "IPC client closed",
                                      category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
                 return {"harness": {"status": "ready", "revision": 1}}
 
@@ -145,7 +145,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             with self.subTest(phase=phase, unknown=unknown), tempfile.TemporaryDirectory() as directory:
                 client = mock.Mock()
                 execution = Execution(claim, Path(directory), 'n' * 32, client=client)
-                failure = BoardError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+                failure = BoardError('C_TWO_CLIENT_CALLING_RESOURCE', 'IPC client closed',
                                      category='transport', transport_kind='ipc', transport_phase=phase)
                 replies = [{'harness': {'status': 'unhealthy', 'revision': 1}}]
                 if unknown:
@@ -181,12 +181,13 @@ class ExecutionEndpointTests(unittest.TestCase):
             pre_dispatch_only=True))
         direct_uncertain = CoreError('transport', 'peer closed mid-call')
         direct_uncertain.transport_kind = 'ipc'
-        direct_uncertain.transport_phase = 'dispatch_uncertain'
+        # The dispatch phase is a read-only property whose backing field init writes.
+        direct_uncertain._transport_phase = 'dispatch_uncertain'
         direct_uncertain.io_kind = 'connection_refused'
         self.assertTrue(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=False))
         self.assertFalse(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=True))
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
-        torn = transport.ServiceError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+        torn = transport.ServiceError('C_TWO_CLIENT_CALLING_RESOURCE', 'IPC client closed',
                                       category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
         for fail_on in ('ping', 'prepare'):
             with self.subTest(fail_on=fail_on), tempfile.TemporaryDirectory() as directory:
@@ -859,7 +860,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt", "generation": 1}}))
         with mock.patch("hey_my_buddy.buddy.runtime.execution.cc.register"), \
              mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_address", return_value="ipc://fixture"), \
-             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_credential", return_value=None) as credential, \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.endpoint.server_credential", return_value=None) as credential, \
              self.assertRaises(BoardError) as caught:
             live.start({"pid": 123})
         self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
@@ -1188,7 +1189,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 with mock.patch.object(launch_protocol.rpc_config, "configure_client"), \
                      mock.patch.object(launch_protocol.cc, "connect", return_value=peer,
                                        side_effect=error if stage == "connection" else None), \
-                     mock.patch.object(launch_protocol.cc, "connection_observation", return_value=object()), \
+                     mock.patch.object(launch_protocol.cc.observe, "connection_observation", return_value=object()), \
                      mock.patch.object(launch_protocol.cc, "with_call_options", return_value=call_view), \
                      mock.patch.object(launch_protocol.cc, "close") as close:
                     try:
@@ -1221,7 +1222,7 @@ class ExecutionEndpointTests(unittest.TestCase):
         call_view.__enter__.return_value = bounded
         with mock.patch.object(launch_protocol.rpc_config, "configure_client"), \
              mock.patch.object(launch_protocol.cc, "connect", return_value=peer) as connect, \
-             mock.patch.object(launch_protocol.cc, "connection_observation", return_value=observation) as observe_connection, \
+             mock.patch.object(launch_protocol.cc.observe, "connection_observation", return_value=observation) as observe_connection, \
              mock.patch.object(launch_protocol.cc, "with_call_options", return_value=call_view) as options, \
              mock.patch.object(launch_protocol.cc, "close") as close:
             try:
@@ -1445,7 +1446,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             try:
                 endpoint_file = execution.directory / "execution-live.json"
                 material = json.loads(native_path(endpoint_file).read_text(encoding="utf-8"))
-                credential = launch_protocol.cc.server_credential()
+                credential = launch_protocol.cc.endpoint.server_credential()
                 self.assertIsNotNone(credential)
                 self.assertEqual(material["descriptor"]["endpointCredential"], credential.to_json())
                 if os.name != "nt":
@@ -1493,14 +1494,14 @@ class ExecutionEndpointTests(unittest.TestCase):
                 with self.assertRaises(BoardError):
                     read_execution_endpoint(execution.directory, execution.live.identity,
                         state_dir=state, process_identity={**process_identity, "pid": 1})
-                with mock.patch.object(launch_protocol.cc, "reap_endpoint") as reap:
+                with mock.patch.object(launch_protocol.cc.endpoint, "reap_endpoint") as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
                         execution.directory, process_identity, state_dir=state,
                         stopped_evidence="alive")["status"], "unverified")
                     reap.assert_not_called()
                     self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
                 status = "not-applicable" if os.name == "nt" else "reaped"
-                with mock.patch.object(launch_protocol.cc, "reap_endpoint",
+                with mock.patch.object(launch_protocol.cc.endpoint, "reap_endpoint",
                                        return_value={"status": status}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
                         execution.directory, process_identity, state_dir=state,
