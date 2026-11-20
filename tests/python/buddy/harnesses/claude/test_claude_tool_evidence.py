@@ -24,7 +24,7 @@ from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.tool_evidence import ReadOnlyToolEvidence
 from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.buddy.roles.structured_call import collect
-from hey_my_buddy.blackboard.routing.router import answer_schema
+from hey_my_buddy.protocol.router_selection import answer_schema
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
 BINDING = {"harness": "claude", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
@@ -557,7 +557,7 @@ class RunnerReceiptTests(unittest.TestCase):
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
     def run_read_only(self, case):
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema("review"),
                                             capture_evidence=False)
         context = self.context(case)
         handle = start_review("claude", context, request)

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from blackboard.tasks import test_lead_owned as lead_owned
+from blackboard.routing.fixtures.maintenance_answers import stage_and_commit
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.evaluation.models import current_model
-from hey_my_buddy.blackboard.routing.maintenance_data import apply_answer, build_packet
+from hey_my_buddy.blackboard.routing.maintenance_data import build_packet
 from hey_my_buddy.errors import BoardError
 
 
@@ -63,11 +64,10 @@ class MicroTaskFixTests(WorkflowTestCase):
                 "merges": [],
                 "classifications": [{"runId": run_id, "domainNodeId": "fixed-deliveries", "taskType": "debug"}
                                     for run_id in packet["classificationRunIds"]],
-                "summaries": {kind["kindId"]: {"text": "Observed accepted delivery",
-                                                   "citations": kind["citationRunIds"]}
-                              for kind in packet["kinds"]},
+                "summaries": [{"kindId": kind["kindId"], "text": "Observed accepted delivery",
+                               "citations": kind["citationRunIds"]} for kind in packet["kinds"]],
             }
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id="maintenance-" + target["runId"])
         self.assertEqual(result["errors"], [])
 

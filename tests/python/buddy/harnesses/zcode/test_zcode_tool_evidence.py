@@ -171,8 +171,9 @@ for line in sys.stdin:
                 event('tool.updated', seq + 3, {'kind': 'result', 'toolCallId': call_id,
                       'result': {'success': True, 'content': prefix + reply['content'][0]['text']}})
                 seq += 3
-            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident,
-                  'response': 'wrong' if session == 1 else '{"choice":"a"}'})
+            answer = ('{"buddyId":"legal","domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
+                      if case == 'snapshot-route' else 'wrong' if session == 1 else '{"choice":"a"}')
+            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident, 'response': answer})
             send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
             continue
         if case in ('usage-quota', 'usage-projection-quota', 'usage-correct-quota'):

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
 from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import read_snapshot
 
 
 def prepare_input(manifest, directory, *, state_dir):
@@ -68,7 +69,6 @@ def _answer(document, options, mode):
     if (document.get("exploration") or {}).get("quota") is True:
         # A quota-carrying routing answers with its preferred buddy kept.
         answer["preferredBuddyId"] = preferred
-        answer["reselected"] = False
     if mode == "answer_error":
         return "{not json", None, "invalid"
     if mode == "answer_extra":
@@ -98,7 +98,7 @@ def start(harness, context, request, fixture, options):
     assert context.cwd == request.cwd
     assert set(request.output_schema["properties"]) in (
         {"buddyId", "domainNodeId", "taskType", "note", "evidence"},
-        {"buddyId", "domainNodeId", "taskType", "note", "evidence", "preferredBuddyId", "reselected"})
+        {"buddyId", "domainNodeId", "taskType", "note", "evidence", "preferredBuddyId"})
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
@@ -112,7 +112,9 @@ def start(harness, context, request, fixture, options):
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "invocationId": identity.invocation_id,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        "canCorrect": False,
+        "canCorrect": True,
+        "snapshot": context.decision_input["snapshot"],
+        "inputSha256": context.decision_input["inputSha256"],
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "captureEvidence": request.capture_evidence},
     }
@@ -140,7 +142,10 @@ def start(harness, context, request, fixture, options):
         handle.verdict = {"stopReason": None, "elapsedMs": 200}
         handle.exit_code = 1
     elif mode not in ("no_output", "string_shutdown"):
-        raw, parsed, schema_status = _answer(context.decision_input, options, mode)
+        snapshot = context.decision_input["snapshot"]
+        frozen = read_snapshot(Path(control["stateDir"]), snapshot["namespace"], snapshot["owner"],
+                               snapshot["reference"], round=snapshot["round"])
+        raw, parsed, schema_status = _answer(frozen, options, mode)
         reason_code, exit_code = _END.get(mode, (None, 0))
         binding = {"harness": harness, "taskId": context.task_id,
                    "attemptId": context.attempt_id, "generation": context.generation}

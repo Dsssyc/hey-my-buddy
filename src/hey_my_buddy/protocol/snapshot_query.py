@@ -459,19 +459,30 @@ def verified_coverage(plane: str, events: Iterable[dict]) -> dict[str, set[str]]
         return {}
     by_section = defaultdict(list)
     for event in events:
-        if event.get("tool") != "query_micro_tasks":
+        if not isinstance(event, dict) or not isinstance(event.get("tool"), str):
+            raise QueryError("Invalid snapshot delivery event.")
+        if event["tool"] != "query_micro_tasks":
             continue
-        for span in event["ranges"]:
+        ranges = event.get("ranges")
+        if not isinstance(ranges, list):
+            raise QueryError("Invalid micro task delivery ranges.")
+        for span in ranges:
+            if not isinstance(span, dict) or set(span) != {"runId", "section", "itemIndex", "start", "end", "total"}:
+                raise QueryError("Invalid micro task delivery range.")
             run_id, section = span["runId"], span["section"]
             start, end, total = span["start"], span["end"], span["total"]
-            if (section in MAINTENANCE_SECTIONS and 0 <= start < end <= total):
-                by_section[run_id, section].append((start, end, total))
+            if (not isinstance(run_id, str) or not run_id or section not in MAINTENANCE_SECTIONS
+                    or any(type(index) is not int for index in (span["itemIndex"], start, end, total))
+                    or span["itemIndex"] < 0
+                    or not 0 <= start < end <= total):
+                raise QueryError("Invalid micro task delivery bounds.")
+            by_section[run_id, section].append((start, end, total))
 
     complete = defaultdict(set)
     for (run_id, section), spans in by_section.items():
         total = spans[0][2]
         if any(span[2] != total for span in spans):
-            continue
+            raise QueryError("Micro task delivery ranges disagree on section length.")
         covered = 0
         for start, end, _ in sorted(spans):
             if start > covered:

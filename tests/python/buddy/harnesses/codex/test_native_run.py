@@ -29,7 +29,7 @@ from buddy.harnesses.fixture_selection import select_command, select_fixture
 from buddy.roles.test_role_prompts import real_turn_input
 from unittest import mock
 
-from hey_my_buddy.blackboard.routing.router import answer_schema
+from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
@@ -70,7 +70,7 @@ FAST_FIXTURE = Path(__file__).parent / "fixtures/no_tool_codex.py"
 OUTCOME_SCHEMA = worker_format("codex").schema
 FAST_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
                "properties": {"buddyId": {"type": "string", "enum": ["legal"]}}}
-REVIEW_SCHEMA = answer_schema(["legal"])
+REVIEW_SCHEMA = answer_schema("review")
 
 
 def activity_endpoint(identity):

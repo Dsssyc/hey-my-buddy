@@ -3,6 +3,7 @@ from admission import admit_execution
 import json
 from unittest.mock import patch
 
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch, frozen_input
 from hey_my_buddy.errors import BoardError
 
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C
@@ -79,7 +80,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(current_snapshot["facts"]["modelResponseWaitSeconds"],
                              current_snapshot["baseInput"]["modelResponseWaitSeconds"])
         second = self.next_claim(request)
-        self.assertEqual([p["buddyId"] for p in second["decisionInput"]["buddies"]], [A, C])
+        self.assertEqual([p["buddyId"] for p in frozen_input(self.board_, second["decisionInput"])["buddies"]], [A, C])
         self.assertNotEqual(second["task"]["taskId"], first["task"]["taskId"])
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 1)
@@ -198,7 +199,7 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True, 'result': stopped_answer(claim, state_dir=board.directory)})
         view = self.decision(board, request["decisionId"])
         self.assertEqual((view["status"], view["buddyId"]), ("completed", BUDDY_ID))
-        self.assertEqual(view["input"], claim["decisionInput"])
+        assert_frozen_dispatch(self, board, claim["decisionInput"], view["input"])
 
     def test_catalog_refresh_during_call_keeps_frozen_input_and_publishes(self):
         board = self.board()

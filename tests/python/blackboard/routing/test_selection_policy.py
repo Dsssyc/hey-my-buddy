@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import unittest
+from blackboard.routing.fixtures.selection import validate
+from hey_my_buddy.protocol import router_selection
 
 from hey_my_buddy.blackboard.routing import selection_policy
 
@@ -47,9 +49,8 @@ class PolicyFactsTests(unittest.TestCase):
         check = selection_policy.expected_policy_check(facts, ZCODE_ID)
         self.assertEqual(check["userPreference"], "alternative")
         self.assertEqual(check["hardConstraints"], {})
-        from hey_my_buddy.blackboard.routing import router
         answer = {"domainNodeId": None, "taskType": "change", "buddyId": ZCODE_ID, "note": "file evidence supports another route", "evidence": []}
-        self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
+        self.assertEqual(validate(answer, [DSH_ID, ZCODE_ID]), answer)
 
     def test_no_user_preference_is_none_and_a_preferred_choice_is_matched(self):
         self.assertEqual(selection_policy.expected_policy_check(derived_facts(), ZCODE_ID)["userPreference"], "none")
@@ -85,8 +86,7 @@ class RouterAnswerTests(unittest.TestCase):
         return {"domainNodeId": None, "taskType": "change", "buddyId": DSH_ID, "note": "Read the frozen checkout", "evidence": [], **changes}
 
     def validate(self, value):
-        from hey_my_buddy.blackboard.routing import router
-        return router.validate_answer(value, [DSH_ID, ZCODE_ID])
+        return validate(value, [DSH_ID, ZCODE_ID])
 
     def assert_code(self, code, answer):
         from hey_my_buddy.errors import BoardError
@@ -113,7 +113,7 @@ class RouterAnswerTests(unittest.TestCase):
     def test_outside_frozen_candidates_is_rejected(self):
         for value in ("ghost", "", 3, True, [], {}):
             with self.subTest(value=value):
-                self.assert_code("router-out-of-bounds", self.answer(buddyId=value))
+                self.assert_code("router-out-of-bounds" if value == "ghost" else "answer-shape", self.answer(buddyId=value))
 
     def test_extra_legacy_fields_and_missing_required_fields_are_rejected(self):
         self.assert_code("answer-shape", {"buddyId": DSH_ID, "reason": "legacy", "evidence": []})
@@ -125,23 +125,22 @@ class RouterAnswerTests(unittest.TestCase):
             del answer[key]
             self.assert_code("answer-shape", answer)
         for value in (None, [], "{not json", "[]"):
-            self.assert_code("answer-invalid-json" if value == "{not json" else "answer-shape", value)
+            self.assert_code({None: "router-no-answer", "{not json": "answer-invalid-json"}.get(value, "answer-shape") if not isinstance(value, list) else "answer-shape", value)
 
     def test_note_and_reference_shape_are_bounded(self):
-        from hey_my_buddy.blackboard.routing import router
-        for value in (None, "", 1, "x" * (router.MAX_NOTE + 1)):
+        for value in (None, "", 1, "x" * (router_selection.MAX_NOTE + 1)):
             with self.subTest(note=value):
                 self.assert_code("answer-shape", self.answer(note=value))
         invalid = [None, {}, "id", [{"kind": "preference"}], [{"kind": "preference", "ref": "a", "extra": 1}],
                    [{"kind": "unknown", "ref": "a"}], [{"kind": "annotation", "ref": "a"}], [{"kind": "card", "ref": "a"}],
                    [{"kind": "preference", "ref": ""}],
                    [{"kind": "preference", "ref": "x" * 1025}],
-                   [{"kind": "preference", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
+                   [{"kind": "preference", "ref": "a"}] * (router_selection.MAX_REFERENCES + 1)]
         for value in invalid:
             with self.subTest(evidence=value):
                 self.assert_code("answer-shape", self.answer(evidence=value))
-        self.validate(self.answer(note="x" * router.MAX_NOTE,
-                                  evidence=[{"kind": "preference", "ref": "x" * 1024}] * router.MAX_REFERENCES))
+        self.validate(self.answer(note="x" * router_selection.MAX_NOTE,
+                                  evidence=[{"kind": "preference", "ref": "x" * 1024}] * router_selection.MAX_REFERENCES))
 
     def test_file_paths_cannot_escape_checkout(self):
         for ref in ("/etc/passwd", "../file", "src/../../file", "src/../file", "C:/file", "src\\file", "."):
@@ -150,15 +149,14 @@ class RouterAnswerTests(unittest.TestCase):
         self.validate(self.answer(evidence=[{"kind": "file", "ref": "src/module.py"}]))
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
-        from hey_my_buddy.blackboard.routing import router
         from hey_my_buddy.buddy.roles.structured_call import correction_code
         from hey_my_buddy.protocol.structured_schema import schema_errors
-        schema = router.answer_schema([DSH_ID, ZCODE_ID])
-        self.assertEqual(schema["properties"]["buddyId"]["enum"], [DSH_ID, ZCODE_ID, None])
+        schema = router_selection.answer_schema("review")
+        self.assertNotIn("enum", schema["properties"]["buddyId"])
         self.assertEqual(set(schema["properties"]), {"buddyId", "domainNodeId", "taskType", "note", "evidence"})
         self.assertEqual(schema_errors(self.answer(), schema), [])
         self.assertEqual(schema_errors(self.answer(buddyId=None), schema), [])
-        self.assertIn("enum", schema_errors(self.answer(buddyId="ghost"), schema))
+        self.assertEqual(schema_errors(self.answer(buddyId="ghost"), schema), [])
         self.assertIn("additionalProperties", schema_errors(self.answer(policyCheck={}), schema))
         self.assertIn("minLength", schema_errors(self.answer(note=""), schema))
         self.assertIn("enum", schema_errors(self.answer(evidence=[{"kind": "card", "ref": "retired"}]), schema))

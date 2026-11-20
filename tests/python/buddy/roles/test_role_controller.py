@@ -255,8 +255,9 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.roles import router as calls
 
-        context = self.context(decision_input={"domainNodes": [], "buddy": {}, "routingMode": "review",
-                                               "buddies": [{"buddyId": "chosen"}]})
+        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
+                                               "snapshot": {"namespace": "routing", "owner": "decision",
+                                                            "reference": {"sha256": "a" * 64}, "round": 1}})
         handle = SimpleNamespace(router_input=(None, self.root, "digest"))
         native = AdapterOutcome(status="ok", result={"rawAnswer": "native answer", "usage": {"elapsedMs": 200}},
                                 shutdown_confirmed=True)
@@ -266,7 +267,8 @@ class RouterCallPointTests(unittest.TestCase):
         with mock.patch.object(calls.read_only, "collect", return_value=native) as collect, \
              mock.patch.object(calls.router_input, "verify", side_effect=[unknown, verified]) as verify, \
              mock.patch.object(calls.router_input, "discard") as discard, \
-             mock.patch.object(calls.router, "validate_answer", return_value={"buddyId": "chosen"}) as answer:
+             mock.patch.object(calls, "read_snapshot", return_value={}), \
+             mock.patch.object(calls.router_selection, "validate_answer", return_value={"buddyId": "chosen"}) as answer:
             with self.assertRaises(BoardError) as waiting:
                 adapter.collect(handle, context)
             self.assertEqual(waiting.exception.code, "router-input-unknown")
@@ -290,7 +292,7 @@ class RouterCallPointTests(unittest.TestCase):
         frozen.mkdir()
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=self.Native()), \
              mock.patch.object(calls.router_input, "prepare", return_value=(frozen, "digest")), \
-             mock.patch.object(calls.router, "render_prompt", side_effect=BoardError("INVALID_ARGUMENT", "bad prompt")), \
+             mock.patch.object(calls, "render_selection_prompt", side_effect=BoardError("INVALID_ARGUMENT", "bad prompt")), \
              mock.patch.object(controller, "start_router_preparation") as start:
             with self.assertRaises(BoardError):
                 calls.DecisionAdapter().prepare(self.context(decision_input=document))

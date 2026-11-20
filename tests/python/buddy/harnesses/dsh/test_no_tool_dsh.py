@@ -166,7 +166,7 @@ class RouterStartWaitTests(DshNoToolTests):
     def test_silence_past_the_start_wait_still_collects_the_routing_answer(self):
         from hey_my_buddy.buddy.runtime.execution import BUDGET, Execution
         from hey_my_buddy.buddy.roles.router import DecisionAdapter
-        from hey_my_buddy.blackboard.routing import router
+        from blackboard.routing.fixtures.selection import fast_document
 
         candidates = ["dsh:fixture:alpha:max", "dsh:fixture:bravo:max"]
 
@@ -189,11 +189,8 @@ class RouterStartWaitTests(DshNoToolTests):
         # produces on the real channel.
         self.select(json.dumps(answer), delay=("session/prompt", 2.5))
         spec = {"adapter": "decision", "cwd": str(self.cwd), "modelResponseWaitSeconds": 1}
-        document = {"routingMode": "fast",
-                    "buddy": {"harness": "dsh", **SPEC},
-                    "buddies": [candidate(buddy_id) for buddy_id in candidates],
-                    "domainNodes": [], "task": "fix the parser", "requestId": "pick-1",
-                    "outputSchema": router.answer_schema(candidates, "fast")}
+        document = fast_document(self.root / "state", "pick-1", {"harness": "dsh", **SPEC},
+                                 [candidate(buddy_id) for buddy_id in candidates], task="fix the parser", wait=1)
         claim = {"task": {"taskId": "router-task", "spec": spec},
                  "attempt": {"taskId": "router-task", "attemptId": "attempt-1", "generation": 1},
                  "decisionInput": document}

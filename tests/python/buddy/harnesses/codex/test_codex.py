@@ -103,11 +103,11 @@ class CodexAdapterTests(unittest.TestCase):
 
     def review(self, case, *, index, capture=True):
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema
+        from hey_my_buddy.protocol.router_selection import answer_schema
         context = self.context(case, index=index)
         context.turn = None
         context.agent_credential = None
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema("review"),
                                             capture_evidence=capture)
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
@@ -570,8 +570,8 @@ class CodexAdapterTests(unittest.TestCase):
         context.turn = None
         context.environment['CODEX_HOME'] = str(account_home)
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']))
+        from hey_my_buddy.protocol.router_selection import answer_schema
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema('review'))
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)

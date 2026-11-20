@@ -224,6 +224,14 @@ class SnapshotQueryTests(unittest.TestCase):
         self.assertEqual(verified_coverage("maintenance", [titles, *events[1:]]),
                          {"run-a": expected - {"task"}, "run-b": expected})
 
+    def test_malformed_verified_range_cannot_be_counted_as_read(self):
+        snapshot = maintenance_packet()
+        query = SnapshotQuery(snapshot, plane="maintenance")
+        _, event = query.call("query_micro_tasks", {"runIds": ["run-a"], "sections": ["task"]})
+        span = event["ranges"][0]
+        with self.assertRaises(QueryError):
+            maintenance_coverage(snapshot, [{**event, "ranges": [{**span, "end": True}]}])
+
     def test_first_page_of_batched_sections_only_proves_the_returned_run(self):
         query = SnapshotQuery(maintenance_packet(), plane="maintenance")
         result, event = query.call("query_micro_tasks", {

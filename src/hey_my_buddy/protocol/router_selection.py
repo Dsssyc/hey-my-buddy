@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from itertools import chain, islice
 
 from ..errors import BoardError
 from ..json_codec import decode_strict_json
-from .structured_schema import schema_errors, schema_issues
+from .structured_schema import schema_issues
 from .task_types import TASK_TYPES
 
 VERSION = 20
@@ -51,13 +51,11 @@ def _file_evidence(answer: dict) -> Iterator[tuple[int, dict]]:
                 yield index, entry
 
 
-def _relative_path(ref: str, *, strict: bool) -> bool:
+def _relative_path(ref: str) -> bool:
     parts = ref.split("/")
     if ref.startswith("/") or ".." in parts or "\\" in ref or ":" in ref or ref == ".":
         return False
-    if strict:
-        return "." not in parts and all(unicodedata.category(char) != "Cc" for char in ref)
-    return all(ord(char) >= 32 and ord(char) != 127 for char in ref)
+    return "." not in parts and all(unicodedata.category(char) != "Cc" for char in ref)
 
 
 def reselected(answer: dict) -> bool:
@@ -145,7 +143,7 @@ def _text_issues(answer: object) -> Iterator[dict]:
             field = f"$.evidence[{index}].ref"
             if not _valid_text(ref):
                 yield {"field": field, "reason": "invalid-unicode", "message": "Use valid Unicode text"}
-            elif entry.get("kind") == "file" and not _relative_path(ref, strict=True):
+            elif entry.get("kind") == "file" and not _relative_path(ref):
                 yield {"field": field, "reason": "relative-path",
                        "message": "Use only a checkout-relative path without a line number"}
 
@@ -181,49 +179,3 @@ def validate_answer(raw: object, document: dict) -> dict:
     if errors:
         raise _format_error("answer-shape", errors)
     return {key: raw[key] for key in schema["properties"]}
-
-
-def legacy_answer_schema(buddy_ids: list[str], routing_mode: str = "review", *,
-                         domain_node_ids: Sequence[str] = (), exploration: bool = False) -> dict:
-    """Protocol 19 remains the active answer contract until the Router cutover."""
-    schema = answer_schema(routing_mode, exploration=exploration)
-    properties = schema["properties"]
-    properties["buddyId"] = {"type": ["string", "null"], "enum": [*buddy_ids, None]}
-    properties["domainNodeId"] = {"type": ["string", "null"], "enum": [*domain_node_ids, None]}
-    properties["evidence"]["items"]["properties"]["kind"].pop("type")
-    if exploration:
-        properties["preferredBuddyId"] = {"type": "string", "enum": list(buddy_ids)}
-        properties["reselected"] = {"type": "boolean"}
-        schema["required"].append("reselected")
-    return schema
-
-
-def validate_legacy_answer(answer: object, buddy_ids: list[str], routing_mode: str = "review", *,
-                           domain_node_ids: Sequence[str] = (), exploration: bool = False) -> dict:
-    """Apply the protocol-19 model schema and its output contract."""
-    if isinstance(answer, str):
-        try:
-            answer = json.loads(answer)
-        except (ValueError, RecursionError):
-            raise BoardError("answer-invalid-json", "Router answer is not valid JSON") from None
-    schema = legacy_answer_schema(buddy_ids, routing_mode, domain_node_ids=domain_node_ids, exploration=exploration)
-    errors = schema_errors(answer, schema)
-    if errors:
-        if isinstance(answer, dict) and set(answer) == set(schema["properties"]):
-            if schema_errors(answer["buddyId"], schema["properties"]["buddyId"]):
-                raise BoardError("router-out-of-bounds", "Router selected a buddy outside its frozen candidates",
-                                 bound="not-a-candidate")
-            if exploration and schema_errors(answer["preferredBuddyId"], schema["properties"]["preferredBuddyId"]):
-                raise BoardError("router-out-of-bounds", "Router preferred a buddy outside its frozen candidates",
-                                 bound="not-a-candidate")
-            if routing_mode == "fast" and next(_file_evidence(answer), None) is not None:
-                raise BoardError("router-evidence-out-of-bounds", "Fast routing cannot cite repository files")
-        raise BoardError("answer-shape", "Router answer violates its JSON Schema: " + ", ".join(errors))
-    for _, entry in _file_evidence(answer):
-        if not _relative_path(entry["ref"], strict=False):
-            raise BoardError("answer-shape", "File evidence must be a checkout-relative path")
-    if exploration and answer["reselected"] != reselected(answer):
-        if answer["reselected"]:
-            raise BoardError("answer-shape", "A reselected answer must select a legal buddy other than the preferred one")
-        raise BoardError("answer-shape", "Without a reselection the selected buddy is the preferred buddy")
-    return {key: answer[key] for key in schema["properties"]}

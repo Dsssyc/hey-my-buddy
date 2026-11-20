@@ -8,6 +8,7 @@ from unittest.mock import patch
 from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID
 
 from hey_my_buddy.protocol import tool_evidence
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch
 from support import InProcessBoard
 from blackboard.routing.test_single_router_claims import stopped_answer
 
@@ -75,7 +76,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         with board.store.db.read() as db:
             from hey_my_buddy.blackboard.routing import router_sequence
             original = router_sequence.dispatch(db, requested['runId'])
-            self.assertEqual(original['document'], claim['decisionInput'])
+            assert_frozen_dispatch(self, board, claim['decisionInput'], original['document'])
             self.assertEqual(original['document'], document)
             self.assertEqual(set(db.execute('SELECT * FROM router_claims WHERE attempt_id=?', (claim['attempt']['attemptId'],)).fetchone().keys()), {'attempt_id', 'task_id', 'generation'})
         self.assertEqual(document['routingMode'], 'review')

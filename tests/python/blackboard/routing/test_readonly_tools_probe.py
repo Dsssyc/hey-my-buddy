@@ -7,6 +7,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls, summarize_tool_calls, write_tool_calls
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
@@ -49,6 +50,10 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         self.assertNotIn(packet['expected']['marker'], packet['request']['prompt'])
         self.assertNotIn('budget', packet['request'])
         self.assertEqual(packet['request']['modelResponseWaitSeconds'], 60)
+        self.assertNotIn('enum', packet['request']['outputSchema']['properties']['buddyId'])
+        query = SnapshotQuery(packet['selection'])
+        details, _ = query.call('query_details', {'buddyIds': [packet['expected']['buddyId']]})
+        self.assertTrue(any(item['field'] == 'summary' for item in details['items']))
 
     def test_only_one_execution_is_possible_for_the_prepared_packet(self):
         packet = self.prepared()
@@ -69,6 +74,8 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         _harness, context, request = native.registered_start.call_args.args
         self.assertIsNone(context.agent_credential)
         self.assertIsNone(context.turn)
+        self.assertEqual(context.decision_input['snapshot']['namespace'], 'routing')
+        self.assertEqual(context.decision_input['inputSha256'], self.args.expected_packet_sha256)
         self.assertFalse(request.capture_evidence)
         self.assertEqual(context.spec['modelResponseWaitSeconds'], 60)
         handle.wait.assert_called_once_with(timeout=0.25)

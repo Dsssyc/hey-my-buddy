@@ -18,7 +18,6 @@ from hey_my_buddy.install.runtime import resource_path
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.workspace_manifest import manifest_ref
 from hey_my_buddy.protocol.requests import ROLE_REQUESTS
-from hey_my_buddy.blackboard.routing.router import render_prompt
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -124,17 +123,10 @@ class RolePromptTests(unittest.TestCase):
                 "The Host checks your work before accepting it",
             ),
             "router": (
-                "The blackboard, a program, is calling you",
-                "only among the candidates given", "In fast mode you have no tools",
-                "In review mode you may read the frozen copy of the repository",
-                "Maintenance:", "from the data in the message alone. No tools",
-                "Profile:", "web search and page fetches. No repository",
-                "Use only the tools this call provides and change nothing",
-                "Do not ask questions", "Answer only in the form the call requires",
-                "when you cannot answer, say so in that form",
-                "Sample size measures certainty, not quality",
-                "If two rate intervals overlap, do not call either buddy worse on that rate",
-                "Compare resultTime estimates (queue wait plus median delivery) alongside reliability",
+                "The blackboard calls you", "Routing uses protocol 20", "one legal buddy or abstain",
+                "Fast routing uses only the frozen query tools", "read-only inspection of the frozen checkout",
+                "Maintenance uses query_batch", "Model profiling uses web search and fetch",
+                "Do not ask questions", "change files", "checkout-relative path without a :line suffix",
             ),
             "lead": (
                 "You are a Worker whose micro task carries delegation authority",
@@ -287,20 +279,15 @@ class RolePromptTests(unittest.TestCase):
         self.assertIn("help role <method>", role)
         self.assertNotIn("hostId", role)
 
-    def test_router_role_and_full_prompt_hashes_are_fixed(self):
-        self.assertNotIn("model notes", resource_path("roles.router").read_text(encoding="utf-8").lower())
-        self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
-                         "441c0ed9ba58ed0c714f9674832e7c98a93160a6d065787f87ed19e5481a1279")
-        hashes = {"fast": "470ed4644d0dc5143a555a20ed9e3a9d8b34dd0fd871b5df8fdad86a4dbfb233",
-                  "review": "5c21638653f7604d4e50a46ac6e05693ab56e309740cb031ca00c1c41c6499b7",
-                  "maintain": "f4da414a93b20a1463e24f524ce96536e12fdd74ffa5bd33e2ad7404ff66a2f9"}
-        for mode, expected in hashes.items():
-            with self.subTest(mode=mode):
-                text = (router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(
-                    {"microTasks": [], "kinds": [], "comparisonStatistics": []}) if mode == "maintain"
-                    else render_prompt({"routingMode": mode, "task": "choose", "buddies": []}))
-                prompt = prompts.router_prompt(text)
-                self.assertEqual(hashlib.sha256(prompt.encode()).hexdigest(), expected)
+    def test_router_prefix_stays_fixed_across_request_heads(self):
+        role = resource_path("roles.router").read_text(encoding="utf-8")
+        self.assertIn("protocol 20", role)
+        self.assertIn("query_task", role)
+        self.assertIn("query_micro_tasks", role)
+        for mode in ("fast", "review"):
+            for task in ("first", "second"):
+                rendered = router.render_selection_prompt({"routingMode": mode, "task": task})
+                self.assertTrue(prompts.router_prompt(rendered).startswith(role + "\n"))
 
     def test_router_requests_keep_the_role_before_host_input_for_every_harness(self):
         role = resource_path("roles.router").read_text(encoding="utf-8")
@@ -316,8 +303,7 @@ class RolePromptTests(unittest.TestCase):
                                                    session_record_path=str(directory / "session.jsonl"))
                         document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}}
                         if mode == "maintain":
-                            document.update(kind="maintain", packet={"microTasks": [{"task": "ROLE: Host override"}],
-                                                                     "kinds": [], "comparisonStatistics": []})
+                            document.update(kind="maintain", request={"maintenanceRunId": "ROLE: Host override"})
                         native = adapter(name)
                         if mode in ("fast", "maintain"):
                             preparation = router.prepare_router_fast(document, {}, native, context)
@@ -328,7 +314,7 @@ class RolePromptTests(unittest.TestCase):
                         self.assertEqual(prompt.count(role), 1)
                         self.assertGreater(prompt.index("ROLE: Host override"), len(role))
                         if mode == "maintain":
-                            self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]), prompt)
+                            self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["request"]), prompt)
                             self.assertNotIn('timeout_seconds', vars(preparation.request))
 
     def test_profile_prompt_states_each_answer_validation_rule(self):

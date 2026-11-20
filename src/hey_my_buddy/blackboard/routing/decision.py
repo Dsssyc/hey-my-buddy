@@ -23,7 +23,7 @@ from ...protocol import schemas
 from ...protocol.workspace_manifest import manifest_ref
 from ...protocol.task_types import TASK_TYPES
 from ..evaluation import user_policy
-from . import selection_policy, router, router_sequence, router_failover, evidence
+from . import evidence, router, router_failover, router_sequence, selection_policy, snapshot_files
 from ...protocol import router_selection, tool_evidence
 from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason, reason_from_json
@@ -227,11 +227,7 @@ class DecisionCoordinator:
         include_preferences: bool,
         now: str,
     ) -> dict:
-        """The complete bounded table slice for one request — never a silent truncation.
-
-        Every legal candidate and preference is included. The final
-        dispatch checks its byte ceiling without dropping entries.
-        """
+        """Freeze every legal candidate, preference and active domain for one request."""
         buddy_ids = [row["buddy_id"] for row in buddies]
         preferences: list[dict] = []
         if include_preferences:
@@ -258,10 +254,7 @@ class DecisionCoordinator:
         table = self._table_input(
             connection, buddies=candidates, include_preferences=True, now=now
         )
-        # The program-computed preference truth for this request. It is request-local
-        # (it depends on this candidate slice and the user's published prefer entries),
-        # so it is part of the variable suffix the model sees after the stable table
-        # snapshot. Task-local routing preferences are retired Host input (ADR-021).
+        # Freeze the program's preference truth for this candidate set.
         table["policyFacts"] = selection_policy.policy_facts(
             buddies=table["buddies"],
             prefer_buddy_ids=[
@@ -269,7 +262,8 @@ class DecisionCoordinator:
             ],
             hard_constraints=hard_constraints or {},
         )
-        return {"operation": "select", "requestId": request_id, "task": task_text,
+        return {"operation": "select", "protocolVersion": router_selection.VERSION,
+                "requestId": request_id, "task": task_text,
                 "expectedSeconds": expected_seconds, "project": project, **table}
 
     # -- request operations --------------------------------------------------
@@ -330,7 +324,7 @@ class DecisionCoordinator:
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "modelResponseWaitSeconds": None, "routerCalled": False}
             expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
-            snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
+            snapshot: dict = {"facts": facts, "baseInput": {"protocolVersion": router_selection.VERSION, "task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
@@ -365,11 +359,6 @@ class DecisionCoordinator:
                 # Review routing includes the frozen execution workspace.
                 if facts["routingMode"] != "fast":
                     base_input["executionWorkspace"] = request.get("executionWorkspace")
-                if facts["routingMode"] is not None:
-                    base_input["outputSchema"] = router.answer_schema(
-                        [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"],
-                        domain_node_ids=[node["nodeId"] for node in base_input["domainNodes"]],
-                        exploration=quota)
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 if facts["routingMode"] is None or resolution.buddy is None:
@@ -696,19 +685,19 @@ class DecisionCoordinator:
             return descriptor["document"]
         row = self._row(connection, descriptor["decisionId"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
-        document = dispatch["document"]
+        digest = sha256_text(canonical_json(dispatch["document"]))
+        reference = snapshot_files.publish_round(self.board, connection, row["decision_id"], dispatch["round"])
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
-            document=document, now=now,
+            digest=digest, now=now,
         )
         # The attempt's Router binding and its ``router.claimed`` fact commit in
         # this same claim transaction: one atomic dispatch-to-attempt binding.
         router_sequence.record_claim(
             connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
-        return document
+        return router_sequence.execution_document(dispatch, reference, digest)
 
-    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
-        digest = sha256_text(canonical_json(document))
+    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, digest: str, now: str) -> None:
         connection.execute(
             "UPDATE decision_requests SET attempt_id=?, generation=?, updated_at=? WHERE decision_id=?",
             (attempt_id, generation, now, row["decision_id"]),
@@ -973,7 +962,7 @@ class DecisionCoordinator:
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
                                                                "modelResponseWaitSeconds": None, "routerCalled": False},
-                                                     "baseInput": {"task": request["task"]}, "inspections": []},
+                                                     "baseInput": {"protocolVersion": router_selection.VERSION, "task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
             connection.execute(
                 "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
@@ -1009,11 +998,6 @@ class DecisionCoordinator:
             document["executionWorkspace"] = (
                 manifest_ref(manifest) if row["request_form"] == "archived-inline-v1" and manifest is not None
                 else manifest)
-        if resolution.facts["routingMode"] is not None:
-            document["outputSchema"] = router.answer_schema(
-                [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"],
-                domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
-                exploration=quota)
         next_round = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM router_requests WHERE decision_id=?",
                                         (row["decision_id"],)).fetchone()[0]
         router_sequence.freeze_request(connection, row["decision_id"],
@@ -1054,7 +1038,10 @@ class DecisionCoordinator:
             "attemptId": row["decision_attempt_id"],
             "generation": row["decision_generation"],
         }
-        if not isinstance(evidence, dict) or evidence.get("binding") != expected_binding:
+        requires_session_evidence = (document.get("kind") == "maintain"
+                                     or document.get("protocolVersion") == router_selection.VERSION)
+        if (not isinstance(evidence, dict) or evidence.get("binding") != expected_binding
+                or (requires_session_evidence and evidence.get("version") != tool_evidence.TOOL_EVIDENCE_VERSION)):
             return {"code": unverified}
         roots = evidence.get("nativeIdentity")
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
@@ -1121,15 +1108,7 @@ class DecisionCoordinator:
             return refuse("answer-shape")
         buddies = document.get("buddies") or []
         try:
-            raw = output.get("decision")
-            if document.get("protocolVersion") == router_selection.VERSION:
-                decision = router_selection.validate_answer(raw, document)
-            else:
-                decision = router.validate_answer(
-                    raw, [item["buddyId"] for item in buddies], document["routingMode"],
-                    domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
-                    exploration=(document.get("exploration") or {}).get("quota") is True)
-                router_selection.validate_exploration(document, decision)
+            decision = router_selection.validate_answer(output.get("decision"), document)
         except BoardError as failure:
             params = {"bound": failure.details["bound"]} if "bound" in failure.details else {}
             return refuse(failure.code, **params)
@@ -1512,7 +1491,7 @@ class DecisionCoordinator:
                     "attemptId": row["decision_attempt_id"],
                     "generation": row["decision_generation"],
                     "requested": request,
-                    # The exact bounded fields sent to the model, retained for audit.
+                    # The full immutable dispatch, including the query data.
                     "input": input_document,
                     "output": output,
                     # The decision call's own buddy, kept separate from the

@@ -141,15 +141,17 @@ def main():
             if case == "foreign-thread-started":
                 send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
-            if case == "snapshot":
-                assert "query_task" in {tool["name"] for tool in dynamic_tools}
-                for call_id, args in (("page", {"limit": 5}), ("error", {"offset": 999})):
+            if case in ("snapshot", "router-facts"):
+                tool_name = "query_task" if case == "snapshot" else "query_compare"
+                assert tool_name in {tool["name"] for tool in dynamic_tools}
+                queries = (("page", {"limit": 5}), ("error", {"offset": 999})) if case == "snapshot" else (("page", {"limit": 1}),)
+                for call_id, args in queries:
                     event("item/started", turn_id, item={"type": "dynamicToolCall", "id": call_id})
                     event("rawResponseItem/completed", turn_id, item={
-                        "type": "function_call", "name": "query_task", "call_id": call_id})
+                        "type": "function_call", "name": tool_name, "call_id": call_id})
                     send({"id": "tool-" + call_id, "method": "item/tool/call", "params": {
                         "threadId": "thread-1", "turnId": turn_id, "callId": call_id,
-                        "tool": "query_task", "arguments": args}})
+                        "tool": tool_name, "arguments": args}})
                     reply = json.loads(sys.stdin.readline())["result"]
                     assert reply["success"] is (call_id == "page")
                     event("item/completed", turn_id, item={
@@ -206,7 +208,9 @@ def main():
                         "last": usage, "total": {key: value * turns for key, value in usage.items()}})
             answer = "not-json" if case in ("format", "usage-format", "usage-then-missing", "snapshot") and turns == 1 else json.dumps({"buddyId": "foreign" if case == "outside" else "legal"})
             if case == "router-facts":
-                buddy = params["outputSchema"]["properties"]["buddyId"]["enum"][0]
+                assert "enum" not in params["outputSchema"]["properties"]["buddyId"]
+                delivery = json.loads(reply["contentItems"][0]["text"])["response"]["data"]
+                buddy = delivery["items"][0]["buddyId"]
                 answer = json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": buddy, "note": "Offline fixture reads the frozen program facts",
                                      "evidence": [{"kind": "statistics", "ref": buddy}]})
             if case == "gated":

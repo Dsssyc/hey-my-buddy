@@ -58,9 +58,7 @@ def selection_validator(document: dict):
 
     The returned callable applies :func:`validate_answer` to one raw Router
     answer against the frozen document, so the in-run correction decision and
-    the blackboard's publication judgment can never diverge. Until the Router
-    cutover dispatches protocol-20 snapshots the observers run without it and
-    keep the protocol-19 schema check.
+    the blackboard's publication judgment use the same rules.
     """
     return partial(validate_answer, document=document)
 
@@ -123,8 +121,6 @@ class FastCorrection:
     def _problem(self, raw):
         """Classify one settled answer as a hard bound, a format error or none."""
         if self.validator is None:
-            # Protocol 19 transition: the shared subset validator stays the
-            # active answer contract until the Router cutover removes it.
             code = correction_code(raw, self.output_schema) if isinstance(raw, str) else "answer-invalid-json"
             return ("format", code) if code is not None else None
         if not isinstance(raw, str) or not raw.strip():
@@ -165,14 +161,22 @@ class ReviewObserver:
     def __init__(self, output_schema: dict, prompt: str, *, can_correct: bool,
                  validator=None, session_preserved: bool = False):
         self._validate_tools = validator is not None
+        self._tool_stop = False
         self.correction = FastCorrection(
             output_schema, prompt,
             suffix=". Return exactly the supplied JSON Schema; do not repeat exploration.",
             validator=validator, session_preserved=session_preserved) if can_correct else None
 
+    @property
+    def stop_reason(self):
+        if self._tool_stop:
+            return "router-tools-forbidden"
+        return self.correction.stop_reason if self.correction else None
+
     def observer(self, facts: Mapping) -> RunFeedback:
         if self._validate_tools and any(facts.get(key) for key in (
                 "deniedInteractions", "toolMarkerFrames", "readToolViolations")):
+            self._tool_stop = True
             return FEEDBACK_STOP
         if self.correction is not None and facts.get("settled"):
             # Only reuse the format-correction rule, not the fast role's
@@ -182,10 +186,10 @@ class ReviewObserver:
 
 
 class MaintenanceCorrection(FastCorrection):
-    """Publish valid entries at each settled answer, correcting rejected ones twice.
+    """Stage valid entries at each settled answer, correcting rejected ones twice.
 
     The publisher sends a private file reference to the service for validation
-    and writes. The correction input follows the driver’s session policy.
+    and staging. The correction input follows the driver’s session policy.
     """
 
     def __init__(self, output_schema, base_prompt, publisher, *, session_preserved: bool = False):
@@ -200,12 +204,12 @@ class MaintenanceCorrection(FastCorrection):
             key: int(facts.get(key) or 0) for key in ("toolCalls", "toolMarkerFrames", "deniedInteractions")})
         if checked["errors"] and self.correction_count < 2:
             self.correction_count += 1
-            body = ("Maintenance correction: valid entries have already been saved. "
+            body = ("Maintenance correction: valid entries are already staged. "
                     "Correct the rejected entries described below; preserve accepted classifications and summaries.\n"
                     + canonical_json(checked))
             # The same session-policy rule as the fast correction: a context
             # preserving driver needs only the rejected entries, a fresh
-            # session needs the whole packet again.
+            # session needs the bounded request head and tool instructions again.
             return RunFeedback(action="correct",
                                input_text=body if self.session_preserved
                                else self._fresh_input(facts.get("rawAnswer"), body))

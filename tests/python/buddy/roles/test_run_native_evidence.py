@@ -170,12 +170,15 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.artifacts, partial)
 
     def router_collect(self, payload, mode="fast", domain_nodes=()):
-        context = SimpleNamespace(decision_input={"domainNodes": list(domain_nodes), "buddy": {}, "budget": {},
-                                                 "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
+        source = {"namespace": "routing", "owner": "decision", "reference": {"sha256": "a" * 64}, "round": 1}
+        frozen = {"domainNodes": list(domain_nodes), "routingMode": mode, "buddies": [{"buddyId": "chosen"}]}
+        context = SimpleNamespace(decision_input={"buddy": {}, "routingMode": mode, "snapshot": source},
+                                  environment={"HMB_STATE_DIR": "/fixture"})
         handle = SimpleNamespace(role_run_control={"operation": mode},
                                  exit_code=0, shutdown_confirmed=lambda: True)
         project = "read_review_result" if mode == "review" else "read_fast_result"
         with mock.patch("hey_my_buddy.buddy.roles.run_execution." + project, return_value=payload), \
+                mock.patch.object(router, "read_snapshot", return_value=frozen), \
                 mock.patch.object(router.router, "routing_facts", return_value={}):
             return router.DecisionAdapter().collect(handle, context)
 
@@ -183,7 +186,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future": 1}, "total": 1})
         for mode, payload in zip(("fast", "review"), self.project(self.result(status="unknown", evidence=evidence))):
             self.assertNotIn("rawAnswer", payload)
-            with mock.patch.object(router.router, "validate_answer") as validate:
+            with mock.patch.object(router.router_selection, "validate_answer") as validate:
                 outcome = self.router_collect(payload, mode)
             validate.assert_not_called()
             self.assertEqual(outcome.status, "failed")
@@ -206,7 +209,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.result["decision"]["buddyId"], "chosen")
         self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
 
-    def test_router_role_uses_the_frozen_domain_enum_in_both_modes(self):
+    def test_router_role_uses_the_frozen_domains_in_both_modes(self):
         for mode, payload in zip(("fast", "review"), self.project(self.result())):
             answer = {"buddyId": "chosen", "domainNodeId": "ipc", "taskType": "debug",
                       "note": "fits", "evidence": [{"kind": "statistics", "ref": "chosen — IPC history"}]}
@@ -218,7 +221,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             payload["rawAnswer"] = {**answer, "domainNodeId": "merged-ipc"}
             rejected = self.router_collect(payload, mode, nodes)
             self.assertEqual(rejected.status, "failed")
-            self.assertEqual(rejected.result["code"], "answer-shape")
+            self.assertEqual(rejected.result["code"], "router-out-of-bounds")
 
     def test_router_results_keep_the_harness_reported_token_usage_in_both_modes(self):
         for mode, payload in zip(("fast", "review"), self.project(self.result())):

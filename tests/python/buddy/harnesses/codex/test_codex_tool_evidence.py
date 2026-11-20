@@ -15,7 +15,7 @@ from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProje
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.routing.router import answer_schema
+from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.protocol import tool_evidence
 from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
 
@@ -475,7 +475,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     def run_review(self, case, *, index):
         context = self.context(case, index=index)
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet",
-                                            answer_schema(["legal"]),
+                                            answer_schema("review"),
                                             capture_evidence=True)
         handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
                                                             (None, self.cwd, "fixture-digest")))

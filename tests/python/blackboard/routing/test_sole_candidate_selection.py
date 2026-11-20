@@ -313,7 +313,8 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(submitted["routing"]["source"], "model-selection")
         pass  # Admission is owned by the service.
         claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
-        self.assertEqual([buddy["buddyId"] for buddy in claim["decisionInput"]["buddies"]],
+        from blackboard.routing.fixtures.selection import frozen_input
+        self.assertEqual([buddy["buddyId"] for buddy in frozen_input(board, claim["decisionInput"])["buddies"]],
                          [BUDDY_ID, SECOND_BUDDY_ID])
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, "note": 'fixture selection', 'evidence': []}}})
         view = board.call("workflow_get", {"runId": submitted["runId"]})

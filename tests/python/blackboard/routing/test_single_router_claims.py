@@ -11,6 +11,7 @@ from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch
 from support import InProcessBoard
 from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY_ID
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
@@ -78,7 +79,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 self.publish_user_patch(board, request_id='change', command_id='change', configuration=settings)
                 claimed = self.claim_route(board, request)['claim']
                 self.assertIsNotNone(claimed)
-                self.assertEqual(claimed['decisionInput'], frozen['input'])
+                assert_frozen_dispatch(self, board, claimed['decisionInput'], frozen['input'])
                 board.close()
                 self._stack.remove(board)
 
@@ -92,7 +93,7 @@ class SingleRouterClaimTests(DecisionTestCase):
             ensure_model_service(connection, 'dsh', 'deepseek-official', 'deepseek-v4-pro', board.store.now())
         claimed = self.claim_route(board, request)['claim']
         self.assertIsNotNone(claimed)
-        self.assertEqual(claimed['decisionInput'], frozen['input'])
+        assert_frozen_dispatch(self, board, claimed['decisionInput'], frozen['input'])
 
     def test_disabled_and_unavailable_buddies_are_specific_boundaries(self):
         for sql, code in (("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
@@ -145,7 +146,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
         claim = self.claim_route(board, first)['claim']
-        self.assertEqual(claim['decisionInput'], self.decision(board, first['decisionId'])['input'])
+        assert_frozen_dispatch(self, board, claim['decisionInput'], self.decision(board, first['decisionId'])['input'])
         blocked = self.claim_route(board, second, worker='other', command='blocked')
         self.assertIsNone(blocked['claim'])
         self.assertEqual(blocked['reason'], 'model-capacity')
@@ -354,5 +355,5 @@ class SingleRouterClaimTests(DecisionTestCase):
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['buddyId'], BUDDY_ID)
-        self.assertEqual(decision['input'], claim['decisionInput'])
+        assert_frozen_dispatch(self, board, claim['decisionInput'], decision['input'])
         self.assertIsNone(self.claim_route(board, request, command='no-replacement')['claim'])
