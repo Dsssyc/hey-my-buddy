@@ -231,7 +231,7 @@ class TestCrashWindows(BoardTestCase):
             handle = ProcessHandle(mock.Mock(pid=123, returncode=0), log_paths={}, stop_channel="signal")
         handle.session_id = 123
         handle.wait = lambda timeout: 0
-        handle.shutdown_confirmed = lambda: True
+        handle.shutdown_confirmed = lambda settle_seconds=0: True
         handle.identity = lambda: {
             'bootId': 'macos:00000000-0000-4000-8000-000000000001', 'pid': 123,
             'startedAt': 10, 'jobName': None,
@@ -269,7 +269,7 @@ class TestCrashWindows(BoardTestCase):
                 credential = private_root / "agent-credential.json"
                 native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
                 handle = self._finished_fake_handle()
-                handle.shutdown_confirmed = lambda: False
+                handle.shutdown_confirmed = lambda settle_seconds=0: False
                 cancelled = []
 
                 def collect_failure(_handle, _context):

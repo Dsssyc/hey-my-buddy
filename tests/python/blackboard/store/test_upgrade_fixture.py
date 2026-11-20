@@ -1719,7 +1719,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 "WHERE d.deletion_id=:deletionId AND d.target_kind='micro-task-tree' "
                 "AND c.parent_run_id=:parentRunId AND c.child_task_id=:childRunId",
         }
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         cases = metadata['helperRetirementStock']['scenarios']['rejectCases']
         self.assertEqual(set(cases), set(guards))
         rejections = {
@@ -1798,7 +1798,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(json.loads(migrated['resolution_json']), saved)
 
     def test_stock_provenance_pins_each_generated_supplement(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         root = Path(__file__).resolve().parents[4]
         current_generator = _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes())
         # The floor and older supplements retain the source digest from their
@@ -1839,7 +1839,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         ):
             with self.subTest(stock=name):
                 self.assertEqual(helper[key], _sha((FIXTURE / name).read_bytes()))
-        reject = json.loads((FIXTURE / 'schema-41-helper-reject-stock.json').read_text())['cases']
+        reject = json.loads((FIXTURE / 'schema-41-helper-reject-stock.json').read_text(encoding='utf-8'))['cases']
         self.assertEqual(helper['rejectCases'], {name: _sha(sql.encode()) for name, sql in reject.items()})
         self.assertEqual(set(helper['scenarios']['rejectCases']), set(reject))
         self.assertEqual(metadata['issueStock']['writerCommit'], metadata['sourceCommit'])
@@ -1882,7 +1882,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])
 
     def test_reservation_stock_records_its_floor_writer_and_generator(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         self.assertEqual(metadata['reservationStockGeneratorSha256'],
                          FROZEN_GENERATOR_SHA256)
         self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
@@ -1890,7 +1890,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])
 
     def test_delivered_stock_records_its_floor_writer_and_physical_resources(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         self.assertEqual(metadata['deliveredStockGeneratorSha256'],
                          FROZEN_GENERATOR_SHA256)
         self.assertEqual(metadata['deliveredStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
