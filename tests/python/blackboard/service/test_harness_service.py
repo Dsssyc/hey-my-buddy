@@ -19,6 +19,7 @@ class HarnessServiceTests(BoardTestCase):
             db.execute("UPDATE attempts SET model_harness='codex' WHERE attempt_id=?", (attempt['attemptId'],))
         params = {'attemptId': attempt['attemptId'],
                   'generation': attempt['generation'], 'nonce': 'n' * 32}
+        router_wait = {'code': 'router-input-unknown', 'params': {}}
         unknown = {'harness': 'codex', 'status': 'unknown',
                    'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}},
                    'lastProbe': {'status': 'unknown', 'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}}}}
@@ -29,29 +30,121 @@ class HarnessServiceTests(BoardTestCase):
             view = self.board.task_get({'runId': task['runId']})['task']
             self.assertEqual(view['queueReason'], 'harness-probe-unknown')
             self.assertEqual(view['state'], 'running')
+            probe_head = self.board.head()
+            probe_revision = self.board.task_get({'runId': task['runId']})['task']['selectedAttempt']['revision']
             self.assertNotIn('error', self.call('execution_progress', **params,
-                                               data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
+                                               data={'waitingReason': None, 'waitingReasonSeq': 1}))
+            after_null = self.board.task_get({'runId': task['runId']})['task']
+            self.assertEqual(after_null['queueReason'], 'harness-probe-unknown')
+            self.assertEqual(after_null['selectedAttempt']['revision'], probe_revision + 1)
+            self.assertEqual(self.board.head(), probe_head)
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 2}))
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'], 'router-input-unknown')
             head = self.board.head()
             self.assertNotIn('error', self.call('execution_progress', **params,
-                                               data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 3}))
             self.assertEqual(self.board.head(), head)
             waiting = [event for event in self.board.events_wait({'after': 0, 'runId': task['runId'],
                          'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting']
-            self.assertEqual(waiting[-1]['payload']['reason'], {'code': 'router-input-unknown', 'params': {}})
-            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
+            self.assertEqual(waiting[-1]['payload']['reason'], router_wait)
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': None, 'waitingReasonSeq': 4}))
             self.assertEqual(self.board.head(), head + 1)
             self.assertEqual(self.call('execution_progress', **params,
-                             data={'waitingReason': 'router-input-unknown'})['error']['code'], 'INVALID_ARGUMENT')
+                             data={'waitingReason': 'router-input-unknown',
+                                   'waitingReasonSeq': 5})['error']['code'], 'INVALID_ARGUMENT')
             for invalid in ({'code': 'unregistered-wait', 'params': {}},
                             {'code': 'router-input-unknown', 'params': {'unexpected': 'fact'}}):
                 self.assertEqual(self.call('execution_progress', **params,
-                                          data={'waitingReason': invalid})['error']['code'], 'INVALID_ARGUMENT')
+                                          data={'waitingReason': invalid,
+                                                'waitingReasonSeq': 5})['error']['code'], 'INVALID_ARGUMENT')
             head = self.board.head()
-            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': None, 'waitingReasonSeq': 5}))
             self.assertEqual(self.board.head(), head)
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='ready-read'))
             self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+
+        with patch.object(self.service.harnesses, 'refresh', side_effect=[unknown, ready]):
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 6}))
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-after-router'))
+            # The recorded Router wait stays the visible reason: an unknown probe
+            # is the attempt row's own secondary fact, not a shadow of the wait.
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'router-input-unknown')
+            before_clear = self.board.head()
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': None, 'waitingReasonSeq': 7}))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'harness-probe-unknown')
+            self.assertEqual(self.board.head(), before_clear + 1)
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': None, 'waitingReasonSeq': 8}))
+            self.assertEqual(self.board.head(), before_clear + 1)
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='ready-after-clear'))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=False))
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=True))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+
+        def waiting_count():
+            return sum(1 for event in self.board.events_wait(
+                {'after': 0, 'runId': task['runId'], 'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting')
+
+        # 1. A Router wait recorded before an unknown probe stays the visible
+        # reason; replaying it must not duplicate attempt.waiting or bump revision.
+        with patch.object(self.service.harnesses, 'refresh',
+                          side_effect=[unknown, ready, unknown, ready, unknown, ready]):
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 9}))
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-after-router'))
+            before_replay_count = waiting_count()
+            before_replay_rev = self.board.task_get({'runId': task['runId']})['task']['selectedAttempt']['revision']
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 9}))
+            after_replay = self.board.task_get({'runId': task['runId']})['task']
+            self.assertEqual(after_replay['queueReason'], 'router-input-unknown')
+            self.assertEqual(waiting_count(), before_replay_count)
+            self.assertEqual(after_replay['selectedAttempt']['revision'], before_replay_rev)
+
+            # 2. Probe ready uncovers the still-active router wait; clearing it
+            # records attempt.waiting(None), and a later probe + disconnect/reconnect
+            # never resurrects router-input-unknown.
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-ready-uncovers-router'))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'router-input-unknown')
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': None, 'waitingReasonSeq': 10}))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+            self.assertEqual(waiting_count(), before_replay_count + 1)
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-after-clear'))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'harness-probe-unknown')
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=False))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'execution-connection-unknown')
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=True))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'harness-probe-unknown')
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-ready-after-reconnect'))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+
+            # 3. Probes running while the attempt is uncertain neither overwrite the
+            # connection reason nor discard the frozen router-input-unknown wait.
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': router_wait, 'waitingReasonSeq': 11}))
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=False))
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-unknown-while-uncertain'))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'execution-connection-unknown')
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='probe-ready-while-uncertain'))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'execution-connection-unknown')
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=True))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'router-input-unknown')
 
     def setUp(self):
         super().setUp()
@@ -168,16 +261,20 @@ class HarnessServiceTests(BoardTestCase):
                     buddy = next(item for item in self.board.evaluation.console_core()['buddies'] if item['buddyId'] == 'codex:openai:gpt-6-sol:high')
                     self.assertIn('decision', buddy['capabilities'])
 
-    def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
-        for harness in ('codex','dsh'):
-            enable_fixture_buddy(self.board,{'harness':harness,'provider':'fixture','model':'fixture','effort':'high'})
-        with patch.object(self.board.workflow,'continue_run',return_value={}), patch.object(self.service.harnesses,'refresh') as refresh:
-            self.call('workflow_continue',runId='run',requestId='boundary',input='Continue',
-                      buddy='codex / fixture / fixture / high',note='Choose this installed route')
-            self.call('workflow_continue',runId='run',requestId='boundary',decision='approve',autoContinue=True,helpers=[{
-                'title':'helper','task':'Bounded helper','cwd':str(self.directory),'buddy':'dsh / fixture / fixture / high',
-                'checkout':'worktree','access':'read','inputs':[],'expectedSeconds':60}])
-        self.assertEqual([call.args[0] for call in refresh.call_args_list],['codex','dsh'])
+    def test_explicit_continuation_refreshes_unavailable_harness(self):
+        enable_fixture_buddy(self.board, {
+            'harness': 'codex', 'provider': 'fixture', 'model': 'fixture', 'effort': 'high',
+        })
+
+        def continue_run(params, *, console_authority, prepare_buddy):
+            prepare_buddy(params)
+            return {}
+
+        with patch.object(self.board.workflow, 'continue_run', side_effect=continue_run), \
+                patch.object(self.service.harnesses, 'refresh') as refresh:
+            self.call('workflow_continue', runId='run', requestId='boundary', input='Continue',
+                      buddy='codex / fixture / fixture / high', note='Choose this installed route')
+        refresh.assert_called_once_with('codex', force=True)
 
     def test_accounts_reports_cached_native_login_without_source_management(self):
         ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],

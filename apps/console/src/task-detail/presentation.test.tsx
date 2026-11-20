@@ -47,19 +47,19 @@ describe("the common step presentation", () => {
   it("uses a neutral request quotation, a single title attribution and the Host's Markdown response", async () => {
     const history = audit();
     history.requests[0]!.summary = "## 需要读取\n\n- 核对 `sample/`";
-    history.requests[0]!.decision!.note = "**允许**读取 `sample/`";
+    history.requests[0]!.resolution!.note = "**允许**读取 `sample/`";
     open({ step: 4, replies: { audit: history } });
     await ready();
     const quote = pane().querySelector("blockquote")!;
-    expect(within(quote).getByText("协助请求").className).toContain("text-ink3");
+    expect(within(quote).getByText("需要决定").className).toContain("text-ink3");
     expect(quote.className).toContain("border-l-2");
     expect(quote.textContent).toContain("已尝试");
     expect(quote.querySelector("h2")?.textContent).toBe("需要读取");
-    const response = pane().querySelector('[data-slot="host-response"]')!;
+    const response = pane().querySelector('[data-slot="workspace-resolution"]')!;
     expect(response.querySelector("[data-streamdown=strong]")?.textContent).toBe("允许");
     expect(quote.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(pane()).getByRole("heading", { name: "决定" })).toBeTruthy();
-    expect(pane().querySelector('[data-slot="pane-title"]')?.textContent).toContain("批准");
+    expect(pane().querySelector('[data-slot="pane-title"]')?.textContent).toContain("已记录处置");
     expect(pane().querySelectorAll("dt").length).toBeGreaterThan(0);
     expect([...pane().querySelectorAll("dt")].map(node => node.textContent)).not.toEqual(expect.arrayContaining(["谁", "决定", "时刻"]));
     expect(pane().textContent).not.toContain("codex-desktop");
@@ -82,7 +82,7 @@ describe("the common step presentation", () => {
     await ready();
     expect(pane().textContent).toContain(audit().continuations[0]!.input);
     expect(pane().querySelector("[data-slot=pane-title] time")?.getAttribute("datetime")).toBe(new Date(at("10:41")).toISOString());
-    expect(pane().querySelector("[data-slot=host-response]")?.textContent).not.toContain("可以读取");
+    expect(pane().querySelector("[data-slot=host-response]")?.textContent).not.toContain("已恢复授权范围");
     f.atStep(7);
     expect(pane().textContent).not.toContain(audit().continuations[0]!.input);
     expect(pane().textContent).not.toContain(task().task);

@@ -323,16 +323,12 @@ class CoolingWorkflowTests(WorkflowTestCase):
     def test_cancelled_attempt_does_not_reroute(self):
         self.assert_host_failure(cancel=True)
 
-    def test_continuation_requeues_exact_input_helpers_and_workspace(self):
+    def test_continuation_requeues_exact_input_and_workspace(self):
         run = self.routed()
         first = self.claim(self.board_, run_id=run["runId"])
         self.finish_turn(self.board_, first)
         delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.continue_run(self.board_, delivered, input="Continue the exact Host request", note="keep this note")
-        helpers = [{"runId": "helper-1", "summary": "frozen helper result", "state": "delivered"}]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_continuations SET helper_outcomes_json=? WHERE run_id=? AND state='queued'",
-                       (json.dumps(helpers), run["runId"]))
         rejected = self.claim(self.board_, run_id=run["runId"])
         before_input = rejected["claim"]["turn"]["input"]
         with self.board_.store.db.read() as db:
@@ -351,7 +347,6 @@ class CoolingWorkflowTests(WorkflowTestCase):
         after_input = resumed["claim"]["turn"]["input"]
         self.assertEqual(after_input["executionWorkspace"], before_input["executionWorkspace"])
         self.assertEqual(after_input["context"]["continuation"], before_input["context"]["continuation"])
-        self.assertEqual(after_input["context"]["helperOutcomes"], helpers)
         self.assertEqual(after_input["context"]["lastCheckpoint"]["turnId"], first["claim"]["turn"]["turnId"])
         self.assertEqual(after_input["previousSessionId"], "sess-1")
         self.assertEqual(after_input["resumeMode"], "reconstructed-new-session")

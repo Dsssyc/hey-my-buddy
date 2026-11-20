@@ -466,9 +466,9 @@ def _prepare_runtime(state: Path, *, skill_source: Path | None):
     freshly READY runtime can be reclaimed before the cutover retains it.
     Normal installation already serializes installers through the skill lock.
     """
-    storage = state / 'storage'
-    private_dirs.ensure_private_dir(storage)
-    with os.fdopen(private_dirs.open_lock_fd(storage / '.lock'), 'rb'):
+    from ..blackboard.tasks.storage import locked
+
+    with locked(state, blocking=True):
         installed = (runtime.materialize(root=skill_source / 'package')
                      if skill_source is not None else runtime.materialize())
         yield installed

@@ -45,7 +45,7 @@ const turn = { turnId: "t1", turnIndex: 1, attemptId: "a1", expectedSeconds: 180
   createdAt: "x", updatedAt: "y", checkout: "worktree", projectKind: "git", access: "write", buddy: { harness: "codex", provider: "openai", model: "m", effort: "high" }, routing: { decisionId: null, buddyRevision: 1 }, tokenUsage: null };
 const reply = (overrides: Record<string, unknown> = {}) => ({
   runId: "m1", state: "executing", checkout: "worktree", project: { kind: "git" }, buddy: null, delegationAuthority: false, routing: null,
-  turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 }, children: [], artifacts: [], integrations: [],
+  turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 }, ownedMicroTasks: [], workspaceConflicts: [], artifacts: [], integrations: [],
   finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: null, task: { revision: 3 }, ...overrides,
 });
 
@@ -55,7 +55,7 @@ describe("the compact collaboration record", () => {
     const conclusion = { conclusionId: "c", executionStatus: "failed", note: null, reason: { code: "lead.owned-concluded", params: { leadRunId: "lead" } },
       artifactId: null, attemptId: null, actor: HOST, createdAt: "t" };
     const parsed = parseWorkflow(reply({ activeRequest: { requestId: "r", kind: "attention", state: "open", createdAt: "t", decidedAt: null,
-      childTaskId: null, routing: false, summary: null, reason, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
+      routing: false, summary: null, reason, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
       hostConclusion: conclusion }), "m1");
     expect(parsed.activeRequest).toMatchObject({ summary: null, reason });
     expect(parsed.hostConclusion).toEqual({ ...conclusion, actor: { role: "host" } });
@@ -66,7 +66,7 @@ describe("the compact collaboration record", () => {
 
   it("refuses another run's record, and a record that lacks what the service always sends, all the same way", () => {
     for (const bad of [reply({ runId: "other" }), reply({ task: {} }), reply({ task: { revision: 1.5 } }), reply({ counts: { openRequests: 0 } }),
-      reply({ checkout: undefined }), reply({ turns: "none" }), reply({ children: [{ taskId: "h", role: "helper", state: "delivered" }] }), null, "text"]) {
+      reply({ checkout: undefined }), reply({ turns: "none" }), reply({ ownedMicroTasks: [{}] }), null, "text"]) {
       expect(() => parseWorkflow(bad, "m1")).toThrow(ApiError);
       expect(() => parseWorkflow(bad, "m1")).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
     }
@@ -154,17 +154,19 @@ describe("the audit", () => {
     expect(parseAudit({ ...audit, audit: { ...audit.audit, turns: [bare] } }, "m1").audit.turns[0]).toMatchObject({ summary: null, remaining: [] });
   });
 
-  it("reads a request decided with a resolution, and one decided with a verdict", () => {
-    const request = { requestId: "r", kind: "attention", state: "approved", summary: "s", attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null,
-      turnId: "t1", attemptId: "a1", childTaskId: null, createdAt: "t", decidedAt: "t", routing: false, payload: {}, decision: null };
-    const [adopted, approved, open] = parseAudit({ ...audit, audit: { ...audit.audit, requests: [
-      { ...request, decision: { resolution: { action: "adopt", actor: { role: "host", id: "h" } } } },
-      { ...request, decision: { decision: "approve", note: "可以", actor: { role: "lead", id: "l" } } },
-      { ...request, state: "open", decidedAt: null },
+  it("reads legacy, standalone and combined workspace resolutions", () => {
+    const request = { requestId: "r", state: "resolved", summary: null, createdAt: "t", decidedAt: "t", routing: false };
+    const result = { conflictId: "conflict-1", state: "restored", resolvedFingerprint: "fingerprint", artifactId: null };
+    const [legacy, blocked, combined, open] = parseAudit({ ...audit, audit: { ...audit.audit, requests: [
+      { ...request, resolution: { legacy: true, resolution: { conflictId: "old-conflict", action: "adopt", state: "adopted", actor: { role: "host" } } } },
+      { ...request, resolution: { parameters: { resolution: "abandon", input: "Continue", note: "Review first" }, result: { ...result, state: "open" } } },
+      { ...request, resolution: { result } },
+      { ...request, state: "open", decidedAt: null, resolution: null },
     ] } }, "m1").audit.requests;
-    expect(adopted!.decision).toEqual({ decision: null, note: null, actor: { role: "host" } });
-    expect(approved!.decision).toEqual({ decision: "approve", note: "可以", actor: { role: "lead", id: "l" } });
-    expect(open!.decision).toBeNull();
+    expect(legacy!.resolution).toMatchObject({ conflictId: "old-conflict", action: "adopt", state: "adopted", actor: { role: "host" } });
+    expect(blocked!.resolution).toMatchObject({ conflictId: "conflict-1", action: "abandon", state: "open", note: "Review first", continuationBlocked: true });
+    expect(combined!.resolution).toMatchObject({ conflictId: "conflict-1", action: null, state: "restored", continuationBlocked: false });
+    expect(open!.resolution).toBeNull();
   });
 
   it("refuses another run's audit, one without the routes, and a route in a mode that does not exist", () => {
@@ -301,8 +303,7 @@ describe("the task view", () => {
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
 
-  it("accepts micro tasks and helpers with workflows, and refuses raw records", () => {
-    expect(parseTask(task({ lineage: { ...task().lineage, kind: "helper" } }), "m1").lead).toBe(false);
+  it("accepts micro tasks with workflows, and refuses raw records", () => {
     expect(() => parseTask(task({ workflow: undefined }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "execution" } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "decision" } }), "m1")).toThrow(ApiError);

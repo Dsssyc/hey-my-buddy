@@ -51,10 +51,10 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     lastActivityAt: "2026-09-26T08:12:00Z",
     lastActivitySeq: 41,
     state: "active",
-    counts: { roots: 5, helpers: 1, accepted: 2, failed: 0, active: 1, host: 0, review: 1, ended: 4,
+    counts: { roots: 6, accepted: 2, failed: 0, active: 1, host: 0, review: 1, ended: 4,
       unfinished: 3, delivered: 1 },
     matchingRuns: 6,
-    rootRunIds: ["r1", "r2", "r5", "r4", "r6"],
+    rootRunIds: ["r1", "r2", "r3", "r5", "r4", "r6"],
     ...overrides,
   };
 }
@@ -72,7 +72,6 @@ export function listSummary(detail: MacroTaskDetail): MacroTaskSummary {
 function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
   return {
     runId,
-    parentRunId: null,
     rootRunId: runId, rootLeadRunId: null, delegationAuthority: false,
     title: `微任务 ${runId}`,
     titleSource: "title",
@@ -83,7 +82,6 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     conclusionStatus: null,
     category: "ended",
     shutdownConfirmed: true,
-    depth: 0,
     kind: "micro-task",
     buddy: GLM,
     acceptedAt: null,
@@ -95,7 +93,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
 function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
   const result: TimelineSpan = {
     spanId, runId, kind, startAt, endAt,
-    state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
+    state: kind === "queue" ? "admitted" : kind === "host" ? "resolved" : "finished",
     attemptId: null, turnId: null, turnIndex: null, requestId: null,
     buddy: null, expectedSeconds: kind === "execution" ? 1800 : null,
     reminders: null, inquiries: kind === "execution" ? [] : null,
@@ -108,7 +106,7 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
 }
 
 function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
-  return { seq, runId, kind, at, decision: null, verdict: null, state: null, strategy: null, note: null, actor: { role: "host" },
+  return { seq, runId, kind, at, verdict: null, state: null, strategy: null, note: null, actor: { role: "host" },
     attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 
@@ -120,7 +118,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     row("r2", { title: "实现 macro_tasks 表、macro_task_list 与只读时间轴接口", taskSummary: "实现 macro_tasks 表与 macro_task_list、macro_task_timeline 两个只读接口。", createdAt: "2026-09-26T01:20:00Z", state: "accepted", status: "completed",
       buddy: CODEX, acceptedAt: "2026-09-26T03:30:00Z" }),
     row("r3", { title: "补充 schema 升级离线副本的验证测试", taskSummary: "为离线副本升级补充验证测试，覆盖行数与哈希不变。", createdAt: "2026-09-26T01:38:00Z", state: "completed", status: "completed",
-      parentRunId: "r2", rootRunId: "r2", rootLeadRunId: null, depth: 1, kind: "helper", buddy: GLM }),
+      buddy: GLM }),
     row("r5", { title: "按设计稿实现 ObjectiveTimeline 组件与布局计算", taskSummary: "按设计稿实现 ObjectiveTimeline 组件与折叠布局计算。", createdAt: "2026-09-26T05:30:00Z", state: "cancelled", status: "cancelled",
       buddy: GLM }),
     row("r4", { title: "时间轴界面带截图的视觉与交互审查", taskSummary: "带截图审查时间轴界面的视觉与交互问题。", createdAt: "2026-09-26T06:38:00Z", state: "executing", status: "running",
@@ -141,7 +139,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       { turnIndex: 1, attemptId: "att-r2a", buddy: CODEX, shutdownConfirmed: true,
         inquiries: [{ inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", state: "answered" }] }),
     span("s-r2-w", "r2", "host", "2026-09-26T02:10:00Z", "2026-09-26T03:00:00Z",
-      { state: "approved", requestId: "req-schema", summary: "schema 版本号需与性能优化的合入顺序对齐" }),
+      { state: "resolved", requestId: "req-schema", summary: "schema 版本号需与性能优化的合入顺序对齐" }),
     span("s-r2-e2", "r2", "execution", "2026-09-26T03:00:00Z", "2026-09-26T03:10:00Z",
       { turnIndex: 2, attemptId: "att-r2b", buddy: CODEX, shutdownConfirmed: true }),
     span("s-r3-q", "r3", "queue", "2026-09-26T01:38:00Z", "2026-09-26T01:40:00Z"),
@@ -164,7 +162,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     event(2, "r2", "dispatch", "2026-09-26T01:20:00Z", {  }),
     event(3, "r3", "dispatch", "2026-09-26T01:38:00Z", {  }),
     event(4, "r1", "accept", "2026-09-26T02:20:00Z", {  }),
-    event(5, "r2", "decide", "2026-09-26T03:00:00Z", {  }),
+    event(5, "r2", "decide", "2026-09-26T03:00:00Z", { requestId: "req-schema" }),
     event(6, "r2", "continue", "2026-09-26T03:02:00Z", {  }),
     event(7, "r2", "accept", "2026-09-26T03:30:00Z", {  }),
     event(8, "r5", "cancel", "2026-09-26T05:50:00Z", {  }),
@@ -189,16 +187,16 @@ export function listFixture(): MacroTaskSummary[] {
     macroTaskSummary({ macroTaskId: "macro-1", lastActivitySeq: 41, lastActivityAt: "2026-09-26T08:12:00Z", state: "active" }),
     macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版最后整理与文档", lastActivitySeq: 30,
       lastActivityAt: "2026-09-26T04:40:00Z", state: "review",
-      counts: { roots: 6, helpers: 0, accepted: 5, failed: 0, active: 0, host: 0, review: 1, ended: 5,
+      counts: { roots: 6, accepted: 5, failed: 0, active: 0, host: 0, review: 1, ended: 5,
         unfinished: 0, delivered: 1 } }),
     macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案",
       titleSource: "task", lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-      counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
+      counts: { roots: 1, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
         unfinished: 0, delivered: 0 } }),
     macroTaskSummary({ macroTaskId: "macro-4", title: "DSH 插件在 Windows 路径下的沙箱回归排查",
       project: project("p2", "dsh-harness", "~/projects/dsh-harness"),
       lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
-      counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 1, review: 0, ended: 0,
+      counts: { roots: 2, accepted: 0, failed: 0, active: 1, host: 1, review: 0, ended: 0,
         unfinished: 2, delivered: 0 } }),
   ];
 }

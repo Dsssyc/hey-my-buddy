@@ -29,7 +29,7 @@ function taskFixture(runId: string): Task {
   const base: Task = { runId, task: `目标 ${runId}`, state: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-26T01:12:00Z", updatedAt: "2026-09-26T01:12:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
-    lineage: { kind: runId === "r3" ? "helper" : "micro-task", parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: runId, rootLeadRunId: runId === "r3" ? "r2" : null,
       project: { kind: "git" as const, id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
       buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" }, routingTask: null } };
   // Every micro task of the macro task has a collaboration record; r2 waits for its Host.
@@ -41,7 +41,7 @@ function taskFixture(runId: string): Task {
 function workflowFixture(task: Task) {
   return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: task.workflow!.state, buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 },
-    children: task.runId === "r2" ? [{ taskId: "r3", role: "helper", state: "succeeded" }] : [],
+    ownedMicroTasks: task.runId === "r2" ? [{ runId: "r3" }] : [], workspaceConflicts: [],
     artifacts: [], integrations: [], finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     task: { revision: task.revision, lineage: task.lineage } };
 }
@@ -63,7 +63,7 @@ function harness(options: HarnessOptions = {}) {
     ? [listSummary(timeline.macroTask), macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-        counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
+        counts: { roots: 1, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
           unfinished: 0, delivered: 0 } })]
     : [listSummary(timeline.macroTask)];
   const tasks = new Map(["r1", "r2", "r3", "r4", "r7"].map(id => [id, taskFixture(id)]));
@@ -265,7 +265,7 @@ describe("the detail of a micro task in its macro task", () => {
     await waitFor(() => expect(screen.queryByRole("group", { name: "微任务步骤" })).toBeNull());
   });
 
-  it("keeps the macro task when the detail goes to a helper, each at its own address", async () => {
+  it("keeps the macro task when the detail goes to a Lead-owned micro task, each at its own address", async () => {
     stubViewport(false);
     const f = harness();
     await openMacroTask(f);

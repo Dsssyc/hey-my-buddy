@@ -205,7 +205,13 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         # Awaiting the Host on an open attention request: the micro task is retained,
         # and the unknown-owner micro task beside it is never a reclaim candidate.
         first = self.claim(board)
-        self.finish_turn(board, first, disposition="attention", session_id="dsh-native-1")
+        self.finish_turn(board, first, session_id="dsh-native-1", outcome={
+            "disposition": "attention", "summary": "Awaiting a scope decision", "remaining": [],
+            "decisions": [], "artifacts": [],
+            "request": {"summary": "Review the scope", "attempted": "Read the current scope",
+                        "neededWork": "Confirm the scope", "expectedArtifacts": [],
+                        "acceptance": "The authorized scope is clear"},
+        })
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["state"], "awaiting-host")
         foreign_micro_task = foreign_native.parent
@@ -222,7 +228,9 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 
         # Delivered but not yet accepted: still retained.
-        self.continue_run(board, view)
+        board.call("workflow_continue", {
+            "runId": run_id, "requestId": view["activeRequest"]["requestId"], "input": "Continue within the scope",
+        })
         second = self.claim(board, claim_request_id="c2")
         self.finish_turn(board, second, session_id="dsh-native-2")
         delivered = board.call("workflow_get", {"runId": run_id})

@@ -85,7 +85,7 @@ describe("the lanes and the detail workspace", () => {
     fireEvent.keyDown(row("r2"), { key: "ArrowUp" });
     expect(document.activeElement).toBe(row("r1"));
   });
-  it("marks only unfinished work, preserves new-task marks and tree order", () => {
+  it("marks only unfinished work, preserves new-task marks and row order", () => {
     const timeline = macroTaskTimelineFixture();
     timeline.rows[3] = { ...timeline.rows[3]!, state: "executing", status: "queued", category: "active" };
     setup({ timeline });
@@ -96,7 +96,7 @@ describe("the lanes and the detail workspace", () => {
     expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("review");
     expect(within(row("r4")).getByLabelText("新出现的微任务")).toBeTruthy();
     expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(timeline.rows.map(entry => entry.runId));
-    expect(row("r3").style.paddingLeft).toBe("31px");
+    expect(row("r3").style.paddingLeft).toBe("13px");
   });
   it("shows a paused queued task with a pause mark and live stop evidence", () => {
     const timeline = macroTaskTimelineFixture();
@@ -112,12 +112,11 @@ describe("the lanes and the detail workspace", () => {
     expect(row("r4").querySelector('[data-slot=state-mark]')?.classList.contains("state-breathe")).toBe(false);
   });
   it("writes the state word only while someone must act or something runs; the settled band speaks alone", () => {
-    const cancelledHelper = macroTaskTimelineFixture();
-    const helper = cancelledHelper.rows.find(row => row.runId === "r5")!;
-    Object.assign(helper, { kind: "helper", parentRunId: "r2", rootRunId: "r2", depth: 1 });
-    setup({ timeline: cancelledHelper });
+    const settled = macroTaskTimelineFixture();
+    Object.assign(settled.rows.find(row => row.runId === "r5")!, { state: "concluded", conclusionStatus: "cancelled" });
+    setup({ timeline: settled });
     // Settled terminal states: the word is gone from the row and stays in the accessible name.
-    for (const [id, word] of [["r1", "已验收"], ["r2", "已验收"], ["r3", "执行完成"], ["r5", "已取消"]] as const) {
+    for (const [id, word] of [["r1", "已验收"], ["r2", "已验收"], ["r3", "执行完成"], ["r5", "已结束"]] as const) {
       expect(within(row(id)).queryByText(word, { exact: true })).toBeNull();
       expect(row(id).getAttribute("aria-label")).toContain(word);
     }
@@ -208,7 +207,7 @@ describe("Lead lanes from recorded ownership", () => {
     const timeline = macroTaskTimelineFixture();
     const lead = timeline.rows.find(entry => entry.runId === "r2")!;
     lead.delegationAuthority = true;
-    lead.rootLeadRunId = "r2";
+
     for (const runId of ["r3", "r6"]) {
       const member = timeline.rows.find(entry => entry.runId === runId)!;
       member.rootLeadRunId = "r2";
@@ -288,31 +287,28 @@ describe("Lead lanes from recorded ownership", () => {
     expect(document.querySelectorAll("[data-slot=timeline-row-name]")).toHaveLength(6);
     expect(document.body.textContent).toContain("其他微任务");
   });
-  it("includes the Lead's own helpers in its totals and keeps both helper trees beside the detail", () => {
+  it("includes owned micro tasks in its totals and keeps their alignment beside the detail", () => {
     const timeline = laneFixture();
     const lead = timeline.rows.find(row => row.runId === "r2")!;
-    const ownHelper = timeline.rows.find(row => row.runId === "r3")!;
-    ownHelper.rootLeadRunId = null;
+    const ownedTask = timeline.rows.find(row => row.runId === "r3")!;
     const owned = timeline.rows.find(row => row.runId === "r6")!;
-    const childHelper = { ...ownHelper, runId: "r6-helper", parentRunId: owned.runId, rootRunId: owned.runId, rootLeadRunId: lead.runId, depth: 1 };
-    timeline.rows.push(childHelper);
-    const source = timeline.spans.find(span => span.runId === ownHelper.runId && span.kind === "execution")!;
-    timeline.spans.push({ ...source, runId: childHelper.runId, spanId: "owned-helper-execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:01:00Z",
+    const anotherOwned = { ...ownedTask, runId: "r7", rootRunId: "r7", rootLeadRunId: lead.runId };
+    timeline.rows.push(anotherOwned);
+    const source = timeline.spans.find(span => span.runId === ownedTask.runId && span.kind === "execution")!;
+    timeline.spans.push({ ...source, runId: anotherOwned.runId, spanId: "another-owned-execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:01:00Z",
       tokenUsage: { inputTokens: 67, cachedInputTokens: 5, outputTokens: 7, source: "codex-native", scope: "attempt", inputBasis: "includes-cached" } });
     const lane = groupLanes(timeline.rows).lanes[0]!;
-    expect(lane.members.map(row => row.runId)).toEqual(["r3", "r6", "r6-helper"]);
+    expect(lane.members.map(row => row.runId)).toEqual(["r3", "r6", "r7"]);
     expect(laneSummary(lane, timeline).usage).toEqual({ input: 217, cached: 45, output: 22, partial: true });
     expect(laneSummary(lane, timeline).executionMs! - laneSummary({ ...lane, members: [owned] }, timeline).executionMs!).toBe((22 + 26 + 1) * 60_000);
     const { props, rerender } = setup({ timeline });
     const hierarchy = () => {
       expect(row("r3").style.paddingLeft).toBe("31px");
       expect(row("r6").style.paddingLeft).toBe("31px");
-      expect(row("r6-helper").style.paddingLeft).toBe("49px");
-      expect(within(row("r3")).getByText("└")).toBeTruthy();
+      expect(row("r7").style.paddingLeft).toBe("31px");
       expect(within(row("r6")).queryByText("└")).toBeNull();
-      expect(within(row("r6-helper")).getByText("└")).toBeTruthy();
-      expect(row("r6-helper").querySelector<HTMLElement>('[data-slot=row-state-edge]')?.style.left).toBe("30.5px");
-      expect(row("r6-helper").querySelectorAll('[data-slot=lane-guide]')).toHaveLength(2);
+      expect(row("r7").querySelector<HTMLElement>('[data-slot=row-state-edge]')?.style.left).toBe("12.5px");
+      expect(row("r7").querySelectorAll('[data-slot=lane-guide]')).toHaveLength(1);
     };
     hierarchy();
     rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
@@ -723,14 +719,14 @@ it("returns to the lanes where the reader left them: scroll and zoom survive a d
 
 it("sums a lane's elapsed and execution time from its own rows alone", () => {
   const timeline = macroTaskTimelineFixture();
-  const lead = { ...timeline.rows[1]!, delegationAuthority: true, rootLeadRunId: "r2" } as TimelineRow;
-  const helper = { ...timeline.rows[2]!, rootLeadRunId: "r2" };
-  const layout = groupLanes([lead, helper, timeline.rows[0]!]);
+  const lead = { ...timeline.rows[1]!, delegationAuthority: true, rootLeadRunId: null } as TimelineRow;
+  const owned = { ...timeline.rows[2]!, rootLeadRunId: "r2" };
+  const layout = groupLanes([lead, owned, timeline.rows[0]!]);
   expect(layout.lanes).toHaveLength(1);
   expect(layout.lanes[0]!.members.map(row => row.runId)).toEqual(["r3"]);
   expect(layout.ordinary.map(row => row.runId)).toEqual(["r1"]);
   const summary = laneSummary(layout.lanes[0]!, timeline);
-  // r2's two executions and its Router run, plus r3's two helper executions, each counted; elapsed covers the lane's own span.
+  // r2's two executions and its Router run, plus r3's two owned micro task executions, each counted; elapsed covers the lane's own span.
   expect(summary.elapsedMs).toBeGreaterThan(0);
   expect(summary.executionMs).toBe((46 + 10 + 3 + 22 + 26) * 60_000);
   expect(summary.usage).toEqual({ input: null, cached: null, output: null, partial: false });

@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 
 
 class ControllerOperationTests(unittest.TestCase):
@@ -85,7 +86,6 @@ class ControllerOperationTests(unittest.TestCase):
 
 class DeletionReceiptBoundaryTests(unittest.TestCase):
     def test_native_control_tree_is_in_state_outside_the_worker_tmpdir(self):
-        from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             state, worker_tmp = root / 'state', root / 'worker-tmp'
@@ -168,3 +168,55 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
             self.receipt({"status": "error", "error": native["message"], "nativeError": native}, exit_code=1)
         self.assertEqual(caught.exception.message, native["message"])
         self.assertEqual(caught.exception.details["nativeError"], native)
+
+
+class WorkingDirectoryReceiptTests(unittest.TestCase):
+    def test_discovery_and_deletion_preserve_rejection_with_confirmed_outer_stop(self):
+        def discover(state):
+            return run_execution.discover_models("codex", state_dir=state)
+
+        def delete(state):
+            return run_execution.delete_sessions("codex", ["owned"], state_dir=state)
+
+        system_reason = "WinError 267: The directory name is invalid"
+
+        def reject(*, cwd, **_kwargs):
+            raise WorkingDirectoryRejected(cwd, system_reason)
+
+        seam = SimpleNamespace(run_discovery=reject, run_delete_sessions=reject)
+        for operation, call in (("discover", discover), ("delete-sessions", delete)):
+            for stopped in (True, False):
+                with self.subTest(operation=operation, outer_stop=stopped), tempfile.TemporaryDirectory() as directory:
+                    state = Path(directory).resolve() / "state"
+                    directories = []
+
+                    def launch(*, log_paths, prepare, **_kwargs):
+                        argv, _, _ = prepare()
+                        control = json.loads(Path(argv[-1]).read_text(encoding="utf-8"))
+                        self.assertEqual(control["operation"], operation)
+                        directories.append(Path(control["cwd"]))
+                        frame, code = run_controller.execute(control, threading.Event())
+                        Path(log_paths["stdout"]).write_text(frame, encoding="utf-8")
+                        handle = Mock(log_paths=log_paths)
+                        handle.wait.return_value = handle.poll.return_value = code
+                        handle.shutdown_confirmed.return_value = stopped
+                        return handle
+
+                    with patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=seam), \
+                         patch.object(run_execution, "launch_controller", side_effect=launch), \
+                         self.assertRaises(BoardError) as caught:
+                        call(state)
+                    self.assertEqual(len(directories), 1)
+                    error = caught.exception
+                    self.assertIs(error.discovery_shutdown_confirmed, stopped)
+                    if stopped:
+                        self.assertEqual(error.code, WorkingDirectoryRejected.code)
+                        self.assertEqual(error.details["reason"],
+                                         WorkingDirectoryRejected.reason_for(str(directories[0]), system_reason))
+                        self.assertEqual(error.details["processState"],
+                                         {"created": False, "shutdownConfirmed": True, "nativeExitCode": None})
+                        self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
+                        self.assertFalse(directories[0].exists())
+                    else:
+                        self.assertEqual(error.code, run_controller.NATIVE_OPERATIONS[operation]["stopUnconfirmedCode"])
+                        self.assertTrue(directories[0].is_dir())

@@ -171,7 +171,9 @@ class UpgradeChainTests(unittest.TestCase):
             self.db.execute("UPDATE attempts SET stop_initiator='console',cancel_requested_at='2026-11-11T11:00:00.000Z'"
                             " WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
         previous = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 40, 'targetSchema': 41})
+        with self.db:
+            upgrade.STEPS[40](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '41')
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')],
                          [{**row, 'stop_purpose':None} for row in previous])
         for purpose in ('pause','end',None):
@@ -179,7 +181,6 @@ class UpgradeChainTests(unittest.TestCase):
                 self.db.execute('UPDATE attempts SET stop_purpose=? WHERE rowid=(SELECT MIN(rowid) FROM attempts)', (purpose,))
         with self.assertRaises(sqlite3.IntegrityError), self.db:
             self.db.execute("UPDATE attempts SET stop_purpose='cancel' WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
-        self.assert_current_structure()
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM work_pauses').fetchone()[0], 0)
         self.db.execute('PRAGMA foreign_keys=ON')
         macro_id = self.db.execute('SELECT macro_task_id FROM macro_tasks LIMIT 1').fetchone()[0]
@@ -196,6 +197,99 @@ class UpgradeChainTests(unittest.TestCase):
                 with self.db:
                     self.db.execute('INSERT INTO work_pauses(macro_task_id,run_id,paused_at) VALUES(?,?,?)',
                                     (macro, run, '2026-11-11T12:02:00.000Z'))
+
+    def test_schema_41_to_42_constrains_attempt_waiting_reasons_to_their_owning_rows(self):
+        with self.db:
+            for version in range(30, 41):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '41')
+        # The installer runs this step on idle stock: every attempt is finished,
+        # so no live connection reason, probe flag or Router wait survives.
+        attempts = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
+        tasks = [dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')]
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 41, 'targetSchema': 42})
+        columns = ','.join(['rowid', *(row[1] for row in self.db.execute('PRAGMA table_info(attempts)')
+                                      if row[1] != 'session_group_id')])
+        self.assertEqual([dict(row) for row in self.db.execute(f'SELECT {columns} FROM attempts ORDER BY rowid')],
+                         [{**row, 'connection_reason': None, 'probe_unknown': 0, 'waiting_reason': None,
+                           'waiting_hint_seq': 0}
+                          for row in attempts])
+        for task in tasks:
+            if task['queue_reason'] in ('helper-attention', 'awaiting-helpers'):
+                self.assertEqual(self.db.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
+                                                 (task['task_id'],)).fetchone()[0], None)
+                task['queue_reason'] = None
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')], tasks)
+        attempt_id = self.db.execute('SELECT attempt_id FROM attempts ORDER BY rowid LIMIT 1').fetchone()[0]
+        # The reason-bearing probes need a still-running shape: the idle stock's
+        # finished attempts hold committed results, so model the released form
+        # that proves its stop without ever receiving one.
+        with self.db:
+            self.db.execute("UPDATE attempts SET result_json=NULL,result_form=NULL WHERE attempt_id=?", (attempt_id,))
+        task_id = self.db.execute('SELECT task_id FROM "tasks" WHERE queue_reason IS NOT NULL ORDER BY rowid LIMIT 1').fetchone()
+        self.assertIsNotNone(task_id)
+        # A finished attempt may keep its historical uncertain ownership while
+        # holding no live connection reason.
+        with self.db:
+            self.db.execute("UPDATE attempts SET ownership='uncertain' WHERE attempt_id=?", (attempt_id,))
+        for assignment in (
+                "execution_state='uncertain',connection_reason='attempt-uncertain-after-restart'",
+                "execution_state='uncertain',connection_reason='execution-connection-unknown',"
+                "waiting_reason='router-input-unknown'",
+                "execution_state='executing',waiting_reason='router-input-unknown'",
+                "execution_state='executing',probe_unknown=1"):
+            with self.subTest(assignment=assignment), self.db:
+                self.db.execute("UPDATE attempts SET connection_reason=NULL,probe_unknown=0,waiting_reason=NULL,"
+                                f"{assignment} WHERE attempt_id=?", (attempt_id,))
+        for assignment in (
+                "execution_state='uncertain'",
+                "execution_state='executing',connection_reason='execution-connection-unknown'",
+                "connection_reason='bogus-reason'",
+                "waiting_reason='bogus-wait'",
+                "execution_state='finalizing',waiting_reason='router-input-unknown'",
+                "execution_state='finalizing',probe_unknown=1",
+                "execution_state='finished',probe_unknown=1"):
+            with self.subTest(assignment=assignment), self.assertRaises(sqlite3.IntegrityError), self.db:
+                self.db.execute("UPDATE attempts SET connection_reason=NULL,probe_unknown=0,waiting_reason=NULL,"
+                                f"{assignment} WHERE attempt_id=?", (attempt_id,))
+        with self.db:
+            self.db.execute("UPDATE tasks SET active_attempt_id=NULL,queue_reason='awaiting-execution'"
+                            " WHERE task_id=?", (task_id[0],))
+        for assignment in (
+                # An active attempt and the queued writer's reason never coexist.
+                f"active_attempt_id='{attempt_id}',queue_reason='awaiting-execution'",
+                # The attempt-derived reasons belong to the attempt row alone.
+                "active_attempt_id=NULL,queue_reason='harness-probe-unknown'",
+                "active_attempt_id=NULL,queue_reason='execution-connection-unknown'",
+                "active_attempt_id=NULL,queue_reason='attempt-uncertain-after-restart'",
+                "active_attempt_id=NULL,queue_reason='router-input-unknown'"):
+            with self.subTest(tasks=assignment), self.assertRaises(sqlite3.IntegrityError), self.db:
+                self.db.execute(f"UPDATE tasks SET {assignment} WHERE task_id=?", (task_id[0],))
+        with self.db:
+            self.db.execute("UPDATE tasks SET active_attempt_id=?,queue_reason=NULL WHERE task_id=?",
+                            (attempt_id, task_id[0]))
+        # A committed result ends every live connection question: the row may be
+        # uncertain with no reason at all, and no reason, probe flag or Router
+        # wait may accompany the stored result.
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='finished',connection_reason=NULL,"
+                            " probe_unknown=0,waiting_reason=NULL WHERE attempt_id=?", (attempt_id,))
+        result_row = self.db.execute('SELECT attempt_id FROM attempts WHERE result_json IS NOT NULL'
+                                     ' ORDER BY rowid LIMIT 1').fetchone()
+        self.assertIsNotNone(result_row)
+        result_id = result_row[0]
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?", (result_id,))
+        for assignment in (
+                "connection_reason='attempt-uncertain-after-restart'",
+                "connection_reason='execution-connection-unknown'",
+                "probe_unknown=1",
+                "waiting_reason='router-input-unknown'"):
+            with self.subTest(result=assignment), self.assertRaises(sqlite3.IntegrityError), self.db:
+                self.db.execute(f"UPDATE attempts SET {assignment} WHERE attempt_id=?", (result_id,))
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='finished' WHERE attempt_id=?", (result_id,))
+        self.assert_current_structure()
 
     def test_all_dropped_facts_have_floor_stock_and_equal_the_frozen_spec(self):
         rows = list(self.db.execute('SELECT * FROM tasks'))
@@ -574,7 +668,8 @@ class UpgradeChainTests(unittest.TestCase):
         upgrade.upgrade_state(self.state)
         expected = []
         for row in before:
-            value = {key: item for key, item in row.items() if key not in ('checkout_id', 'repository_id', 'path')}
+            value = {key: item for key, item in row.items()
+                     if key not in ('checkout_id', 'repository_id', 'path', 'holder_kind', 'parent_run_id')}
             value['checkout_root'] = roots[row['workspace_id'], row['manifest_sha256']]
             if row['state'] == 'held' and row['holder_task_id'] in decisions:
                 value.update(state='released', released_at=decisions[row['holder_task_id']])

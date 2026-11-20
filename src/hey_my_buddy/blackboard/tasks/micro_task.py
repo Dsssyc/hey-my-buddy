@@ -7,8 +7,8 @@ ordinary micro-task workflow keeps ``workflow.task_extension``.
 
 Everything here is grounded in durable rows:
 
-* kind and lineage come from ``workflow_runs`` plus ``workflow_children`` (helpers)
-  and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
+* kind and lineage come from ``workflow_runs`` and
+  ``router_dispatches``/``workflow_routes`` (internal routing decisions);
 * current ownership is derived from Lead lineage, with a nameless Host for
   roots outside that lineage;
 * the project is the root Micro task's immutable original ``cwd`` and frozen
@@ -32,7 +32,7 @@ from typing import Any, Sequence
 from ...errors import BoardError
 
 #: Task kinds derived from durable relations, never from a label.
-MICRO_TASK_KINDS = ("micro-task", "helper", "decision", "execution")
+MICRO_TASK_KINDS = ("micro-task", "decision", "execution")
 
 #: The four fields of a complete resolved buddy.
 BUDDY_FIELDS = ("harness", "provider", "model", "effort")
@@ -72,12 +72,11 @@ _ACTIVE_TASK_SQL = ",".join(map(repr, ACTIVE_TASK_STATES))
 _RESULT_SQL = ",".join(map(repr, UNCONCLUDED_RESULT_STATES))
 
 
-def host_filter_sql(*, run_state="run_state", task_state="state",
-                    parent_run_id="child_parent_run_id", root_run_id="root_run_id") -> str:
+def host_filter_sql(*, run_state="run_state", task_state="state", root_run_id="root_run_id") -> str:
     """Host waits for history and the slim snapshot, without reading payloads."""
     return (
-        f"(({run_state}='awaiting-host' OR ({parent_run_id} IS NULL"
-        f" AND {run_state} IN ({_RESULT_SQL}) AND {task_state} NOT IN ({_ACTIVE_TASK_SQL})))"
+        f"(({run_state}='awaiting-host' OR"
+        f" ({run_state} IN ({_RESULT_SQL}) AND {task_state} NOT IN ({_ACTIVE_TASK_SQL})))"
         " AND NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead_tree"
         f" WHERE lead_tree.owned_run_id={root_run_id}))"
     )
@@ -89,15 +88,14 @@ FILTER_SQL = {
     # Open work, including Lead-owned runs waiting for the Lead to resume them.
     "active": (
         f"(state IN ({_ACTIVE_TASK_SQL})"
-        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned')"
-        f" OR (child_parent_run_id IS NULL AND run_state IN ({_RESULT_SQL})))"
+        " OR run_state IN ('executing','awaiting-host','waiting-owned')"
+        f" OR run_state IN ({_RESULT_SQL}))"
     ),
-    # A Lead-owned tree is active for its Lead, including helper descendants
-    # parked on their own Host boundary. The tree root carries that ownership.
+    # A Lead-owned run is active for its Lead while it has a boundary.
     "host": host_filter_sql(),
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
-    # Micro-task review_ready also proves stop for every owned child and router.
+    # Micro-task review_ready also proves stop for every owned run and Router.
     "review": (
         "(accepted_at IS NULL AND state IN ('completed','failed','cancelled')"
         " AND decision_id IS NULL AND adapter <> 'decision'"
@@ -132,38 +130,15 @@ SELECT task.task_id FROM tasks task
 
 #: One row per task: the full task row plus its derived micro task facts.
 #:
-#: ``roots`` looks up a child and walks ``workflow_children`` upward; its terminal
-#: ancestor is the root of that micro task tree. A routing decision points at its owning run through
-#: ``workflow_routes``, and that run's root is used for the decision's project and
-#: Host, so a decision is never misattributed to its own private decision directory.
+#: A routing decision uses the owning run's project and Host.
 RELATION_SQL = f"""
 WITH RECURSIVE manifest_owners AS ({MANIFEST_OWNERS_CTE}),
 routing_tasks AS ({ROUTING_TASKS_SQL}),
-lineage(task_id, root_run_id) AS (
-    SELECT child_task_id, child_task_id FROM workflow_children
-    UNION ALL
-    SELECT lineage.task_id, parent.parent_run_id
-      FROM lineage JOIN workflow_children parent ON parent.child_task_id = lineage.root_run_id
-),
-roots AS NOT MATERIALIZED (
-    -- Keep the lookup key on the indexed child table. Joining a materialized
-    -- all-tree lineage here makes SQLite scan it once per history row.
-    SELECT child.child_task_id AS task_id, (
-        WITH RECURSIVE ancestors(run_id) AS (
-            SELECT child.parent_run_id
-            UNION ALL
-            SELECT parent.parent_run_id FROM ancestors
-              JOIN workflow_children parent ON parent.child_task_id = ancestors.run_id
-        )
-        SELECT run_id FROM ancestors WHERE NOT EXISTS (
-            SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = ancestors.run_id
-        )
-    ) AS root_run_id FROM workflow_children child
-),
 owned_runs(owner_run_id, run_id) AS (
     SELECT run_id, run_id FROM workflow_runs
     UNION
-    SELECT lineage.root_run_id, lineage.task_id FROM lineage
+    SELECT owned.owner_run_id, lead.owned_run_id
+      FROM owned_runs owned JOIN workflow_lead_tasks lead ON lead.lead_run_id = owned.run_id
 ),
 owned_executions(owner_run_id, task_id) AS (
     SELECT owner_run_id, run_id FROM owned_runs
@@ -182,8 +157,7 @@ SELECT
     lead.lead_turn_id AS lead_turn_id,
     lead.created_at AS lead_owned_at,
     root_lead.lead_run_id AS root_lead_run_id,
-    c.parent_run_id AS child_parent_run_id,
-    COALESCE(c.parent_run_id, dr_route.run_id) AS delegated_parent_run_id,
+    dr_route.run_id AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
     dr_route.run_id AS route_run_id,
     r.title AS workflow_title,
@@ -195,7 +169,7 @@ SELECT
     dr.provider AS router_provider,
     dr.model AS router_model,
     dr.effort AS router_effort,
-    COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id) AS root_run_id,
+    COALESCE(r.run_id, dr_route.run_id) AS root_run_id,
     CASE WHEN root_run.run_id IS NOT NULL THEN json_extract(root_task.spec_json, '$.cwd')
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
@@ -230,20 +204,17 @@ SELECT
     ) AS review_ready
 FROM tasks t
 LEFT JOIN workflow_runs r ON r.run_id = t.task_id
-LEFT JOIN workflow_children c ON c.child_task_id = t.task_id
 LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id
-LEFT JOIN roots rt ON rt.task_id = t.task_id
 LEFT JOIN router_dispatches dr ON dr.task_id = t.task_id
 LEFT JOIN workflow_routes dr_route ON dr_route.decision_id = dr.decision_id
 LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr_route.run_id
 LEFT JOIN tasks routed_task ON routed_task.task_id = routed_run.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
-LEFT JOIN roots wr_roots ON wr_roots.task_id = dr_route.run_id
-LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
-LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
+LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(r.run_id, dr_route.run_id)
+LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(r.run_id, dr_route.run_id)
 LEFT JOIN macro_tasks root_macro ON root_macro.macro_task_id=root_run.macro_task_id
 LEFT JOIN workflow_lead_tasks root_lead
-  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
+  ON root_lead.owned_run_id = COALESCE(r.run_id, dr_route.run_id)
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
@@ -286,7 +257,7 @@ def metadata_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
     """Derive one task's micro task metadata from a resolved relation row."""
     micro_task = row["micro_task_run_id"] is not None
     if micro_task:
-        kind = "helper" if row["child_parent_run_id"] else "micro-task"
+        kind = "micro-task"
     elif row["decision_id"] is not None or row["adapter"] == "decision":
         kind = "decision"
     else:
@@ -365,9 +336,7 @@ def history_where(
     clauses: list[str] = []
     values: list[Any] = []
     if roots_only:
-        # Main micro tasks only: helpers (a workflow child) and internal decision
-        # tasks (no micro-task run) are excluded.
-        clauses.append("micro_task_run_id IS NOT NULL AND child_parent_run_id IS NULL")
+        clauses.append("micro_task_run_id IS NOT NULL")
     if project_id:
         clauses.append("project_id = ?")
         values.append(project_id)

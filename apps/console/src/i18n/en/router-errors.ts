@@ -94,6 +94,7 @@ export default {
   "wrong-native-thread": "Native thread did not match",
   "readonly-configuration-mismatch": "Read-only configuration did not match",
   "harness.command-line-too-long": "Launch command exceeded the size limit",
+  "harness.working-directory-rejected": "The operating system rejected the working directory",
   "dsh-tool-inventory-unreadable": "DSH tool inventory unreadable",
   "dsh-tool-inventory-format-unrecognized": "DSH tool inventory format unrecognized",
   "catalog-unavailable": "Model catalog unavailable",

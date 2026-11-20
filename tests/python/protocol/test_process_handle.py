@@ -232,6 +232,16 @@ class OccupiedDirectoryTests(unittest.TestCase):
                     self.fail("A child without a process handle entered the context")
         self.assert_released()
 
+    def test_cleanup_interrupt_releases_resources_and_propagates_unchanged(self):
+        interrupt = KeyboardInterrupt("stop interrupted")
+        with patch.object(ProcessHandle, "terminate", side_effect=interrupt):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                with support.occupied_directory(self.directory) as child:
+                    self.child = child
+                    self.assertIsNone(child.poll())
+        self.assertIs(caught.exception, interrupt)
+        self.assert_released()
+
 
 if __name__ == "__main__":
     unittest.main()

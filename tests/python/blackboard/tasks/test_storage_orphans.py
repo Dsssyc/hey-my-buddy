@@ -220,10 +220,10 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workspace_reservations
                 (reservation_id,workspace_id,checkout_root,access,holder_task_id,
-                 holder_kind,parent_run_id,manifest_sha256,state,created_at)
-                VALUES (?,?,?,'read',?,'parent',?,?,'released',?)''',
+                 manifest_sha256,state,created_at)
+                VALUES (?,?,?,'read',?,?,'released',?)''',
                 ('retained-reservation', manifest['workspaceId'], str(checkout),
-                 parent['runId'], parent['runId'], manifest['manifestSha256'],
+                 parent['runId'], manifest['manifestSha256'],
                  '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 
@@ -359,7 +359,7 @@ class StorageOrphanTests(WorkflowTestCase):
             row for row in unproven['candidates'] if row['path'] == str(checkout))['reasons'])
         self.assertTrue(checkout.is_dir())
 
-    def test_planning_streams_rows_and_parses_each_field_once_per_orphan(self):
+    def test_planning_streams_rows_and_parses_each_field_once_for_all_orphans(self):
         first, checkout, _ = self.orphan()
         request = json.loads((checkout.parent / 'request.json').read_text(encoding="utf-8"))
         second = workspace.prepare(self.directory, 'second-orphan', request['intent'])
@@ -385,7 +385,7 @@ class StorageOrphanTests(WorkflowTestCase):
             self.assertEqual(len(read_rows), 1, 'the first row must not preload historical facts')
         with patch.object(storage.json, 'loads', side_effect=counted):
             planned = self.board_instance.call('storage_plan', {})
-        self.assertEqual(len(calls), 2, 'each orphan proof must parse a retained JSON field once')
+        self.assertEqual(len(calls), 1, 'the batch must parse a retained JSON field once')
         for manifest in (first, second):
             self.assertFalse(any(row['path'] == manifest['checkoutRoot'] for row in planned['candidates']))
 

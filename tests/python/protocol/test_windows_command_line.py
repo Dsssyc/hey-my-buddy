@@ -1,7 +1,10 @@
 """The final Windows CreateProcess command line is checked before spawn intent."""
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +24,60 @@ from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.run_contract import MAX_SCHEMA_BYTES
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import owned_process, process_identity
+
+
+class WorkingDirectoryTests(unittest.TestCase):
+    def test_windows_error_directory_has_no_filename_and_records_no_child(self):
+        cwd = str(Path("workspace").absolute() / ("long" * 70))
+        failure = NotADirectoryError(errno.ENOTDIR, "directory name is invalid")
+        failure.winerror = 267
+        api = mock.Mock()
+        with mock.patch.object(owned_process.subprocess, "Popen", side_effect=failure), \
+             mock.patch.object(process_identity, "begin_native_process_spawn", return_value="intent"), \
+             mock.patch.object(process_identity, "discard_confirmed_native_spawn") as discard:
+            with self.assertRaises(owned_process.WorkingDirectoryRejected) as caught:
+                owned_process.owned_popen([sys.executable], cwd=cwd, windows_api=api)
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertEqual(caught.exception.reason, {
+            "code": "harness.working-directory-rejected",
+            "params": {"cwd": cwd, "systemReason": "WinError 267: directory name is invalid"},
+        })
+        self.assertEqual(caught.exception.owned_popen_evidence,
+                         owned_process.ProcessCreationEvidence(False, True, None))
+        api.close.assert_called_once_with(api.create_job.return_value)
+        api.assign.assert_not_called()
+        discard.assert_called_once_with("intent")
+
+    def test_missing_binary_with_a_valid_directory_keeps_enoent(self):
+        with tempfile.TemporaryDirectory() as root, self.assertRaises(FileNotFoundError) as caught:
+            owned_process.owned_popen([str(Path(root) / "missing.exe")], cwd=root)
+        self.assertEqual(caught.exception.owned_popen_evidence,
+                         owned_process.ProcessCreationEvidence(False, True, None))
+
+    @unittest.skipIf(os.name == "nt", "POSIX execve and chdir errors")
+    def test_missing_interpreter_and_non_directory_are_distinguished(self):
+        with tempfile.TemporaryDirectory() as root:
+            script = Path(root) / "agent"
+            script.write_text("#!/no-such-interpreter\n", encoding="utf-8")
+            script.chmod(0o700)
+            with self.assertRaises(FileNotFoundError) as missing:
+                owned_process.owned_popen([str(script)], cwd=root)
+            with self.assertRaises(owned_process.WorkingDirectoryRejected) as rejection:
+                owned_process.owned_popen([sys.executable], cwd=script)
+        self.assertEqual(missing.exception.filename, str(script))
+        self.assertEqual(rejection.exception.reason["params"]["cwd"], str(script))
+        self.assertEqual(rejection.exception.__cause__.errno, errno.ENOTDIR)
+
+    def test_unnamed_enoent_requires_an_existing_binary_and_invalid_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing_exe = str(Path(root) / "missing.exe")
+            missing_cwd = str(Path(root) / "missing")
+            failure = FileNotFoundError(errno.ENOENT, "not found")
+            with mock.patch.object(owned_process.subprocess, "Popen", side_effect=failure):
+                with self.assertRaises(FileNotFoundError):
+                    owned_process.owned_popen([missing_exe], cwd=missing_cwd)
+                with self.assertRaises(owned_process.WorkingDirectoryRejected):
+                    owned_process.owned_popen([sys.executable], cwd=missing_cwd)
 
 
 class WindowsCommandLineTests(unittest.TestCase):

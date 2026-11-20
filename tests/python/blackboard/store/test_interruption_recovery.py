@@ -241,6 +241,314 @@ class InterruptionRecoveryTests(BoardTestCase):
                                        'shutdownConfirmed': True})
         self.assertEqual(client.get(runId=task['runId'])['state'], 'completed')
 
+    def test_replaying_progress_preserves_restart_wait_and_attempt_revision(self):
+        board, client, task, _, actor = self.claimed()
+        activity = {'phase': 'tool-running', 'observedAt': '2026-10-16T00:00:00Z', 'eventSeq': 1}
+        progress = {**actor, 'processIdentity': IDENTITY,
+                    'data': {'activity': activity, 'waitingReason': None, 'waitingReasonSeq': 1}}
+        self.assertEqual(board.call('execution_progress', progress)['activity'], 'recorded')
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+        head = board.store.head()
+        with board.store.db.read() as db:
+            before = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
+        with patch.object(board.store, 'now', return_value='2099-01-01T00:00:00Z'):
+            replay = board.call('execution_progress', progress)
+
+        self.assertEqual(replay, {'recorded': True, 'head': head, 'activity': 'unchanged'})
+        self.assertEqual(board.store.head(), head)
+        with board.store.db.read() as db:
+            after = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(after['updated_at'], before['updated_at'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
+    def test_replaying_startup_acknowledgement_is_idempotent_before_and_after_restart(self):
+        board, client, task, _, actor = self.claimed(identity=False)
+        startup = {**actor, 'processIdentity': IDENTITY, 'phase': 'executing'}
+        self.assertTrue(board.call('execution_progress', startup)['recorded'])
+        head_executing = board.store.head()
+        with board.store.db.read() as db:
+            confirmed = board.store._attempt_row(db, actor['attemptId'])
+        with patch.object(board.store, 'now', return_value='2099-01-01T00:00:00Z'):
+            replay_executing = board.call('execution_progress', startup)
+        self.assertEqual(replay_executing['head'], head_executing)
+        self.assertEqual(board.store.head(), head_executing)
+        with board.store.db.read() as db:
+            after_executing = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after_executing['revision'], confirmed['revision'])
+        self.assertEqual(after_executing['updated_at'], confirmed['updated_at'])
+
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+        head_uncertain = board.store.head()
+        with board.store.db.read() as db:
+            uncertain = board.store._attempt_row(db, actor['attemptId'])
+        with patch.object(board.store, 'now', return_value='2099-01-02T00:00:00Z'):
+            replay_uncertain = board.call('execution_progress', startup)
+        self.assertEqual(replay_uncertain['head'], head_uncertain)
+        self.assertEqual(board.store.head(), head_uncertain)
+        with board.store.db.read() as db:
+            after_uncertain = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after_uncertain['revision'], uncertain['revision'])
+        self.assertEqual(after_uncertain['updated_at'], uncertain['updated_at'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
+        non_startup = board.call('execution_progress',
+                                 {**actor, 'processIdentity': IDENTITY, 'phase': 'tool-running'})
+        self.assertGreater(non_startup['head'], head_uncertain)
+        events = client.read_events(after=head_uncertain)['events']
+        self.assertEqual([(event['kind'], event['payload']['phase']) for event in events],
+                         [('attempt.progress', 'tool-running')])
+
+    def test_replaying_nonempty_waiting_reason_preserves_connection_reasons_until_reconnected(self):
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for mode, expected_reason in (('restart', 'attempt-uncertain-after-restart'),
+                                      ('disconnect', 'execution-connection-unknown')):
+            with self.subTest(mode=mode):
+                board, client, task, _, actor = self.claimed()
+                payload = {**actor, 'data': {'waitingReason': waiting, 'waitingReasonSeq': 1}}
+                board.call('execution_progress', payload)
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+                if mode == 'restart':
+                    with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+                        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+                else:
+                    self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+                head = board.store.head()
+                with board.store.db.read() as db:
+                    before = board.store._attempt_row(db, actor['attemptId'])
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
+
+                with patch.object(board.store, 'now', return_value='2099-01-03T00:00:00Z'):
+                    replay = board.call('execution_progress', payload)
+                self.assertEqual(replay, {'recorded': True, 'head': head, 'activity': None})
+                self.assertEqual(board.store.head(), head)
+                with board.store.db.read() as db:
+                    after = board.store._attempt_row(db, actor['attemptId'])
+                self.assertEqual(after['revision'], before['revision'])
+                self.assertEqual(after['updated_at'], before['updated_at'])
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
+
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+
+    def test_receipt_reception_clears_waiting_reason_regardless_of_reconnect_order(self):
+        from support import publish_result_receipt
+
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for order in ('reconnect-then-receipt', 'receipt-then-reconnect'):
+            with self.subTest(order=order):
+                board, client, task, _, actor = self.claimed()
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 1}})
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+                reference = publish_result_receipt(board.directory, {
+                    **actor, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'text': 'done'}})
+                if order == 'reconnect-then-receipt':
+                    self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                    self.assertEqual(board.call('execution_result', reference), {'received': True})
+                else:
+                    self.assertEqual(board.call('execution_result', reference), {'received': True})
+                    self.assertFalse(board.store.execution_connection(actor['attemptId'], connected=True))
+                view = client.get(runId=task['runId'])
+                self.assertEqual(view['attemptState'], 'finalizing')
+                self.assertIsNone(view['queueReason'])
+
+    def test_unconfirmed_result_commit_clears_waiting_facts_without_a_connection_reason(self):
+        board, client, task, _, actor = self.claimed()
+        # A live wait and an unknown probe are legal while the attempt holds no
+        # result; committing one must settle both without inventing a restart.
+        with board.store.db.write() as db:
+            db.execute("UPDATE attempts SET probe_unknown=1, waiting_reason='router-input-unknown'"
+                       " WHERE attempt_id=?", (actor['attemptId'],))
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+        board.store.execution_result({**actor, 'status': 'ok', 'result': {'finalText': 'unconfirmed'},
+                                      'shutdownConfirmed': False},
+                                     stop_evidence={'kind': 'identity-absent', 'native': 'journal'})
+        with board.store.db.read() as db:
+            row = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((row['execution_state'], row['connection_reason'], row['probe_unknown'],
+                          row['waiting_reason'], row['result_json'] is not None),
+                         ('uncertain', None, 0, None, True))
+        view = client.get(runId=task['runId'])
+        self.assertEqual(view['state'], 'reconciliation-needed')
+        self.assertIsNone(view['queueReason'])
+
+    def test_probe_unknown_survives_disconnect_and_reconnect_until_a_ready_probe(self):
+        unknown_probe = {'harness': 'codex', 'status': 'unknown',
+                         'lastProbe': {'status': 'unknown'}}
+        ready_probe = {'harness': 'codex', 'status': 'ready',
+                       'lastProbe': {'status': 'complete'}}
+        for cleared in (False, True):
+            with self.subTest(cleared=cleared):
+                board, client, task, _, actor = self.claimed()
+                with board.store.db.write() as db:
+                    db.execute("UPDATE attempts SET model_harness='codex' WHERE attempt_id=?", (actor['attemptId'],))
+                with patch.object(board.service.harnesses, 'refresh', return_value=unknown_probe):
+                    board.call('harness_prepare', {**actor, 'commandId': f'unknown-probe-{cleared}'})
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'harness-probe-unknown')
+                if cleared:
+                    with patch.object(board.service.harnesses, 'refresh', return_value=ready_probe):
+                        board.call('harness_prepare', {**actor, 'commandId': f'ready-probe-{cleared}'})
+                    self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+                # The connection reason names the disconnect while it lasts; the
+                # probe flag outlives it on the attempt row.
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'execution-connection-unknown')
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'],
+                                 None if cleared else 'harness-probe-unknown')
+
+    def test_first_disconnect_after_restart_flips_the_connection_reason_once(self):
+        board, client, task, _, actor = self.claimed()
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+        head = board.store.head()
+        with board.store.db.read() as db:
+            before = board.store._attempt_row(db, actor['attemptId'])
+        self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+        view = client.get(runId=task['runId'])
+        self.assertEqual(view['queueReason'], 'execution-connection-unknown')
+        self.assertEqual(view['selectedAttempt']['ownership'], 'uncertain')
+        self.assertGreater(board.store.head(), head)
+        with board.store.db.read() as db:
+            after = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after['revision'], before['revision'] + 1)
+        # The same failed probe is idempotent: no second event, no second bump.
+        replay_head = board.store.head()
+        self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+        self.assertEqual(board.store.head(), replay_head)
+        with board.store.db.read() as db:
+            replay = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(replay['revision'], after['revision'])
+        self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+
+    def test_waiting_reasons_arriving_while_uncertain_land_on_the_attempt_row(self):
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for mode, expected_reason in (('restart', 'attempt-uncertain-after-restart'),
+                                      ('disconnect', 'execution-connection-unknown')):
+            with self.subTest(mode=mode):
+                board, client, task, _, actor = self.claimed()
+                if mode == 'restart':
+                    with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+                        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+                else:
+                    self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+                head = board.store.head()
+                # A wait recorded while the connection is unresolved changes no
+                # connection fact and appends its own event.
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 1}})
+                self.assertEqual(board.store.head(), head + 1)
+                with board.store.db.read() as db:
+                    attempt = board.store._attempt_row(db, actor['attemptId'])
+                self.assertEqual(attempt['waiting_reason'], 'router-input-unknown')
+                self.assertEqual(attempt['connection_reason'], expected_reason)
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
+                # Clearing the wait is the same honest row update.
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                                    'waitingReasonSeq': 2}})
+                with board.store.db.read() as db:
+                    attempt = board.store._attempt_row(db, actor['attemptId'])
+                self.assertIsNone(attempt['waiting_reason'])
+                self.assertEqual(attempt['connection_reason'], expected_reason)
+                # After a reconnect the last recorded wait reappears unaided.
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                                    'waitingReasonSeq': 3}})
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+
+    def test_waiting_hints_require_their_paired_sequence(self):
+        board, _, _, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for data in ({'waitingReason': waiting},
+                     {'waitingReasonSeq': 1},
+                     {'waitingReason': None, 'waitingReasonSeq': True},
+                     {'waitingReason': None, 'waitingReasonSeq': 0},
+                     {'waitingReason': waiting, 'waitingReasonSeq': '1'},
+                     {'waitingReason': None, 'waitingReasonSeq': 1.5},
+                     {'waitingReason': waiting, 'waitingReasonSeq': 2**63},
+                     {'waitingReason': waiting, 'waitingReasonSeq': None}):
+            with self.subTest(data=data), self.assertRaises(BoardError) as caught:
+                board.call('execution_progress', {**actor, 'data': data})
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 0))
+
+    def test_waiting_hint_sequences_advance_monotonically_and_ignore_old_ones(self):
+        board, client, task, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+
+        def hint(reason, seq):
+            return board.call('execution_progress', {**actor, 'data': {
+                'waitingReason': reason, 'waitingReasonSeq': seq}})
+
+        head = board.store.head()
+        hint(waiting, 2)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']),
+                         ('router-input-unknown', 2))
+        self.assertEqual(board.store.head(), head + 1)
+        # An unchanged confirmation with a newer sequence advances the barrier
+        # without a second event: the budget observation's wake fact.
+        head = board.store.head()
+        hint(None, 5)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 5))
+        self.assertEqual(board.store.head(), head + 1)
+        head = board.store.head()
+        hint(None, 6)
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 6))
+        self.assertEqual(board.store.head(), head)
+        # A late replay of an older dispatch never rewrites the cleared wait.
+        self.assertTrue(hint(waiting, 5)['recorded'])
+        self.assertTrue(hint(waiting, 1)['recorded'])
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 6))
+        self.assertEqual(board.store.head(), head)
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+
+    def test_an_out_of_order_clear_keeps_a_late_old_waiting_hint_from_reviving_the_wait(self):
+        from support import publish_result_receipt
+
+        board, client, task, _, actor = self.claimed()
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        # The higher-sequence clear lands first; the older in-flight wait replay
+        # of a dispatch_uncertain redelivery arrives afterwards.
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                             'waitingReasonSeq': 3}})
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                             'waitingReasonSeq': 4}})
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting,
+                                                             'waitingReasonSeq': 3}})
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 4))
+        self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+        # After the receipt is received no waiting hint is accepted at all, so
+        # an even later replay cannot revive the wait either.
+        reference = publish_result_receipt(board.directory, {
+            **actor, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'text': 'done'}})
+        self.assertEqual(board.call('execution_result', reference), {'received': True})
+        self.assertTrue(board.call('execution_progress', {**actor, 'data': {
+            'waitingReason': waiting, 'waitingReasonSeq': 9}})['recorded'])
+        with board.store.db.read() as db:
+            attempt = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((attempt['waiting_reason'], attempt['waiting_hint_seq']), (None, 4))
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
@@ -261,7 +569,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(view['selectedAttempt']['ownership'], 'uncertain')
         self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
         board.call('execution_progress', {**actor, 'data': {'waitingReason':
-                   {'code': 'router-input-unknown', 'params': {}}}})
+                   {'code': 'router-input-unknown', 'params': {}}, 'waitingReasonSeq': 1}})
         board.store.execution_connection(actor['attemptId'], connected=True)
         self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
 
@@ -427,7 +735,8 @@ class InterruptionRecoveryTests(BoardTestCase):
         scheduler = Mock()
         board.service.execution_scheduler = scheduler
         head = board.store.head()
-        response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
+        response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None,
+                                                                       'waitingReasonSeq': 1}})
         self.assertTrue(response['recorded'])
         self.assertEqual(board.store.head(), head)
         scheduler.wake_attempt.assert_called_once_with(actor['attemptId'])
@@ -478,6 +787,60 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertFalse(view['shutdownConfirmed'])
         self.assertEqual(view['terminationReason'], 'interrupted')
         self.assertTrue(board.store.resource_claims())
+
+    def test_finished_interruption_can_gain_native_stop_proof(self):
+        board, client, task, _, actor = self.claimed()
+        attempt_id = actor['attemptId']
+        journal = self.journal(board, attempt_id)
+        native_path(Path(journal['path'])).unlink()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(len(board.store.recover_executions()), 1)
+            original = client.result(runId=task['runId'])['selectedAttempt']['result']
+            self.assertFalse(original['shutdownConfirmed'])
+            with board.store.db.write() as connection:
+                connection.execute("UPDATE attempts SET execution_state='finished',cleanup_pending=0,"
+                                   "connection_reason=NULL,probe_unknown=0,waiting_reason=NULL WHERE attempt_id=?",
+                                   (attempt_id,))
+            self.assertEqual(board.store.recover_executions(), [])
+            self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
+            processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
+            self.assert_idempotently_confirmed(board, client, task, actor, original, state='failed')
+
+    def test_superseded_attempt_records_stop_without_settling_the_new_generation(self):
+        board, _, task, _, actor = self.claimed()
+        attempt_id, task_id = actor['attemptId'], task['runId']
+        journal = self.journal(board, attempt_id)
+        native_path(Path(journal['path'])).unlink()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(len(board.store.recover_executions()), 1)
+        with board.store.db.write() as connection:
+            original = json.loads(board.store._attempt_row(connection, attempt_id)['result_json'])
+            connection.execute("UPDATE attempts SET execution_state='finished',connection_reason=NULL,"
+                               "probe_unknown=0,waiting_reason=NULL WHERE attempt_id=?", (attempt_id,))
+            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,"
+                               " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                               ('new-generation', task_id, 2, 'fixture', 'executing', 'command',
+                                board.store.now(), board.store.now()))
+            connection.execute("UPDATE tasks SET state='running',active_attempt_id=?,selected_attempt_id=? WHERE task_id=?",
+                               ('new-generation', 'new-generation', task_id))
+            original_task = dict(board.store._task_row(connection, {'runId': task_id}))
+        processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
+        with (
+            patch.object(processes, 'inspect_process_identity', return_value='identity-absent'),
+            patch.object(board.store.workflow, 'seal_interrupted_turn') as seal,
+        ):
+            self.assertEqual(len(board.store.recover_executions(attempt_id)), 1)
+            seal.assert_not_called()
+        with board.store.db.read() as connection:
+            self.assertEqual(dict(board.store._task_row(connection, {'runId': task_id})), original_task)
+            attempt = board.store._attempt_row(connection, attempt_id)
+            self.assertEqual(json.loads(attempt['result_json']), {**original, 'shutdownConfirmed': True})
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM attempt_shutdown_evidence WHERE attempt_id=?",
+                                                    (attempt_id,)).fetchone())
+        self.assertEqual(board.store.resource_claims(), [])
+        head = board.store.head()
+        self.assertEqual(board.store.recover_executions(attempt_id), [])
+        self.assertEqual(board.store.head(), head)
 
     def assert_idempotently_confirmed(self, board, client, task, actor, original, *, state):
         self.assertEqual(len(board.store.recover_executions()), 1)
@@ -791,3 +1154,92 @@ class ReleaseReasonContinuationTests(WorkflowTestCase):
                 (submitted['runId'], second['attemptId']),
             ).fetchall()
         self.assertTrue(any('events_task_idx' in row['detail'] for row in plan), plan)
+
+
+class QueueReasonProjectionTests(WorkflowTestCase):
+    """Every task queueReason entry point reads one identical attempt projection."""
+
+    def views(self, board, run_id, *, lead_id=None):
+        from hey_my_buddy.blackboard.store.store import task_queue_reason
+        from hey_my_buddy.blackboard.tasks import macro_tasks
+        with board.store.db.read() as connection:
+            task_row = board.store._task_row(connection, {"runId": run_id})
+            direct = task_queue_reason(connection, task_row)
+            group_id = f"run:{lead_id}" if lead_id is not None else f"run:{run_id}"
+            timeline = [row for row in macro_tasks.macro_task_timeline(board.store, {"macroTaskId": group_id})["rows"]
+                        if row["runId"] == run_id]
+            owned = (board.store.workflow._owned_turn_context(connection, lead_id, None)["ownedMicroTasks"]
+                     if lead_id is not None else [])
+        result = {
+            "task_get": board.call("task_get", {"runId": run_id})["task"]["queueReason"],
+            "direct": direct,
+            "workflow_get": board.call("workflow_get", {"runId": run_id})["queueReason"],
+            "timeline": timeline[0]["queueReason"] if timeline else None,
+        }
+        if lead_id is not None:
+            matched = [item for item in owned if item["runId"] == run_id]
+            self.assertEqual(len(matched), 1)
+            result["lead_owned_sql"] = matched[0]["queueReason"]
+        return result
+
+    def assert_views(self, board, run_id, expected, *, lead_id=None):
+        views = self.views(board, run_id, lead_id=lead_id)
+        self.assertEqual(views, {entry: expected for entry in views})
+
+    def attach_to_lead(self, board, run_id, *, suffix):
+        lead_id = self.submit(board, request_id=f"req-lead-{suffix}", cwd=str(self.workdir(f"lead-{suffix}")))["runId"]
+        lead_claim = self.claim(board, claim_request_id=f"c-lead-{suffix}", run_id=lead_id)
+        self.finish_turn(board, lead_claim, disposition="completed")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id, lead_run_id, lead_turn_id, created_at) VALUES(?,?,?,?)",
+                (run_id, lead_id, lead_claim["claim"]["turn"]["turnId"], board.store.now()),
+            )
+        return lead_id
+
+    def test_every_entry_point_projects_the_active_attempt_identically(self):
+        from support import publish_result_receipt
+
+        waiting = {"code": "router-input-unknown", "params": {}}
+        board = self.board()
+        run_id = self.submit(board)["runId"]
+        lead_id = self.attach_to_lead(board, run_id, suffix="live")
+        claim = self.claim(board, run_id=run_id)["claim"]
+        actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+                 "nonce": "n" * 16}
+        # An unknown probe shows until a recorded wait outranks it.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET probe_unknown=1 WHERE attempt_id=?", (actor["attemptId"],))
+        self.assert_views(board, run_id, "harness-probe-unknown", lead_id=lead_id)
+        board.call("execution_progress", {**actor, "data": {"waitingReason": waiting,
+                                                             "waitingReasonSeq": 1}})
+        self.assert_views(board, run_id, "router-input-unknown", lead_id=lead_id)
+        # A disconnect outranks both while it lasts and returns to the wait.
+        self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=False))
+        self.assert_views(board, run_id, "execution-connection-unknown", lead_id=lead_id)
+        self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=True))
+        self.assert_views(board, run_id, "router-input-unknown", lead_id=lead_id)
+        # Receipt reception settles every wait at every entry point.
+        reference = publish_result_receipt(board.directory, {
+            **actor, "status": "ok", "shutdownConfirmed": True, "result": {"text": "done"}})
+        self.assertEqual(board.call("execution_result", reference), {"received": True})
+        self.assert_views(board, run_id, None, lead_id=lead_id)
+
+        # A committed result reads as no reason even while the attempt is still
+        # uncertain with no confirmed stop.
+        board = self.board()
+        run_id = self.submit(board, request_id="req-result", cwd=str(self.workdir("result")))["runId"]
+        lead_id = self.attach_to_lead(board, run_id, suffix="result")
+        claim = self.claim(board, claim_request_id="c-result", run_id=run_id)["claim"]
+        actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+                 "nonce": "n" * 16}
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET probe_unknown=1, waiting_reason='router-input-unknown'"
+                               " WHERE attempt_id=?", (actor["attemptId"],))
+        board.store.execution_result({**actor, "status": "ok", "result": {"finalText": "unconfirmed"},
+                                      "shutdownConfirmed": False},
+                                     stop_evidence={"kind": "identity-absent", "native": "journal"})
+        with board.store.db.read() as connection:
+            row = board.store._attempt_row(connection, actor["attemptId"])
+        self.assertEqual((row["execution_state"], row["result_form"] is not None), ("uncertain", True))
+        self.assert_views(board, run_id, None, lead_id=lead_id)

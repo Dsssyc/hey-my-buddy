@@ -24,20 +24,6 @@ describe("awaiting review", () => {
   });
 });
 
-describe("Lead ownership display", () => {
-  it("shows a helper's Lead boundary through its root even without direct ownership", () => {
-    const boundary = task({ state: "completed", workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
-    expect(taskStatus(boundary)).toBe("awaiting-host");
-    expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", parentRunId: null,
-      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { kind: "git" as const, id: "p", path: null, label: "p" }, buddy: null,
-      leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: boundary.createdAt } } })).toBe("awaiting-lead");
-    expect(taskStatus({ ...boundary, lineage: { kind: "helper", parentRunId: "run-1",
-      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { kind: "git" as const, id: "p", path: null, label: "p" }, buddy: null,
-      leadOwnership: null } })).toBe("awaiting-lead");
-    expect(taskStatus({ ...boundary, workflow: { ...boundary.workflow!, state: "waiting-owned" } })).toBe("waiting-owned");
-  });
-});
-
 describe("micro task title rule (0.16 T1)", () => {
   it("prefers the explicit workflow title over everything else", () => {
     const title = taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 3, title: "修复标题" } }));

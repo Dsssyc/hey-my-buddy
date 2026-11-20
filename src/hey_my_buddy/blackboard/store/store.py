@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ...paths import is_absolute_path, native_path, resolved_path
+from ...private_dirs import session_record_path
 from ...protocol import activity as activity_module
-from ..tasks import micro_task
+from ..tasks import macro_tasks, micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view, is_input_too_large, normalize_input_failure
@@ -40,7 +41,7 @@ from .work import autonomous_tasks
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "cancelling", "cancelled", "reconciliation-needed"}),
     # ``running -> queued`` is the micro-task yield: a turn returned a structured
-    # assistance/attention outcome, the attempt stopped with confirmed shutdown and
+    # attention outcome, the attempt stopped with confirmed shutdown and
     # the same logical task waits for the Host instead of pretending to be complete.
     "running": frozenset(
         {"running", "queued", "cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}
@@ -68,6 +69,38 @@ MAX_EVENT_PAGE = 200
 #: Connection observations, never execution progress, clear these waiting reasons.
 UNCERTAIN_QUEUE_REASON = "attempt-uncertain-after-restart"
 UNKNOWN_QUEUE_REASON = "execution-connection-unknown"
+
+
+def attempt_queue_reason(attempt) -> str | None:
+    """One attempt row's own waiting projection.
+
+    Terminal states and committed results hold none; otherwise the connection
+    reason of an uncertain attempt wins over the recorded Router wait, which
+    wins over an unknown harness probe. ``result_form`` is bound to
+    ``result_json`` by the table's own constraint, so it names a committed
+    result as reliably without carrying the report body.
+    """
+    if (attempt is None or attempt["execution_state"] in ("finalizing", "finished")
+            or attempt["result_form"] is not None):
+        return None
+    return attempt["connection_reason"] or attempt["waiting_reason"] or (
+        "harness-probe-unknown" if attempt["probe_unknown"] else None)
+
+
+def task_queue_reason(connection: sqlite3.Connection, task) -> str | None:
+    """One task row's queue reason, read in O(1) from the owning row.
+
+    A task without an active attempt is read through its own ``queue_reason``;
+    one with an active attempt is read from that attempt row alone, and a
+    dangling ``active_attempt_id`` reads as no reason at all.
+    """
+    if task["active_attempt_id"] is None:
+        return task["queue_reason"]
+    return attempt_queue_reason(connection.execute(
+        "SELECT execution_state, connection_reason, probe_unknown, waiting_reason, result_form"
+        " FROM attempts WHERE attempt_id=?",
+        (task["active_attempt_id"],),
+    ).fetchone())
 
 
 def _overlaps(left: str, right: str) -> bool:
@@ -236,6 +269,7 @@ class BoardStore:
         revision: int | None = None,
         payload: dict | None = None,
         wake_owned: bool = True,
+        activity: bool = True,
     ) -> int:
         at = self.now()
         event_payload = dict(payload or {})
@@ -258,8 +292,9 @@ class BoardStore:
                 "DELETE FROM events WHERE task_id IS NULL AND kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
                 (kind, event_payload["harness"], seq),
             )
-        from ..tasks.macro_tasks import record_activity
-        record_activity(connection, task_id, seq, at)
+        if activity:
+            from ..tasks.macro_tasks import record_activity
+            record_activity(connection, task_id, seq, at)
         if wake_owned:
             self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
         return seq
@@ -511,7 +546,9 @@ class BoardStore:
             "fingerprintVersion": row["fingerprint_version"],
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "state": row["state"],
-            "queueReason": row["queue_reason"],
+            # An active attempt owns the task's waiting projection; a static
+            # view cannot read it, so callers that hold the attempt decorate it.
+            "queueReason": None if row["active_attempt_id"] else row["queue_reason"],
             "revision": row["revision"],
             "selectedAttemptId": row["selected_attempt_id"],
             "activeAttemptId": row["active_attempt_id"],
@@ -642,6 +679,9 @@ class BoardStore:
         attempt = self._selected_attempt(connection, task)
         view["tokenUsage"] = None
         if attempt is not None:
+            if task["active_attempt_id"]:
+                # The already-fetched active attempt carries the projection.
+                view["queueReason"] = attempt_queue_reason(attempt)
             from ..evaluation.native_observations import provider_rejection_view
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
             view["tokenUsage"] = (recorded.get("result") or {}).get("tokenUsage")
@@ -1008,7 +1048,7 @@ class BoardStore:
         micro-task task can never exist without its governance record.
         """
         spec = micro_task["spec"] if micro_task is not None else schemas.normalize_spec(params)
-        if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
+        if micro_task is None and spec["adapter"] != "command":
             raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
         fingerprint = schemas.spec_fingerprint(spec)
@@ -1259,15 +1299,16 @@ class BoardStore:
                      "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
+            task = self._task_row(connection, params)
+            if console_authority is None:
+                self.workflow.guard_task_control(connection, task, initiator=initiator)
+            elif (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
+                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
+                                 runId=task["task_id"])
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.cancel", request)
                 if receipt is not None:
                     return receipt
-            task = self._task_row(connection, params)
-            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
-                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
-                                 runId=task["task_id"])
-            self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()
             already = task["state"] in TERMINAL_TASK_STATES
             if not already:
@@ -1339,7 +1380,7 @@ class BoardStore:
                 expectedRevision=task["revision"],
             )
 
-    def _transition_attempt(self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str) -> None:
+    def _validate_attempt_transition(self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str) -> None:
         if state not in ATTEMPT_STATES:
             raise BoardError("INVALID_ARGUMENT", f"Unknown attempt state {state!r}")
         if state not in ATTEMPT_TRANSITIONS.get(attempt["execution_state"], frozenset()):
@@ -1351,10 +1392,24 @@ class BoardStore:
             )
         if state == "finished" and attempt["execution_state"] != "finished":
             self._settle_attempt_inquiries(connection, attempt)
+
+    def _transition_attempt(
+        self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str, *, connection_reason: str | None = None
+    ) -> None:
+        self._validate_attempt_transition(connection, attempt, state)
         now = self.now()
+        # One statement keeps the row inside its constraints: only an uncertain
+        # attempt without a result carries a connection reason, and a receipt-
+        # bound state or a committed result settles every wait.
+        result_committed = attempt["result_json"] is not None
         cursor = connection.execute(
-            "UPDATE attempts SET execution_state=?, updated_at=?, revision=revision+1 WHERE attempt_id=? AND revision=?",
-            (state, now, attempt["attempt_id"], attempt["revision"]),
+            "UPDATE attempts SET execution_state=?, connection_reason=?, probe_unknown=?, waiting_reason=?,"
+            " updated_at=?, revision=revision+1 WHERE attempt_id=? AND revision=?",
+            (state,
+             connection_reason if state == "uncertain" and not result_committed else None,
+             0 if state in ("finalizing", "finished") or result_committed else attempt["probe_unknown"],
+             None if state in ("finalizing", "finished") or result_committed else attempt["waiting_reason"],
+             now, attempt["attempt_id"], attempt["revision"]),
         )
         if cursor.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
@@ -1597,11 +1652,13 @@ class BoardStore:
                 attempt_id = chosen_attempt_id
                 now = self.now()
                 from ..evaluation.models import current_model
+                session_group_id = (macro_tasks.group_for_task(connection, chosen["task_id"])
+                                    if chosen["adapter"] != "command" else None)
                 connection.execute(
                     "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
                     " execution_state, ownership, adapter, model_harness, model_provider, model_model, model_id,"
-                    " started_at, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " session_group_id, started_at, created_at, updated_at, revision)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         attempt_id,
                         chosen["task_id"],
@@ -1615,6 +1672,7 @@ class BoardStore:
                         # attempts cannot change which model service slot they occupy.
                         *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
                         current_model(connection, *chosen_model_service) if chosen_model_service is not None else None,
+                        session_group_id,
                         now,
                         now,
                         now,
@@ -1655,6 +1713,8 @@ class BoardStore:
                     "claim": {
                         "attempt": self._attempt_view(attempt_row, include_result=False),
                         "task": claim_task,
+                        "sessionRecordPath": (str(session_record_path(self.directory, session_group_id, attempt_id))
+                                              if session_group_id is not None else None),
                     },
                     "reason": None,
                 }
@@ -1831,27 +1891,44 @@ class BoardStore:
         # turned into fake native progress.
         activity = None
         waiting_reason = None
+        waiting_seq = None
         data = params.get("data")
         if data is not None:
             if not isinstance(data, dict):
                 raise BoardError("INVALID_ARGUMENT", "data must be an object")
-            schemas.reject_unknown(data, {"activity", "waitingReason"}, "execution.progress.data")
+            schemas.reject_unknown(data, {"activity", "waitingReason", "waitingReasonSeq"},
+                                   "execution.progress.data")
             if data.get("activity") is not None:
                 activity = activity_module.normalize_activity(data["activity"])
                 if 'waitingReason' in activity:
                     validate_waiting_reason(activity['waitingReason'], activity=True)
-            if data.get('waitingReason') is not None:
-                waiting_reason = validate_waiting_reason(data['waitingReason'])
+            if 'waitingReason' in data:
+                waiting_seq = data.get('waitingReasonSeq')
+                if ('waitingReasonSeq' not in data
+                        or isinstance(waiting_seq, bool) or not isinstance(waiting_seq, int)
+                        or waiting_seq < 1 or waiting_seq > (1 << 63) - 1):
+                    raise BoardError("INVALID_ARGUMENT",
+                                     "data.waitingReason travels with data.waitingReasonSeq, "
+                                     "a positive integer that orders the attempt's waiting hints",
+                                     field="data.waitingReasonSeq")
+                if data['waitingReason'] is not None:
+                    waiting_reason = validate_waiting_reason(data['waitingReason'])
+            elif 'waitingReasonSeq' in data:
+                raise BoardError("INVALID_ARGUMENT",
+                                 "data.waitingReasonSeq is only sent beside data.waitingReason",
+                                 field="data.waitingReasonSeq")
         with self.db.write() as connection:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
+            identity_changed = False
             if process_identity is not None:
+                previous_identity = self._process_identity(connection, attempt["attempt_id"])
                 if verify_identity is not None:
                     from ..tasks.interruption import marker_identity
                     # The verified report is recorded as the attempt's root: the
                     # SQLite row never holds the interpreter inside a forwarder.
-                    root = self._process_identity(connection, attempt["attempt_id"])
+                    root = previous_identity
                     if root is None:
                         root = marker_identity(self, attempt)
                     verified = verify_identity(attempt["attempt_id"], process_identity, root)
@@ -1859,38 +1936,55 @@ class BoardStore:
                         raise BoardError("UNAUTHORIZED", "Execution identity differs from the service-owned process")
                 else:
                     verified = process_identity
-                self._record_process_identity(connection, attempt["attempt_id"], verified)
-                connection.execute("UPDATE attempts SET identity_confirmed_at=COALESCE(identity_confirmed_at,?)"
-                                   " WHERE attempt_id=?", (self.now(), attempt["attempt_id"]))
-            if phase in ("starting", "executing") and attempt["execution_state"] not in ("uncertain", "finalizing"):
+                if previous_identity != verified:
+                    self._record_process_identity(connection, attempt["attempt_id"], verified)
+                    identity_changed = True
+                if attempt["identity_confirmed_at"] is None:
+                    connection.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
+                                       (self.now(), attempt["attempt_id"]))
+                    identity_changed = True
+            transitioned = (phase in ("starting", "executing")
+                            and attempt["execution_state"] not in (phase, "uncertain", "finalizing"))
+            if transitioned:
                 self._transition_attempt(connection, attempt, phase)
-            now = self.now()
-            if data is not None and 'waitingReason' in data:
+            startup_replay = (process_identity is not None and message is None
+                              and phase in ("starting", "executing")
+                              and not identity_changed and not transitioned)
+            has_progress = (message is not None or phase is not None) and not startup_replay
+            changed = identity_changed or has_progress or (data is None and process_identity is None)
+            if (data is not None and 'waitingReason' in data
+                    and attempt['execution_state'] not in ('finalizing', 'finished')
+                    and attempt['result_json'] is None):
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
-                current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
-                                             (attempt['task_id'],)).fetchone()['queue_reason']
-                if current != waiting_code:
-                    connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
-                                       (waiting_code, attempt['task_id']))
-                    self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
-                                       attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
-            connection.execute(
-                "UPDATE attempts SET updated_at=?, revision=revision+1 WHERE attempt_id=?",
-                (now, attempt["attempt_id"]),
-            )
+                if waiting_seq > attempt['waiting_hint_seq']:
+                    # The wait is recorded on the attempt row even while its
+                    # connection is unresolved: it reappears unaided after a
+                    # reconnect and never overwrites the connection reason.
+                    # The sequence is the monotone barrier: only a newer hint
+                    # rewrites the reason, so a late replay of an older
+                    # dispatch cannot revive an already-cleared wait, and an
+                    # unchanged confirmation still advances the barrier.
+                    connection.execute(
+                        "UPDATE attempts SET waiting_hint_seq=?, waiting_reason=? WHERE attempt_id=?",
+                        (waiting_seq, waiting_code, attempt['attempt_id']))
+                    if attempt['waiting_reason'] != waiting_code:
+                        self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
+                                           attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
+                    changed = True
             activity_state = None
             if activity is not None:
                 # Monotone and idempotent: an identical or older receipt changes
                 # nothing and appends no event.
                 activity_state = "recorded" if self._store_activity(connection, attempt, activity) else "unchanged"
             if activity_state == "recorded":
+                changed = True
                 self._append_event(
                     connection,
                     "attempt.activity",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                 )
-            if message is not None or phase is not None:
+            if has_progress:
                 self._append_event(
                     connection,
                     "attempt.progress",
@@ -1898,6 +1992,9 @@ class BoardStore:
                     attempt_id=attempt["attempt_id"],
                     payload={"message": (message or "")[:2000], "phase": phase},
                 )
+            if changed and not transitioned:
+                connection.execute("UPDATE attempts SET updated_at=?, revision=revision+1 WHERE attempt_id=?",
+                                   (self.now(), attempt["attempt_id"]))
             head = self._head_of(connection)
         self._notify(head)
         return {"recorded": True, "head": head, "activity": activity_state}
@@ -1950,11 +2047,11 @@ class BoardStore:
                     raise BoardError("CONFLICT", "This attempt already received a different receipt")
                 return {"received": True}
             connection.execute("INSERT INTO attempt_received_receipts VALUES(?,?)", (attempt_id, digest))
+            # The transition settles the connection reason, probe flag and wait
+            # in the same statement that starts finalization.
             self._transition_attempt(connection, attempt, "finalizing")
             connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage='connection'", (attempt_id,))
             self._append_event(connection, "execution.received", task_id=attempt["task_id"], attempt_id=attempt_id)
-            connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=? AND queue_reason IN (?,?)",
-                               (attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
             head = self._head_of(connection)
         self._notify(head)
         return {"received": True}
@@ -2086,11 +2183,72 @@ class BoardStore:
             request, seal_stash=seal_stash,
             completion_evidence=stop_evidence, output_record=output_record)
 
+    def shutdown_needs_settlement(self, connection: sqlite3.Connection, attempt: sqlite3.Row) -> bool:
+        """Only the effective attempt of an unsettled task may settle the task."""
+        return bool(connection.execute(
+            "SELECT 1 FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
+            " WHERE t.task_id=? AND t.state NOT IN ('queued','completed','concluded','cancelled')"
+            " AND (r.state IS NULL OR r.state NOT IN ('accepted','concluded'))"
+            " AND COALESCE(t.active_attempt_id,(SELECT attempt_id FROM attempts"
+            " WHERE task_id=t.task_id ORDER BY generation DESC LIMIT 1))=?",
+            (attempt["task_id"], attempt["attempt_id"]),
+        ).fetchone())
+
+    def _record_execution_shutdown(self, connection, attempt, evidence, *, receipt_confirmed, now, historical=False):
+        attempt_id = attempt["attempt_id"]
+        proof = {"receiptShutdownConfirmed": receipt_confirmed, **evidence}
+        if historical:
+            proof["historicalAttempt"] = True
+        connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
+                           (attempt_id, proof["kind"], canonical_json(proof), now))
+        self._append_event(connection, "execution.shutdown_confirmed", task_id=attempt["task_id"],
+                           attempt_id=attempt_id, payload={"evidence": proof},
+                           activity=not historical, wake_owned=not historical)
+
+    def _clear_execution_receipt_and_issues(self, connection, attempt_id):
+        connection.execute("DELETE FROM attempt_received_receipts WHERE attempt_id=?", (attempt_id,))
+        connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage IN ('connection','shutdown','recovery')",
+                           (attempt_id,))
+
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
-        """Supplement only a no-receipt interruption with its later native-stop proof."""
-        with self.db.read() as connection:
+        """Supplement a committed result with its later native-stop proof."""
+        from ..evaluation.native_observations import persist
+
+        with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             payload = json.loads(attempt["result_json"])
+            if not self.shutdown_needs_settlement(connection, attempt):
+                task = self._task_row(connection, {"runId": attempt["task_id"]})
+                duplicate = bool(attempt["shutdown_confirmed"])
+                if not duplicate:
+                    now = self.now()
+                    self._record_execution_shutdown(connection, attempt, evidence,
+                                                    receipt_confirmed=payload["shutdownConfirmed"], now=now,
+                                                    historical=True)
+                    connection.execute(
+                        "UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,result_json=?,"
+                        " finished_at=COALESCE(finished_at,?),cleanup_pending=1,connection_reason=NULL,"
+                        " probe_unknown=0,waiting_reason=NULL,updated_at=?,revision=revision+1"
+                        " WHERE attempt_id=?",
+                        (canonical_json({**payload, "shutdownConfirmed": True}), now, now, attempt_id),
+                    )
+                    self._clear_execution_receipt_and_issues(connection, attempt_id)
+                    self._release_claims(connection, attempt_id)
+                    connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
+                                       (attempt_id,))
+                    # The original result already contributed any provider rejection.
+                    # Only a newly confirmed success can change the native observation.
+                    if payload["status"] == "ok":
+                        persist(connection, attempt, None, status="ok", shutdown_confirmed=True, now=now)
+                    attempt = self._attempt_row(connection, attempt_id)
+                response = {"attempt": self._attempt_view(attempt), "task": self._decorate(connection, task),
+                            "duplicate": duplicate, "committed": True}
+                head = self._head_of(connection)
+            else:
+                response = None
+        if response is not None:
+            self._notify(head)
+            return response
         # Interruption settlement built this report inside the service. The new
         # native-stop proof can now bind its safely sealed partial output.
         params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
@@ -2212,17 +2370,14 @@ class BoardStore:
                 payload = {**previous, "shutdownConfirmed": True}
             proof = shutdown_evidence or completion_evidence
             if proof is not None and shutdown_confirmed:
-                proof = {"receiptShutdownConfirmed": (previous["shutdownConfirmed"]
-                         if shutdown_evidence is not None else request["shutdownConfirmed"]), **proof}
-                connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
-                    (attempt_id_param, proof["kind"], canonical_json(proof), now))
-                self._append_event(connection, "execution.shutdown_confirmed", task_id=attempt["task_id"],
-                    attempt_id=attempt_id_param, payload={"evidence": proof})
-            self._transition_attempt(connection, attempt, "finished" if shutdown_confirmed else "uncertain")
+                receipt_confirmed = previous["shutdownConfirmed"] if shutdown_evidence is not None else request["shutdownConfirmed"]
+                self._record_execution_shutdown(connection, attempt, proof, receipt_confirmed=receipt_confirmed, now=now)
+            self._validate_attempt_transition(
+                connection, attempt, "finished" if shutdown_confirmed else "uncertain")
             if shutdown_confirmed:
-                connection.execute("DELETE FROM attempt_received_receipts WHERE attempt_id=?", (attempt_id_param,))
-                connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage IN ('connection','shutdown','recovery')",
-                                   (attempt_id_param,))
+                self._clear_execution_receipt_and_issues(connection, attempt_id_param)
+                if shutdown_evidence is not None and attempt["execution_state"] == "finished":
+                    connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id_param,))
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             cancel_requested = attempt["cancel_requested_at"] is not None or task["state"] == "cancelling"
             if not shutdown_confirmed and (cancel_requested or attempt["stop_initiator"] is not None or status == "cancelled"):
@@ -2245,11 +2400,18 @@ class BoardStore:
                 task_state = "reconciliation-needed"
             else:
                 task_state = "failed"
-            connection.execute(
-                "UPDATE attempts SET result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
+            # The state and the committed result land in one constrained
+            # statement: an unconfirmed result leaves the attempt uncertain
+            # naming no connection reason and holding no probe flag or wait,
+            # exactly like a finished one.
+            cursor = connection.execute(
+                "UPDATE attempts SET execution_state=?, result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
-                " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
+                " stop_initiator=COALESCE(stop_initiator,?), finished_at=?, connection_reason=NULL,"
+                " probe_unknown=0, waiting_reason=NULL, updated_at=?, revision=revision+1"
+                " WHERE attempt_id=? AND revision=?",
                 (
+                    "finished" if shutdown_confirmed else "uncertain",
                     canonical_json(payload),
                     1 if shutdown_confirmed else 0,
                     request["runtimeIdentity"],
@@ -2258,8 +2420,11 @@ class BoardStore:
                     now,
                     now,
                     attempt["attempt_id"],
+                    attempt["revision"],
                 ),
             )
+            if cursor.rowcount != 1:
+                raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
             from ..evaluation.native_observations import persist
             persist_result = ({**result, "providerRejection": None}
                               if isinstance(result, dict) and result.get("code") == INPUT_REJECTED
@@ -2324,9 +2489,8 @@ class BoardStore:
                 if decision.get("preflightFallback"):
                     task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
                     response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
-            # Micro-task import and helper fan-in commit with the result: the validated
-            # turn outcome, the assistance request and the workspace seal are one
-            # durable fact with the attempt that produced them.
+            # The turn outcome, boundary request and workspace seal commit with
+            # the attempt that produced them.
             settlement_payload = payload
             if shutdown_evidence is not None:
                 stop_output = {key: shutdown_evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError")
@@ -2348,15 +2512,6 @@ class BoardStore:
             if micro_task is not None and micro_task.get("autoContinued"):
                 task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
                 response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
-            else:
-                self.workflow.child_settled(
-                    connection,
-                    task=task_row,
-                    attempt=attempt_row,
-                    payload=settlement_payload,
-                    task_state=task_state,
-                    now=now,
-                )
             if shutdown_confirmed:
                 connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
                                    (attempt_id_param,))
@@ -2388,14 +2543,24 @@ class BoardStore:
         with self.db.read() as connection:
             return self._attempt_row(connection, attempt_id)["execution_state"] == "finished"
 
+    @staticmethod
+    def _cleanup_updates_activity(connection, attempt_id: str) -> bool:
+        # Confirmation records whether this cleanup belongs to historical work.
+        # The proof survives a restart between confirmation and material removal.
+        return connection.execute(
+            "SELECT 1 FROM attempt_shutdown_evidence WHERE attempt_id=?"
+            " AND json_extract(detail_json,'$.historicalAttempt')=1", (attempt_id,),
+        ).fetchone() is None
+
     def complete_execution_cleanup(self, attempt_id: str) -> None:
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             if not attempt["cleanup_pending"]:
                 return
             connection.execute("UPDATE attempts SET cleanup_pending=0 WHERE attempt_id=?", (attempt_id,))
+            activity = self._cleanup_updates_activity(connection, attempt_id)
             self._append_event(connection, "execution.materials_cleaned", task_id=attempt["task_id"],
-                               attempt_id=attempt_id, payload={})
+                               attempt_id=attempt_id, payload={}, activity=activity, wake_owned=activity)
             head = self._head_of(connection)
         self._notify(head)
 
@@ -2427,8 +2592,10 @@ class BoardStore:
             if not removed:
                 return
             task_id = self._attempt_row(connection, attempt_id)["task_id"]
+            activity = (stage not in ('endpoint-cleanup', 'credential-cleanup')
+                        or self._cleanup_updates_activity(connection, attempt_id))
             self._append_event(connection, "execution.issue_resolved", task_id=task_id, attempt_id=attempt_id,
-                               payload={"stage": stage})
+                               payload={"stage": stage}, activity=activity, wake_owned=activity)
             head = self._head_of(connection)
         self._notify(head)
 
@@ -2454,8 +2621,10 @@ class BoardStore:
             return False
         task_id = attempt['task_id'] if attempt is not None else None
         kind = 'execution.issue' if attempt is not None else 'service.issue'
+        activity = (attempt_id is None or stage not in ('endpoint-cleanup', 'credential-cleanup')
+                    or self._cleanup_updates_activity(connection, attempt_id))
         seq = self._append_event(connection, kind if previous is None else kind + '_updated',
-                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False,
+                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False, activity=activity,
                                  payload={'stage': stage, 'code': code, 'message': message})
         occurrence = seq if previous is None else previous['occurrence_seq']
         if attempt is not None:
@@ -2466,7 +2635,7 @@ class BoardStore:
             connection.execute('INSERT INTO service_issues VALUES(?,?,?,?,?) ON CONFLICT(stage)'
                                ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
                                (stage, code, message, now, occurrence))
-        if previous is None:
+        if previous is None and activity:
             self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=now)
         return True
 
@@ -2757,29 +2926,51 @@ class BoardStore:
 
     def execution_connection(self, attempt_id: str, *, connected: bool) -> bool:
         """Project an authenticated long call, or the absence of one, without settling work."""
+        head = 0
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             if attempt["execution_state"] in ("finalizing", "finished") or attempt["result_json"] is not None:
                 return False
             self._require_effective_attempt(connection, attempt)
-            state, ownership = ("executing", "owned") if connected else ("uncertain", "uncertain")
-            if (connected and attempt["execution_state"] != "uncertain"
-                    or (attempt["execution_state"], attempt["ownership"]) == (state, ownership)):
-                return True
             now = self.now()
-            self._transition_attempt(connection, attempt, state)
-            connection.execute("UPDATE attempts SET ownership=? WHERE attempt_id=?", (ownership, attempt_id))
-            connection.execute("UPDATE resource_claims SET state=? WHERE attempt_id=? AND state IN ('held','retained')",
-                               ("held" if connected else "retained", attempt_id))
             if connected:
-                connection.execute("UPDATE tasks SET queue_reason=NULL,updated_at=? WHERE task_id=?"
-                                   " AND queue_reason IN (?,?)",
-                                   (now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
+                if attempt["execution_state"] != "uncertain":
+                    return True
+                self._transition_attempt(connection, attempt, "executing")
+                connection.execute("UPDATE attempts SET ownership='owned' WHERE attempt_id=?", (attempt_id,))
+                connection.execute(
+                    "UPDATE resource_claims SET state='held' WHERE attempt_id=? AND state IN ('held','retained')",
+                    (attempt_id,))
+                connection.execute(
+                    "UPDATE tasks SET updated_at=? WHERE task_id=? AND state IN ('running','cancelling')",
+                    (now, attempt["task_id"]))
+                self._append_event(connection, "execution.connected",
+                                   task_id=attempt["task_id"], attempt_id=attempt_id)
+            elif (attempt["execution_state"], attempt["ownership"], attempt["connection_reason"]) != (
+                    "uncertain", "uncertain", UNKNOWN_QUEUE_REASON):
+                if attempt["execution_state"] == "uncertain":
+                    # The first failed probe of an attempt the restart already
+                    # marked uncertain: the connection itself is now the unknown
+                    # fact, advanced under the same optimistic lock.
+                    cursor = connection.execute(
+                        "UPDATE attempts SET connection_reason=?, ownership='uncertain', updated_at=?,"
+                        " revision=revision+1 WHERE attempt_id=? AND revision=?",
+                        (UNKNOWN_QUEUE_REASON, now, attempt_id, attempt["revision"]))
+                    if cursor.rowcount != 1:
+                        raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
+                else:
+                    self._transition_attempt(connection, attempt, "uncertain", connection_reason=UNKNOWN_QUEUE_REASON)
+                    connection.execute("UPDATE attempts SET ownership='uncertain' WHERE attempt_id=?", (attempt_id,))
+                connection.execute(
+                    "UPDATE resource_claims SET state='retained' WHERE attempt_id=? AND state IN ('held','retained')",
+                    (attempt_id,))
+                connection.execute(
+                    "UPDATE tasks SET updated_at=? WHERE task_id=? AND state IN ('running','cancelling')",
+                    (now, attempt["task_id"]))
+                self._append_event(connection, "execution.unknown",
+                                   task_id=attempt["task_id"], attempt_id=attempt_id)
             else:
-                connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
-                                   (UNKNOWN_QUEUE_REASON, now, attempt["task_id"]))
-            self._append_event(connection, "execution.connected" if connected else "execution.unknown",
-                               task_id=attempt["task_id"], attempt_id=attempt_id, payload={})
+                return True
             head = self._head_of(connection)
         self._notify(head)
         return True
@@ -2797,26 +2988,22 @@ class BoardStore:
                 "SELECT * FROM attempts WHERE execution_state IN ('starting','executing')"
             ).fetchall()
             for attempt in rows:
-                connection.execute(
-                    "UPDATE attempts SET execution_state='uncertain', ownership='uncertain',"
-                    " updated_at=?, revision=revision+1 WHERE attempt_id=?",
-                    (now, attempt["attempt_id"]),
-                )
+                self._transition_attempt(connection, attempt, "uncertain",
+                                         connection_reason=UNCERTAIN_QUEUE_REASON)
+                connection.execute("UPDATE attempts SET ownership='uncertain' WHERE attempt_id=?",
+                                   (attempt["attempt_id"],))
                 self._retain_claims(connection, attempt["attempt_id"])
                 summary["uncertain"] += 1
-                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-                if task["state"] in ("running", "cancelling"):
-                    connection.execute(
-                        "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                        (UNCERTAIN_QUEUE_REASON, now, attempt["task_id"]),
-                    )
+                task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                connection.execute(
+                    "UPDATE tasks SET updated_at=? WHERE task_id=? AND state IN ('running','cancelling')",
+                    (now, attempt["task_id"]))
                 self._append_event(
                     connection,
                     "attempt.uncertain",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                     revision=task["revision"],
-                    payload={},
                 )
             summary["retained"] = int(
                 connection.execute(

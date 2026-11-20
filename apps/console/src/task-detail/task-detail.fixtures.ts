@@ -73,8 +73,8 @@ export function workflow(overrides: Partial<Workflow> = {}): Workflow {
     routing: { status: "completed", decisionId: "decision-1", source: "model-selection", basis: NO_BASIS },
     turns, currentTurn: result(2, "第二轮：详情页已经按回合重做。", ["浏览器检查还要补两项"]),
     activeRequest: null,
-    requests: [{ requestId: "req-1", kind: "assistance", state: "approved", createdAt: at("10:30"), decidedAt: at("10:40"), childTaskId: null, routing: false }],
-    counts: { turns: 2, openRequests: 0 }, children: [], artifacts: [], integrations: [], finalArtifactId: null, hostConclusion: null, cwd: "/work/m1",
+    requests: [{ requestId: "req-1", state: "resolved", createdAt: at("10:30"), decidedAt: at("10:40"), decisionId: null, routing: false }],
+    counts: { turns: 2, openRequests: 0 }, ownedMicroTasks: [], workspaceConflicts: [], artifacts: [], integrations: [], finalArtifactId: null, hostConclusion: null, cwd: "/work/m1",
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedCount: 0 },
     ...overrides,
   };
@@ -83,11 +83,11 @@ export function workflow(overrides: Partial<Workflow> = {}): Workflow {
 export function audit(overrides: Partial<Audit> = {}): Audit {
   return {
     turns: [result(1, "第一轮：读完了旧的详情，列出了要删的部分。"), result(2, "第二轮：详情页已经按回合重做。", ["浏览器检查还要补两项"])],
-    continuations: [{ continuationId: "cont-1", turnId: "turn-2", kind: "manual", note: "批准后继续", createdAt: at("10:41"),
-      input: "继续。读取样例目录已获批准；顺带核对路径边界。" }],
-    requests: [{ requestId: "req-1", kind: "assistance", state: "approved", createdAt: at("10:30"), decidedAt: at("10:40"), childTaskId: null, routing: false,
-      summary: "需要读取样例目录", reason: null, attempted: "已读完工作树", neededWork: ["批准读取样例目录"], expectedArtifacts: [], acceptance: "读取后继续",
-      preparationError: null, turnId: "turn-1", decisionId: null, decision: { decision: "approve", note: "可以读取", actor: HOST } }],
+    continuations: [{ continuationId: "cont-1", requestId: "req-1", turnId: "turn-2", kind: "manual", note: "恢复后继续", createdAt: at("10:41"),
+      input: "继续。工作区已恢复；顺带核对路径边界。" }],
+    requests: [{ requestId: "req-1", state: "resolved", createdAt: at("10:30"), decidedAt: at("10:40"), decisionId: null, routing: false,
+      summary: "需要读取样例目录", reason: null, attempted: "已读完工作树", neededWork: ["核对样例目录"], expectedArtifacts: [], acceptance: "读取后继续",
+      preparationError: null, turnId: "turn-1", resolution: { conflictId: "conflict-1", state: "restored", action: "restore", note: "已恢复授权范围", actor: HOST, continuationBlocked: false } }],
     hostConclusions: [],
     ...overrides,
   };
@@ -109,20 +109,20 @@ export function inquiry(overrides: Partial<Inquiry> = {}): Inquiry {
 const tb = (buddy: Buddy | null): TimelineBuddy | null => buddy;
 
 export function span(spanId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
-  return { spanId, runId: "m1", kind, startAt, endAt, state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
+  return { spanId, runId: "m1", kind, startAt, endAt, state: kind === "queue" ? "admitted" : kind === "host" ? "superseded" : "finished",
     attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null,
     expectedSeconds: kind === "execution" ? 1800 : null, reminders: null, inquiries: kind === "execution" ? [] : null,
     shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides };
 }
 
 export function event(seq: number, kind: string, when: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
-  return { seq, runId: "m1", kind, at: when, decision: null, verdict: null, state: null, strategy: null, note: null, actor: HOST, attemptId: null, requestId: null, artifactId: null, ...overrides };
+  return { seq, runId: "m1", kind, at: when, verdict: null, state: null, strategy: null, note: null, actor: HOST, attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 
 export function row(overrides: Partial<TimelineRow> = {}): TimelineRow {
-  return { runId: "m1", parentRunId: null, rootRunId: "m1", title: "微任务详情", titleSource: "title", taskSummary: null, summary: null,
+  return { runId: "m1", rootRunId: "m1", title: "微任务详情", titleSource: "title", taskSummary: null, summary: null,
     conclusionStatus: null,
-    createdAt: at("10:00"), state: "delivered", status: "completed", category: "review", shutdownConfirmed: true, depth: 0, kind: "micro-task",
+    createdAt: at("10:00"), state: "delivered", status: "completed", category: "review", shutdownConfirmed: true, kind: "micro-task",
     rootLeadRunId: null, delegationAuthority: false, buddy: tb(OPUS), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null, ...overrides };
 }
 
@@ -132,13 +132,13 @@ export function timeline(overrides: Partial<MacroTaskTimeline> = {}): MacroTaskT
     span("q1", "queue", at("10:00"), at("10:01")),
     span("r1", "routing", at("10:01"), at("10:02"), { attemptId: "att-r1", decisionId: "decision-1", routing: { routingMode: "fast", selectedBuddy: tb(CODEX), reason: null, note: REASON, usage: { elapsedMs: 14000, toolCalls: 0 } } }),
     span("e1", "execution", at("10:02"), at("10:30"), { turnIndex: 1, attemptId: "att-1", turnId: "turn-1", buddy: tb(CODEX), shutdownConfirmed: true, resultStatus: "ok" }),
-    span("h1", "host", at("10:30"), at("10:40"), { state: "approved", requestId: "req-1", requestKind: "assistance", summary: "需要读取样例目录" }),
+    span("h1", "host", at("10:30"), at("10:40"), { state: "resolved", requestId: "req-1", summary: "需要读取样例目录" }),
     span("q2", "queue", at("10:41"), at("10:42")),
     span("e2", "execution", at("10:42"), at("11:00"), { turnIndex: 2, attemptId: "att-2", turnId: "turn-2", buddy: tb(OPUS), shutdownConfirmed: true, resultStatus: "ok" }),
   ];
   const events = [
     event(1, "dispatch", at("10:00")),
-    event(2, "decide", at("10:40"), { requestId: "req-1", decision: "approve" }),
+    event(2, "decide", at("10:40"), { requestId: "req-1" }),
     event(3, "continue", at("10:41"), { continuationId: "cont-1" }),
   ];
   return { macroTask: macroTaskDetail(), observedAt: at("11:30"), cursor: 10, rows: [row()], spans, events,
@@ -172,6 +172,6 @@ export function timelineOfRecords(macroTaskId: string, records: Task[]): MacroTa
   return { ...base, macroTask: macroTaskDetail({ macroTaskId }),
     rows: members.map(member => row({ runId: member.runId, state: member.workflow?.state ?? "executing" })),
     spans: members.filter(member => member.workflow?.state === "awaiting-host").map(member =>
-      span(`host-${member.runId}`, "host", at("10:00"), null, { runId: member.runId, state: "open", requestId: `request-${member.runId}`, requestKind: "assistance" })),
+      span(`host-${member.runId}`, "host", at("10:00"), null, { runId: member.runId, state: "open", requestId: `request-${member.runId}` })),
     events: members.map((member, index) => event(index + 1, "dispatch", at("10:00"), { runId: member.runId, actor: null })) };
 }

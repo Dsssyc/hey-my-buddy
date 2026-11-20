@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 from ...paths import is_absolute_path, native_path
-from ... import locking
 import hashlib
 import json
 import os
@@ -13,17 +12,20 @@ import re
 import stat
 import sys
 import time
+from typing import TYPE_CHECKING
 import uuid
 
 import psutil
 
 from ... import private_dirs, private_files
-from ...private_dirs import directory_mode
 from ...process_observation import observe_open_paths, observe_process_argv
 from ...protocol import schemas
 from ..store.db import utc_now
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock, runtime_root
+
+if TYPE_CHECKING:
+    from ..store.store import BoardStore
 
 GRACE_SECONDS = 3 * 86400
 _RUNTIME_ID = r'[0-9a-f]{32}'
@@ -201,7 +203,7 @@ def _workspace_reference_rows(connection):
     for table in (
         'tasks', 'attempts', 'artifacts', 'macro_tasks', 'resource_claims', 'messages',
         'events', 'commands', 'decision_requests', 'harness_health',
-        'workflow_runs', 'workflow_children', 'workspace_reservations',
+        'workflow_runs', 'workspace_reservations',
         'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
         'workflow_requests', 'workflow_scope_versions', 'workflow_workspace_conflicts',
         'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions'):
@@ -282,6 +284,8 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
 
 def inspect(store) -> dict:
     from . import workspace
+    from .macro_tasks import RUN_GROUPS_SQL
+    from .micro_task import ROUTING_TASKS_SQL
     from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest
     from .workflow import repository_candidates
     state = store.directory.resolve()
@@ -308,6 +312,15 @@ def inspect(store) -> dict:
     workspace_inputs = []
     unproven_workspaces = []
     with store.db.read() as connection:
+        session_records = {
+            private_dirs.session_record_path(state, row['session_group_id'], row['attempt_id']): row
+            for row in connection.execute(
+                f'WITH groups AS MATERIALIZED ({RUN_GROUPS_SQL})'
+                ' SELECT a.attempt_id,a.task_id,a.session_group_id,g.group_id FROM attempts a'
+                f' LEFT JOIN ({ROUTING_TASKS_SQL}) route ON route.task_id=a.task_id'
+                ' LEFT JOIN groups g ON g.run_id=COALESCE(route.run_id,a.task_id)'
+                ' WHERE a.session_group_id IS NOT NULL')
+        }
         for run in connection.execute('SELECT * FROM workflow_runs'):
             try:
                 manifest = effective_manifest(state, connection, run)
@@ -368,13 +381,29 @@ def inspect(store) -> dict:
                     adapter=path.parent.parent.name)
     harnesses = state / 'harnesses'
     sessions = state / 'sessions'
-    if sessions.exists():
-        for category in ('macro-tasks', 'micro-tasks'):
-            groups = sessions / category
-            if groups.exists():
-                for group in sorted(groups.iterdir()):
-                    add('session-records', group, ['macro-task-deletion'], groupId=(
-                        group.name if category == 'macro-tasks' else 'run:' + group.name))
+    def session_directories(directory):
+        if private_dirs.linked(directory) or (
+                native_path(directory).exists() and not native_path(directory).is_dir()):
+            add('session-records', directory, ['owner-unproven'])
+            return []
+        try:
+            return sorted(directory / entry.name for entry in native_path(directory).iterdir())
+        except FileNotFoundError:
+            return []
+
+    for category in session_directories(sessions):
+        if category.name not in ('macro-tasks', 'micro-tasks'):
+            add('session-records', category, ['owner-unproven'])
+            continue
+        for group in session_directories(category):
+            for path in session_directories(group):
+                owner = session_records.get(path)
+                if owner is None or private_dirs.linked(path) or not native_path(path).is_file():
+                    add('session-records', path, ['owner-unproven'])
+                else:
+                    add('session-records', path, ['macro-task-deletion'],
+                        groupId=owner['group_id'], sessionGroupId=owner['session_group_id'],
+                        taskId=owner['task_id'], attemptId=owner['attempt_id'])
     seen = set()
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
@@ -566,21 +595,23 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
 
 
 @contextmanager
-def locked(store):
-    path = store.directory / 'storage'
-    path.mkdir(mode=directory_mode(), exist_ok=True)
-    if not path.is_dir():
-        raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
+def locked(store: BoardStore | Path, *, blocking: bool = False):
+    path = (store if isinstance(store, Path) else store.directory) / 'storage'
+    try:
+        path = private_dirs.ensure_private_dir(path)
+    except BoardError as error:
+        raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path)) from error
     lock_path = path / '.lock'
     try:
-        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR)
+        fd = private_dirs.open_lock_fd(lock_path, blocking=blocking)
     except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
-    try:
-        locking.lock(fd, blocking=False)
-        yield path
     except BlockingIOError as error:
+        if blocking:
+            raise
         raise BoardError('STORAGE_BUSY', 'A storage operation is already running') from error
+    try:
+        yield path
     finally:
         os.close(fd)
 

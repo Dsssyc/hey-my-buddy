@@ -149,31 +149,6 @@ class RealWorkspaceTestCase(BoardTestCase):
         return {**board.call("workflow_get", {"runId": reply["runId"]}), **reply}
 
 
-    def decide_real(self, board, params):
-        """Drive a real Git boundary with current helper request fields."""
-        if "helpers" in params:
-            helpers = []
-            for index, old in enumerate(params["helpers"]):
-                checkout = old["executionWorkspace"]["kind"]
-                access = old["executionWorkspace"]["access"]
-                helper = {
-                    "title": old.get("requestId", f"helper-{index}"),
-                    "task": old["task"], "cwd": old["cwd"],
-                    "buddy": " / ".join(old[key] for key in BUDDY),
-                    "checkout": checkout, "access": access,
-                    "expectedSeconds": 1800,
-                }
-                if checkout != "none":
-                    helper["inputs"] = []
-                    if access in ("write", "full"):
-                        helper["writeScope"] = ["."]
-                helpers.append(helper)
-            params["helpers"] = helpers
-            params["autoContinue"] = True
-        reply = board.call("workflow_continue", params)
-        return {**board.call("workflow_get", {"runId": params["runId"]}), **reply}
-
-
 class CumulativePatchProjectionTests(RealWorkspaceTestCase):
     def test_cumulative_patch_paths_ignore_an_enclosing_git_worktree(self):
         from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
@@ -218,7 +193,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         self.assertEqual(task["cwd"], manifest["path"])
         self.assertEqual(task["spec"]["cwd"], os.path.realpath(self.repo))
 
-    def test_worktree_helpers_get_distinct_effective_checkouts(self):
+    def test_parallel_micro_tasks_get_distinct_effective_checkouts(self):
         board = self.board(max_concurrent=2)
         first = self.submit(board, request_id="req-1", kind="worktree")
         second = self.submit(board, request_id="req-2", kind="worktree")
@@ -251,7 +226,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         record = native_turn.claim_record(
             claim["claim"],
             outcome={
-                "disposition": "assistance",
+                "disposition": "attention",
                 "summary": "need a decision",
                 "remaining": ["finish"],
                 "decisions": [],
@@ -274,12 +249,12 @@ class DirtyInputTests(RealWorkspaceTestCase):
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
         self.assertEqual(output["outputSnapshotSha256"], seal["snapshotSha256"])
         self.assertEqual(output["sealedEvidence"]["tree"], seal["tree"])
-        decided = self.decide_real(
-            board,
+        decided = board.call(
+            "workflow_continue",
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "decision": "decline",
+                "input": "Use the current findings",
                 "note": "continue on the sealed state",
             },
         )
@@ -461,8 +436,8 @@ if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 
 
-class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
-    """Real Git: a helper on the transferred checkout reseals the parent's baseline."""
+class WorkspaceContinuationTestCase(RealWorkspaceTestCase):
+    """Publish a synthetic Worker result with a real Git seal."""
 
     def _turn_record(self, run_id, claim, disposition, session_id, seal):
         return native_turn.claim_record(
@@ -493,194 +468,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
             {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': record, 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0},
         )
 
-    def test_parent_continuation_bases_on_the_helpers_sealed_commit(self):
-        board = self.board()
-        pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("parent dirty input\n", encoding="utf-8", newline="\n")
-        submitted = self.submit(board)
-        run_id = submitted["runId"]
-
-        parent_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
-        parent_manifest = turn_manifest(self.directory, parent_claim["claim"]["turn"]["input"])
-        parent_seal = workspace.seal(
-            self.directory, parent_manifest, run_id, parent_claim["claim"]["attempt"]["attemptId"]
-        )
-        self._finish(board, run_id, parent_claim, "assistance", parent_seal, "sess-parent-1")
-        view = board.call("workflow_get", {"runId": run_id})
-        approved = self.decide_real(
-            board,
-            {
-                "runId": run_id,
-                "requestId": view["activeRequest"]["requestId"],
-                "decision": "approve",
-                "note": "hand the checkout over",
-                "helpers": [
-                    {
-                        **BUDDY,
-                        "requestId": "helper-1",
-                        "task": "helper work on the shared checkout",
-                        "cwd": str(self.repo),
-                        "executionWorkspace": {"kind": "existing", "access": "write"},
-                    }
-                ],
-            },
-        )
-        child = approved["children"][0]["taskId"]
-        audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
-        states = {(row["holderTaskId"], row["state"]) for row in audit["audit"]["reservations"]}
-        self.assertIn((run_id, "transferred"), states)
-        self.assertIn((child, "held"), states)
-
-        helper_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-2', 'nonce': 'm' * 16, 'runId': child})
-        helper_manifest = turn_manifest(self.directory, helper_claim["claim"]["turn"]["input"])
-        self.assertEqual(helper_manifest["checkoutRoot"], parent_manifest["checkoutRoot"])
-        # The helper writes a new file and seals its output on the shared checkout.
-        (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
-        helper_seal = workspace.seal(
-            self.directory, helper_manifest, child, helper_claim["claim"]["attempt"]["attemptId"]
-        )
-        self.assertIn("helper-new.txt", helper_seal["changedPaths"] + helper_seal["includedUntracked"])
-        completed = self._finish(
-            board, child, helper_claim, "completed", helper_seal, "sess-helper", nonce="m" * 16
-        )
-        self.assertEqual(completed["taskState"], "completed")
-
-        # Ownership returns to the parent, and its continuation is based on the
-        # helper's sealed commit (never the parent's older seal).
-        parent_second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-3', 'nonce': 'k' * 16, 'runId': run_id})
-        effective = turn_manifest(self.directory, parent_second["claim"]["turn"]["input"])
-        self.assertEqual(effective["baseCommit"], helper_seal["commit"])
-        self.assertEqual(effective["inputTree"], helper_seal["tree"])
-        verified = workspace.verify(effective, require_unchanged=True, state_dir=self.directory)
-        self.assertTrue(verified["valid"])
-        (self.repo / "parent-integration.txt").write_text("integrated\n", encoding="utf-8", newline="\n")
-        final_seal = workspace.seal(
-            self.directory, effective, run_id, parent_second["claim"]["attempt"]["attemptId"]
-        )
-        self.assertIn("parent-integration.txt", final_seal["changedPaths"])
-        done = self._finish(
-            board, run_id, parent_second, "completed", final_seal, "sess-parent-2", nonce="k" * 16
-        )
-        self.assertEqual(done["taskState"], "completed")
-        delivered = board.call("workflow_get", {"runId": run_id})
-        self.assertEqual(delivered["state"], "delivered")
-        self.assertTrue([row for row in delivered["artifacts"] if row["kind"] == "output"])
-
-
-class PinnedHelperHandoffTests(RealWorkspaceTestCase):
-    """Two real helper worktrees: the parent receives their exact immutable refs."""
-
-    def _record(self, run_id, claim, disposition, seal, session_id):
-        return native_turn.claim_record(
-            claim["claim"],
-            outcome={
-                "disposition": disposition,
-                "summary": f"{disposition} turn",
-                "remaining": [] if disposition == "completed" else ["needs the Host"],
-                "decisions": [],
-                "artifacts": [],
-                "request": None
-                if disposition == "completed"
-                else {
-                    "summary": "review",
-                    "attempted": "tried",
-                    "neededWork": "decide",
-                    "expectedArtifacts": ["design"],
-                    "acceptance": "approved",
-                },
-            },
-            session_id=session_id, prompt_sha256=sha256_text("mock turn prompt"),
-        )
-
-    def _finish(self, board, run_id, claim, disposition, seal, session_id, nonce):
-        board.call(
-            'execution_result',
-            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self._record(run_id, claim, disposition, seal, session_id), 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0},
-        )
-
-    def test_helper_refs_are_frozen_into_the_parent_continuation(self):
-        board = self.board()
-        pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("dirty parent input\n", encoding="utf-8", newline="\n")
-        submitted = self.submit(board)
-        run_id = submitted["runId"]
-        parent_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
-        parent_manifest = turn_manifest(self.directory, parent_claim["claim"]["turn"]["input"])
-        parent_seal = workspace.seal(
-            self.directory, parent_manifest, run_id, parent_claim["claim"]["attempt"]["attemptId"]
-        )
-        self._finish(board, run_id, parent_claim, "assistance", parent_seal, "sess-p1", "n" * 16)
-        view = board.call("workflow_get", {"runId": run_id})
-        approved = self.decide_real(
-            board,
-            {
-                "runId": run_id,
-                "requestId": view["activeRequest"]["requestId"],
-                "decision": "approve",
-                "note": "two independent helpers",
-                "helpers": [
-                    {
-                        **BUDDY,
-                        "requestId": f"helper-{index}",
-                        "task": f"helper {index}",
-                        "cwd": str(self.repo),
-                        "executionWorkspace": {"kind": "worktree", "access": "write"},
-                    }
-                    for index in (1, 2)
-                ],
-            },
-        )
-        seals: dict[str, dict] = {}
-        manifests: dict[str, dict] = {}
-        for index, child in enumerate([row["taskId"] for row in approved["children"]], start=1):
-            nonce = chr(ord("a") + index) * 16
-            claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': f'claim-h{index}', 'nonce': nonce, 'runId': child})
-            manifest = turn_manifest(self.directory, claim["claim"]["turn"]["input"])
-            manifests[child] = manifest
-            native_path(Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n", encoding="utf-8", newline="\n")
-            seal = workspace.seal(self.directory, manifest, child, claim["claim"]["attempt"]["attemptId"])
-            seals[child] = seal
-            self._finish(board, child, claim, "completed", seal, f"sess-h{index}", nonce)
-
-        parent_second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-2', 'nonce': 'z' * 16, 'runId': run_id})
-        context = parent_second["claim"]["turn"]["input"]["context"]
-        self.assertTrue(context.get("helperOutcomesFrozen"))
-        outcomes = {entry["taskId"]: entry for entry in context["helperOutcomes"]}
-        self.assertEqual(set(outcomes), set(seals))
-        for index, (child, seal) in enumerate(seals.items(), start=1):
-            entry = outcomes[child]
-            artifact = entry["artifact"]
-            self.assertEqual(artifact["sealedEvidence"]["tree"], seal["tree"])
-            self.assertEqual(artifact["snapshotSha256"], seal["snapshotSha256"])
-            self.assertEqual(artifact["diffSha256"], seal["diffSha256"])
-            self.assertEqual(artifact["inputCommit"], seal["inputCommit"])
-            self.assertIn(f"helper-{index}.txt", artifact["changedPaths"])
-            self.assertTrue(entry["attemptId"])
-            self.assertTrue(entry["workspace"]["checkoutRoot"])
-            self.assertEqual(entry["workspace"]["manifestSha256"], manifests[child]["manifestSha256"])
-        # The continuation snapshot is the frozen record, not a live re-query.
-        audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
-        consumed = [row for row in audit["audit"]["continuations"] if row["state"] == "consumed"]
-        self.assertTrue(consumed)
-        frozen = {row["taskId"]: row["artifact"]["sealedEvidence"]["snapshotSha256"] for row in consumed[-1]["helperOutcomes"]}
-        self.assertEqual(frozen, {child: seal["snapshotSha256"] for child, seal in seals.items()})
-        # Editing a helper worktree afterwards cannot rewrite what the parent was given.
-        for entry in outcomes.values():
-            native_path(Path(entry["workspace"]["path"], "later.txt")).write_text("later edit\n", encoding="utf-8", newline="\n")
-        again = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
-        frozen_again = {
-            row["taskId"]: row["artifact"]["sealedEvidence"]["snapshotSha256"]
-            for row in [item for item in again["audit"]["continuations"] if item["state"] == "consumed"][-1][
-                "helperOutcomes"
-            ]
-        }
-        self.assertEqual(frozen_again, {child: seal["snapshotSha256"] for child, seal in seals.items()})
-        for child, seal in seals.items():
-            artifacts = board.call("workflow_get", {"runId": child})["artifacts"]
-            self.assertIn(seal["snapshotSha256"], [row["outputSnapshotSha256"] for row in artifacts if row["kind"] in ("output", "resolved-output", "partial-output")])
-
-
-class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
+class WorktreeContinuationReuseTests(WorkspaceContinuationTestCase):
     def test_worktree_origin_continuation_reuses_the_same_allocated_worktree(self):
         board = self.board()
         pass  # Admission is owned by the service.
@@ -689,14 +477,14 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
         first = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'wt-c1', 'nonce': 'n' * 16})
         manifest_one = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         seal_one = workspace.seal(self.directory, manifest_one, run_id, first["claim"]["attempt"]["attemptId"])
-        self._finish(board, run_id, first, "assistance", seal_one, "sess-w1", "n" * 16)
+        self._finish(board, run_id, first, "attention", seal_one, "sess-w1", "n" * 16)
         view = board.call("workflow_get", {"runId": run_id})
-        self.decide_real(
-            board,
+        board.call(
+            "workflow_continue",
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "decision": "decline",
+                "input": "Use the current findings",
                 "note": "keep working",
             },
         )
@@ -711,101 +499,6 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
         paths = {
             row["checkoutRoot"]
             for row in audit["audit"]["reservations"]
-            if row["state"] in ("held", "transferred")
+            if row["state"] == "held"
         }
         self.assertEqual(paths, {manifest_one["checkoutRoot"]})
-
-
-class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
-    """The allocated checkout survives continuations; the baseline is the latest seal."""
-
-    def test_sequential_helper_and_parent_edit_keep_one_checkout_and_latest_baseline(self):
-        board = self.board()
-        pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("dirty parent input\n", encoding="utf-8", newline="\n")
-        submitted = self.submit(board)
-        run_id = submitted["runId"]
-
-        # Turn 1: the parent yields in its allocated checkout.
-        first = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c1', 'nonce': 'n' * 16})
-        manifest_one = turn_manifest(self.directory, first["claim"]["turn"]["input"])
-        seal_one = workspace.seal(self.directory, manifest_one, run_id, first["claim"]["attempt"]["attemptId"])
-        self._finish(board, run_id, first, "assistance", seal_one, "sess-1", "n" * 16)
-
-        # A helper takes the same checkout over and adds a file.
-        view = board.call("workflow_get", {"runId": run_id})
-        approved = self.decide_real(
-            board,
-            {
-                "runId": run_id,
-                "requestId": view["activeRequest"]["requestId"],
-                "decision": "approve",
-                "note": "sequential helper",
-                "helpers": [
-                    {
-                        **BUDDY,
-                        "requestId": "helper-1",
-                        "task": "helper on the shared checkout",
-                        "cwd": str(self.repo),
-                        "executionWorkspace": {"kind": "existing", "access": "write"},
-                    }
-                ],
-            },
-        )
-        child = approved["children"][0]["taskId"]
-        helper = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c2', 'nonce': 'm' * 16, 'runId': child})
-        helper_manifest = turn_manifest(self.directory, helper["claim"]["turn"]["input"])
-        self.assertEqual(helper_manifest["path"], manifest_one["path"])
-        (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
-        seal_two = workspace.seal(
-            self.directory, helper_manifest, child, helper["claim"]["attempt"]["attemptId"]
-        )
-        self._finish(board, child, helper, "completed", seal_two, "sess-h", "m" * 16)
-
-        # Turn 2 continues in the SAME physical checkout, based on the helper's seal.
-        second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c3', 'nonce': 'k' * 16, 'runId': run_id})
-        manifest_two = turn_manifest(self.directory, second["claim"]["turn"]["input"])
-        self.assertEqual(manifest_two["path"], manifest_one["path"])
-        self.assertEqual(manifest_two["baseCommit"], seal_two["commit"])
-        (self.repo / "parent-turn2.txt").write_text("parent integration\n", encoding="utf-8", newline="\n")
-        seal_three = workspace.seal(
-            self.directory, manifest_two, run_id, second["claim"]["attempt"]["attemptId"]
-        )
-        self._finish(board, run_id, second, "assistance", seal_three, "sess-2", "k" * 16)
-
-        # Turn 3 must base on the parent's own newer seal, not the older helper seal.
-        view = board.call("workflow_get", {"runId": run_id})
-        self.decide_real(
-            board,
-            {
-                "runId": run_id,
-                "requestId": view["activeRequest"]["requestId"],
-                "decision": "decline",
-                "note": "continue on the integrated state",
-            },
-        )
-        third = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c4', 'nonce': 'j' * 16, 'runId': run_id})
-        manifest_three = turn_manifest(self.directory, third["claim"]["turn"]["input"])
-        self.assertEqual(manifest_three["path"], manifest_one["path"])
-        self.assertEqual(manifest_three["baseCommit"], seal_three["commit"])
-        self.assertEqual(manifest_three["inputTree"], seal_three["tree"])
-        self.assertEqual(manifest_three["checkoutRoot"], manifest_one["checkoutRoot"])
-        self.assertEqual(
-            board.call("task_get", {"runId": run_id})["task"]["cwd"], manifest_one["path"]
-        )
-        # Exactly one writer reservation remains, held by the parent on that checkout.
-        audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
-        held = [
-            row
-            for row in audit["audit"]["reservations"]
-            if row["state"] == "held" and row["access"] == "write"
-        ]
-        self.assertEqual([(row["holderTaskId"], row["checkoutRoot"]) for row in held], [(run_id, manifest_one["checkoutRoot"])])
-        view = board.call("workflow_get", {"runId": run_id})
-        self.assertEqual(view["workspace"]["path"], manifest_one["path"])
-        # Sibling paths of the same checkout still cannot bypass the write exclusion.
-        sibling = self.repo / "sub"
-        sibling.mkdir()
-        with self.assertRaises(Exception) as raised:
-            self.submit(board, request_id="req-sibling", cwd=str(sibling))
-        self.assertEqual(getattr(raised.exception, "code", None), "PREPARATION_CONFLICT")

@@ -63,7 +63,7 @@ for (const scene of [
     const shown = timeline.rows.filter(row => ["active", "host", "review"].includes(row.category));
     const ids = shown.map(row => row.runId);
     expect(new Set(shown.map(row => row.category))).toEqual(new Set(["active", "host", "review"]));
-    expect(shown.some(row => row.kind === "helper")).toBe(true);
+    expect(shown.some(row => row.runId === "preview-run-a1-h1")).toBe(true);
     await expect.poll(() => names(page).evaluateAll(nodes => nodes.map(node => node.getAttribute("data-run-id")))).toEqual(ids);
     await expect(count).toHaveText(`${ids.length} / ${timeline.rows.length}`);
     const filtered = { ...timeline, rows: shown, spans: timeline.spans.filter(span => ids.includes(span.runId)), events: timeline.events.filter(event => ids.includes(event.runId)) };

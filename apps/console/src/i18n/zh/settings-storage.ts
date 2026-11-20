@@ -24,7 +24,7 @@ export default {
     "retention-history-unproven": "保留期记录未证实", "retained-runtime": "保留的运行时", "owner-unproven": "归属未证实", "linked-path": "存在链接路径",
     "changing": "统计时内容正在变化",
     "not-accepted": "微任务尚未验收", "final-artifact-missing": "最终产物缺失", "integration-missing": "整合记录缺失",
-    "unresolved-conflict": "有未解决的冲突", "active-children": "有进行中的协助任务", "workspace-dependency": "检出依赖未满足",
+    "unresolved-conflict": "有未解决的冲突", "workspace-dependency": "检出依赖未满足",
     "durable-record": "持久记录", "current-backup": "保留的备份", "runtime-owned-by-default-state": "运行时属于默认黑板",
     "candidate-changed": "数据已变化", STORAGE_CHANGED: "候选已变化", STORAGE_UNSAFE: "移除路径身份已变化", STORAGE_PROTECTED: "受保护的数据", "filesystem-error": "文件系统错误",
   },

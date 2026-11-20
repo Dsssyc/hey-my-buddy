@@ -21,7 +21,6 @@ from ...install import runtime
 from ...protocol import schemas
 from ...protocol.harness_names import HARNESS_NAMES
 from ..tasks import macro_tasks, micro_task, workflow as workflow_module
-from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report
 from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
@@ -547,16 +546,28 @@ class BoardService(_BaseResource):
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
                 response = {'harness': record, 'retry': retry}
-                unknown = (record['status'] == 'unknown'
-                           or (record.get('lastProbe') or {}).get('status') == 'unknown')
-                if unknown:
-                    db.execute("UPDATE tasks SET queue_reason='harness-probe-unknown' WHERE task_id=?",
-                               (attempt['task_id'],))
-                else:
-                    db.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=? AND queue_reason='harness-probe-unknown'",
-                               (attempt['task_id'],))
-                self.store._append_event(db, 'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected', task_id=attempt['task_id'],
-                                         payload={'attemptId': attempt['attempt_id'], 'harness': record})
+                # The probe outcome is the attempt row's own fact: unknown means
+                # no preflight could prove the harness ready, and a later ready
+                # record clears it. A receipt-bound attempt no longer shows one.
+                probe_unknown = 1 if (record.get('status') == 'unknown'
+                                      or (record.get('lastProbe') or {}).get('status') == 'unknown') else 0
+                if (attempt['execution_state'] not in ('finalizing', 'finished')
+                        and attempt['result_json'] is None
+                        and int(attempt['probe_unknown']) != probe_unknown):
+                    cursor = db.execute(
+                        "UPDATE attempts SET probe_unknown=?, updated_at=?, revision=revision+1"
+                        " WHERE attempt_id=? AND revision=?",
+                        (probe_unknown, self.store.now(), attempt['attempt_id'], attempt['revision']))
+                    if cursor.rowcount != 1:
+                        raise BoardError('REVISION_CONFLICT', 'The attempt changed concurrently; re-read it and retry')
+                    db.execute("UPDATE tasks SET updated_at=? WHERE task_id=? AND state IN ('running','cancelling')",
+                               (self.store.now(), attempt['task_id']))
+                self.store._append_event(
+                    db,
+                    'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected',
+                    task_id=attempt['task_id'],
+                    payload={'attemptId': attempt['attempt_id'], 'harness': record},
+                )
                 self.store._store_receipt(db, command_id, 'harness.prepare', request, response, subject=subject, task_id=attempt['task_id'])
                 head = self.store._head_of(db)
             self.store._notify(head)
@@ -592,13 +603,10 @@ class BoardService(_BaseResource):
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:
             return
-        selections = [params.get('buddy')]
-        if isinstance(params.get('helpers'), list):
-            selections.extend(helper.get('buddy') for helper in params['helpers'] if isinstance(helper, dict))
-        with self.store.db.read() as connection:
-            names = {workflow_module.named_buddy(connection, choice)['harness']
-                     for choice in selections if isinstance(choice, str) and choice != 'route'}
-        for name in sorted(names):
+        choice = params.get('buddy')
+        if isinstance(choice, str) and choice != 'route':
+            with self.store.db.read() as connection:
+                name = workflow_module.named_buddy(connection, choice)['harness']
             if explicit and name in HARNESS_NAMES and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
@@ -657,9 +665,9 @@ class BoardService(_BaseResource):
 
     def workflow_continue(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            self._touch_harnesses(params, explicit=True)
             return self.store.workflow.continue_run(
-                params, console_authority=workflow_module.console_authority_from_scope()
+                params, console_authority=workflow_module.console_authority_from_scope(),
+                prepare_buddy=lambda normalized: self._touch_harnesses(normalized, explicit=True),
             )
 
         return self._guard("workflow.continue", request_json, handler)
@@ -828,28 +836,17 @@ class BoardService(_BaseResource):
                 for name in sorted(names & set(HARNESS_NAMES)):
                     self.harnesses.refresh(name, preflight=True)
             self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})
-            response = self.store.admit_execution(nonce, task_id=task_id)
-            claim = response.get("claim")
-            if claim is not None:
-                record_path = None
-                if claim["task"]["spec"]["adapter"] != "command":
-                    with self.store.db.read() as connection:
-                        member = connection.execute(
-                            f"SELECT group_id FROM ({macro_tasks.MEMBERS_SQL}) WHERE task_id=?",
-                            (claim["task"]["taskId"],)).fetchone()
-                    if member is not None:
-                        record_path = str(session_record_path(
-                            self.store.directory, member["group_id"], claim["attempt"]["attemptId"]))
-                claim["sessionRecordPath"] = record_path
-            return response
+            return self.store.admit_execution(nonce, task_id=task_id)
 
     def execution_progress(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             verify = self.execution_scheduler.verify_identity if self.execution_scheduler is not None else None
             response = self.store.execution_progress(params, verify_identity=verify)
             if self.execution_scheduler is not None:
-                # A budget notification can be an unchanged waitingReason hint,
-                # which commits without advancing the store's event head.
+                # A budget notification is an unchanged waitingReason hint with a
+                # new waitingReasonSeq: it advances the attempt's monotone barrier
+                # without adding a store event, and the budget observation still
+                # needs its wake on every accepted progress.
                 self.execution_scheduler.wake_attempt(params["attemptId"])
             return response
         return self._guard("execution.progress", request_json, handler)

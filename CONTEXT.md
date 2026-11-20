@@ -59,7 +59,7 @@ A buddy acting with Host authority: it delegates micro tasks, defining their aut
 _Avoid_: Host agent, main agent, coordinator, orchestrator, manager
 
 **Worker buddy**:
-A buddy that executes turns of a micro task with attempt-scoped authority; it may finish, ask for assistance or raise attention, but cannot create micro tasks, authorize helpers or accept results. Its results reach the Host for acceptance. The one exception is a Lead. Short form: Worker.
+A buddy that executes turns of a micro task with attempt-scoped authority; it may finish or raise attention, but cannot create micro tasks or accept results. Its results reach the Host for acceptance. The one exception is a Lead. Short form: Worker.
 _Avoid_: Worker agent, subagent, a Buddy, coding Buddy
 
 **Lead buddy**:
@@ -71,7 +71,7 @@ The right to act as Host for the micro tasks created under one micro task. A Hos
 
 **名下的微任务 / owned micro task**:
 A micro task a Lead delegates under the micro task that carries delegation authority. It belongs to that micro task, not to the buddy executing it, so it stays there when that micro task changes hands. The Lead decides its boundaries and accepts it; the Host does neither.
-_Avoid_: child task, sub-task; a helper is a different thing
+_Avoid_: child task, sub-task
 
 **Router buddy**:
 A buddy acting with Router authority in one of the three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. The user lists one or more buddies in order for the routing plane, and the first available one holds it; the maintenance and profile planes each have the one buddy the user names. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
@@ -212,15 +212,12 @@ _Avoid_: 委派 (as a noun), delegation, governed goal
 **委派 / delegate**:
 What a Host buddy does when it hands a micro task to the blackboard for a Worker buddy to execute. The word names the act, never the piece of work.
 
-**协助任务 / helper**:
-A micro task explicitly authorized by the Host to help another micro task.
-
 **修正 / fix**:
 A micro task submitted to repair a defect found in another micro task after that one was accepted. It names the micro task it fixes; the fixed micro task stays accepted and counts as a defective delivery.
 _Avoid_: correction (a run's in-turn correction of a model's answer), reopening (acceptance is final)
 
 **执行回合 / turn**:
-One Worker buddy execution ending in a result, assistance request or attention boundary; a Lead's turn may also end waiting on its owned micro tasks.
+One Worker buddy execution ending in a result or an attention boundary; a Lead's turn may also end waiting on its owned micro tasks.
 
 **问询 / inquiry**:
 A question the micro task's Host or Lead puts to its running turn through the blackboard, together with the answer correlated with it. It changes neither the turn's task nor its authority, and it is not a continuation.

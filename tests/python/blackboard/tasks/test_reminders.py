@@ -173,7 +173,8 @@ class ReminderFacts(BoardTestCase):
     def test_unknown_stop_does_not_suppress_or_stop_reminders(self):
         self.claim()
         with self.store.db.write() as db:
-            db.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain' WHERE attempt_id=?",
+            db.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain',"
+                       " connection_reason='attempt-uncertain-after-restart' WHERE attempt_id=?",
                        (self.attempt['attemptId'],))
         self.clock.advance(10)
         reminders.collect(self.store)

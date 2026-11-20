@@ -18,7 +18,7 @@ from buddy.harnesses.test_c_two_live import (
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt, verify_receipt
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError
 
 FINISH_IDENTITY = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"}

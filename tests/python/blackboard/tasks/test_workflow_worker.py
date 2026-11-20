@@ -433,7 +433,6 @@ class CompactRouteTests(MicroTaskWorkerTestCase):
             "turns",
             "activeRequest",
             "requests",
-            "children",
             "artifacts",
             "counts",
             "truncated",

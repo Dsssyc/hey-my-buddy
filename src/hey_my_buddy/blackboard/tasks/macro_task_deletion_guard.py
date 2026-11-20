@@ -24,8 +24,7 @@ def reject_macro_task(connection, macro_task_id: str) -> None:
 def _deletion_for_run(connection, run_id: str):
     return connection.execute(
         "WITH RECURSIVE ancestors(run_id) AS ("
-        " SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c"
-        " JOIN ancestors a ON c.child_task_id=a.run_id"
+        " SELECT ?"
         " UNION SELECT l.lead_run_id FROM workflow_lead_tasks l"
         " JOIN ancestors a ON l.owned_run_id=a.run_id)"
         " SELECT d.deletion_id FROM macro_task_deletions d"

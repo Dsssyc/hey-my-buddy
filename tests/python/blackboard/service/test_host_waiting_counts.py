@@ -22,7 +22,7 @@ class HostAttentionTests(WorkflowTestCase):
                 self.assertEqual(page["total"], expected)
 
     def test_attention_ids_actions_and_history_follow_mutations(self):
-        attention = self.returned("attention", "attention")
+        attention = self.returned("attention", disposition="attention")
         delivered = self.returned("delivered")
         concluded = self.returned("concluded")
         self.assertEqual(attention["state"], "awaiting-host")

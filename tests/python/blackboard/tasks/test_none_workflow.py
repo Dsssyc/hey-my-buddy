@@ -114,10 +114,10 @@ class NoneWorkflowTests(WorkflowTestCase):
                 board.call('workflow_conclude', {'runId': run['runId'], 'artifactId': artifact, 'note': 'Keep local changes'})
                 self.assertEqual(source.read_text(), 'unsealed source\n')
 
-    def test_assistance_keeps_result_and_continuation_produces_new_fixed_result(self):
+    def test_attention_keeps_result_and_continuation_produces_new_fixed_result(self):
         board = self.board()
         run = self.submit_none(board, access='write')
-        self.finish_none(board, run, disposition='assistance')
+        self.finish_none(board, run, disposition='attention')
         waiting = self.view(board, run)
         old = waiting['artifacts'][0]['artifactId']
         with self.assertRaises(BoardError) as error:
@@ -206,58 +206,6 @@ class NoneWorkflowTests(WorkflowTestCase):
                                           'note': 'Changed receipt must fail', 'notRequired': 'answer'})
         self.assertEqual(error.exception.code, 'RECEIPT_MISMATCH')
         path.write_bytes(original)
-
-    def test_none_helper_hands_fixed_result_back_without_transferring_a_checkout(self):
-        board = self.board()
-        run = self.submit_none(board, access='write')
-        self.finish_none(board, run, disposition='attention')
-        view = self.view(board, run)
-        approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[{
-            'cwd': str(self.workdir()), 'task': 'Check the answer independently',
-            'checkout': 'none', 'access': 'read'}], autoContinue=True)
-        child = approved['children'][0]['taskId']
-        helper_claim = self.claim(board, run_id=child, claim_request_id='helper-claim')
-        self.assertEqual(helper_claim['claim']['turn']['input']['executionWorkspace']['kind'], 'none')
-        self.finish_turn(board, helper_claim, seal=False)
-        resumed = self.claim(board, run_id=run['runId'], claim_request_id='parent-resume')
-        handoff = resumed['claim']['turn']['input']['context']['helperOutcomes'][0]
-        self.assertEqual(handoff['artifact']['kind'], 'result')
-        self.assertIn('resultFile', handoff['artifact'])
-        self.assertNotIn('diffPath', handoff['artifact'])
-        self.finish_turn(board, resumed, seal=False)
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM workspace_reservations').fetchone()[0], 0)
-
-    def test_macro_none_helper_freezes_its_own_execution_project(self):
-        board = self.board()
-        folder = self.workdir('parent-folder')
-        macro = board.call('workflow_create', {'cwd': str(folder), 'title': 'Project A', 'goal': 'Review'})['macroTaskId']
-        identity = board.call('workflow_get', {'cwd': str(folder)})['project']['id']
-        parent = self.submit_none(board, cwd=folder, macro=macro)
-        self.finish_none(board, parent, disposition='assistance')
-        helper_cwd = self.workdir('helper-folder')
-        expected = projects.folder_id(str(helper_cwd))
-        view = self.view(board, parent)
-        approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[{
-            'cwd': str(helper_cwd), 'task': 'Check from a separate project',
-            'checkout': 'none', 'access': 'read'}], autoContinue=False)
-        child = approved['children'][0]['taskId']
-        claim = self.claim(board, run_id=child, claim_request_id='other-project-helper')
-        frozen = claim['claim']['turn']['input']['executionWorkspace']
-        self.assertEqual(frozen['projectId'], expected)
-        self.assertEqual(frozen['path'], str(helper_cwd))
-        self.assertNotEqual(frozen['projectId'], identity)
-        self.finish_turn(board, claim, seal=False)
-        child_view = board.call('workflow_get', {'runId': child})
-        board.call('workflow_conclude', {'runId': parent['runId'], 'targetRunId': child,
-                                        'artifactId': child_view['finalArtifactId'],
-                                        'note': 'The helper answer has been read'})
-        board.call('workflow_cancel', {'runId': parent['runId']})
-        board.call('workflow_conclude', {'runId': parent['runId'], 'note': 'Review complete'})
-        self.assertEqual(macro_task_deletion.delete(board.store, macro, 2)['state'], 'deleted')
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM projects').fetchone()[0], 0)
-        self.assertTrue(helper_cwd.is_dir())
 
     def test_standalone_lead_targets_distinct_projects_and_replays_after_git_conversion(self):
         board = self.board()

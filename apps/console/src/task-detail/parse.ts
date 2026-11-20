@@ -156,10 +156,10 @@ function parseCompactRequest(value: unknown): CompactRequest {
   return {
     reason: reasonOrNull(request.reason, "request.reason"),
     inputFailure: parseInputFailure(request.inputFailure, "request.inputFailure"),
-    requestId: str(request.requestId, "request.requestId"), kind: str(request.kind, "request.kind"),
-    state: str(request.state, "request.state"), createdAt: str(request.createdAt, "request.createdAt"),
+    requestId: str(request.requestId, "request.requestId"), decisionId: strOrNull(request.decisionId, "request.decisionId"),
+    state: oneOf(request.state, ["open", "resolved", "superseded", "cancelled"] as const, "request.state"), createdAt: str(request.createdAt, "request.createdAt"),
     decidedAt: strOrNull(request.decidedAt, "request.decidedAt"),
-    childTaskId: strOrNull(request.childTaskId, "request.childTaskId"), routing: bool(request.routing, "request.routing"),
+    routing: bool(request.routing, "request.routing"),
   };
 }
 
@@ -334,9 +334,17 @@ export function parseWorkflow(value: unknown, runId: string): Workflow {
     activeRequest: workflow.activeRequest === null || workflow.activeRequest === undefined ? null : parseOpenRequest(workflow.activeRequest),
     requests: list(workflow.requests, "workflow.requests").map(parseCompactRequest),
     counts: { turns: int(counts.turns, "workflow.counts"), openRequests: int(counts.openRequests, "workflow.counts") },
-    children: list(workflow.children, "workflow.children").map(child => {
-      const item = rec(child, "workflow.children");
-      return { taskId: str(item.taskId, "child.taskId"), role: str(item.role, "child.role"), state: oneOf(item.state, ["active", "attention", "succeeded", "failed", "cancelled"] as const, "child.state") };
+    ownedMicroTasks: list(workflow.ownedMicroTasks, "workflow.ownedMicroTasks").map(value => ({
+      runId: str(rec(value, "owned micro task").runId, "ownedMicroTask.runId"),
+    })),
+    workspaceConflicts: list(workflow.workspaceConflicts, "workflow.workspaceConflicts").map(value => {
+      const conflict = rec(value, "workspace conflict");
+      return {
+        conflictId: str(conflict.conflictId, "conflict.conflictId"),
+        action: conflict.action == null ? null : oneOf(conflict.action, RESOLUTION_ACTIONS, "conflict.action"),
+        actor: actorOrNull(conflict.actor, "conflict.actor"),
+        note: strOrNull(conflict.note, "conflict.note"),
+      };
     }),
     artifacts: parseArtifacts(workflow.artifacts),
     integrations: list(workflow.integrations, "workflow.integrations").map(parseIntegration),
@@ -351,27 +359,40 @@ export function parseWorkflow(value: unknown, runId: string): Workflow {
   };
 }
 
+const RESOLUTION_ACTIONS = ["restore", "adopt", "abandon"] as const;
+const RESOLUTION_STATES = ["open", "restored", "adopted", "abandoned"] as const;
+
+function parseResolution(value: unknown) {
+  const resolution = recOrNull(value, "audit.request.resolution");
+  if (!resolution) return null;
+  const legacy = resolution.legacy === true;
+  const result = rec(legacy ? resolution.resolution : resolution.result, "resolution result");
+  const parameters = recOrNull(resolution.parameters, "resolution parameters");
+  return {
+    conflictId: str(result.conflictId, "resolution.conflictId"),
+    state: oneOf(result.state, RESOLUTION_STATES, "resolution.state"),
+    action: legacy || parameters ? oneOf(legacy ? result.action : parameters?.resolution, RESOLUTION_ACTIONS, "resolution.action") : null,
+    actor: legacy ? actorOrNull(result.actor, "resolution.actor") : null,
+    note: parameters ? strOrNull(parameters.note, "resolution.note") : null,
+    // A standalone resolution retains the requested input only if the workspace still blocked continuation.
+    continuationBlocked: parameters !== null && Object.hasOwn(parameters, "input"),
+  };
+}
+
 function parseAuditRequest(value: unknown): AuditRequest {
   const request = rec(value, "audit.request");
-  const decision = recOrNull(request.decision, "audit.request.decision");
-  const payload = rec(request.payload, "audit.request.payload");
-  const resolution = decision && recOrNull(decision.resolution, "audit.request.decision");
+
   return {
     ...parseOpenRequest(value),
     turnId: strOrNull(request.turnId, "audit.request.turnId"),
-    decision: decision && {
-      decision: strOrNull(decision.decision, "audit.request.decision"),
-      note: strOrNull(decision.note, "audit.request.decision"),
-      actor: actorOrNull(decision.actor ?? resolution?.actor, "audit.request.decision"),
-    },
-    decisionId: strOrNull(payload.decisionId, "audit.request.payload"),
+    resolution: parseResolution(request.resolution),
   };
 }
 
 function parseContinuation(value: unknown): Continuation {
   const continuation = rec(value, "audit.continuation");
   return {
-    continuationId: str(continuation.continuationId, "audit.continuation"), turnId: strOrNull(continuation.turnId, "audit.continuation"),
+    continuationId: str(continuation.continuationId, "audit.continuation"), requestId: strOrNull(continuation.requestId, "audit.continuation"), turnId: strOrNull(continuation.turnId, "audit.continuation"),
     input: str(continuation.input, "audit.continuation"), createdAt: str(continuation.createdAt, "audit.continuation"),
     kind: str(continuation.kind, "audit.continuation"), note: strOrNull(continuation.note, "audit.continuation"),
   };
@@ -549,7 +570,7 @@ function parseAttempt(task: Rec): Attempt | null {
   };
 }
 
-const LINEAGE_KINDS = ["micro-task", "helper"] as const;
+const LINEAGE_KINDS = ["micro-task"] as const;
 
 function parseLineage(value: unknown): Rec {
   const lineage = rec(value, "task.lineage");

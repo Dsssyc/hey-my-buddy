@@ -107,21 +107,40 @@ class ServiceError(BoardError):
 
 def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     """Keep C-Two's local I/O cause visible at the Host boundary."""
-    details = dict(getattr(error, 'details', None) or {})
-    details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
-               'io_kind', 'raw_os_error', 'io_operation', 'endpoint_unverified_reason',
-               'local_protocol_version', 'peer_protocol_version')
-               if (value := getattr(error, key, None)) is not None})
+    details = {}
+    cause = error.__cause__
+    for diagnostic in (cause, error) if isinstance(cause, CoreError) else (error,):
+        details.update(diagnostic.details)
+        details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
+                       'io_kind', 'raw_os_error', 'io_operation', 'endpoint_unverified_reason',
+                       'local_protocol_version', 'peer_protocol_version')
+                       if (value := getattr(diagnostic, key, None)) is not None})
     kind = details.get('io_kind')
     if kind == 'permission_denied':
         code = 'LAUNCH_ACCESS_DENIED'
-    elif kind in ('not_found', 'connection_refused'):
+    elif kind in ('not_found', 'connection_refused') and details.get('transport_phase') != 'dispatch_uncertain':
         code = 'SERVICE_UNAVAILABLE'
     elif isinstance(error, CCError):
         code = 'C_TWO_' + error.code.name.removeprefix('ERROR_')
     else:
         code = 'C_TWO_' + error.category.upper()
     return ServiceError(code, str(error), **details)
+
+
+def is_transient_ipc_error(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
+    """Recognize an unavailable service, withdrawn route or transient IPC failure."""
+    details = error.details
+    if pre_dispatch_only and details.get("transport_phase") == "dispatch_uncertain":
+        return False
+    if error.code in ("SERVICE_UNAVAILABLE", "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
+                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
+        return True
+    phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
+    return (error.code in ("C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT")
+            and details.get("category") == "transport"
+            and details.get("transport_kind") == "ipc"
+            and details.get("io_kind") not in ("other", "address_in_use", "permission_denied")
+            and details.get("transport_phase") in phases)
 
 
 def encode_message(value: Any) -> str:
@@ -287,7 +306,12 @@ def _call_board(operation: str, params: dict | None, directory: Path, *, resourc
 
 def _call_board_read_only(operation: str, params: dict | None, directory: Path, *, resource: str = "control") -> dict:
     """Call through an existing service using the already selected state root."""
-    endpoint = _attach_read_only(directory)
+    try:
+        endpoint = _attach_read_only(directory)
+    except ServiceError as error:
+        if not is_transient_ipc_error(error):
+            raise
+        endpoint = None
     if endpoint is None:
         _refuse_without_service(directory)
     return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)

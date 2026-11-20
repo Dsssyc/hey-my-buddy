@@ -6,10 +6,16 @@ from pathlib import Path
 
 from ...protocol.execution import (fsync_json, read_execution_receipt as read_receipt,
                                   receipt_reference, RECEIPT, REFUSED)
+from ...protocol.transport import is_transient_ipc_error
 
 from ...errors import BoardError
 
-RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"})
+
+def is_retryable(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
+    """Recognize an unavailable or fenced service, withdrawn route or transient IPC failure."""
+    if pre_dispatch_only and error.details.get("transport_phase") == "dispatch_uncertain":
+        return False
+    return error.code == "UPGRADE_IN_PROGRESS" or is_transient_ipc_error(error, pre_dispatch_only=pre_dispatch_only)
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -39,7 +45,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
                     accepted = False
                     refusal = {"code": error.code, "message": error.message}
                     break
-                if error.code not in RETRYABLE:
+                if not is_retryable(error):
                     raise
                 log(f"result delivery pending: {error.code}")
             else:

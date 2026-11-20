@@ -291,6 +291,18 @@ describe("marks for what waits", () => {
     await listed(3, 4);
     expect(sectionLink("Router")).toBeTruthy();
   });
+
+  it("carries no mark while the window records failures and the Router is available", async () => {
+    const f = fixture(mediumId, { routingHealth: {
+      available: true, currentRouterBuddyId: mediumId,
+      windowSize: 20, sampleCount: 3, failureCount: 2, consecutiveFailures: 2,
+      abstentionCount: 0, cancelledCount: 0,
+      lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
+    } });
+    renderBuddy("#buddies", f);
+    await listed(3, 4);
+    expect(sectionLink("Router")).toBeTruthy();
+  });
 });
 
 describe("deep links", () => {

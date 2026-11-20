@@ -99,12 +99,11 @@ def _dynamic_native_codes() -> set[str]:
     codes |= _strings(_assigned(inventory, "UNREADABLE"))
     codes |= _strings(_assigned(inventory, "UNRECOGNIZED"))
     owned = _tree(ROOT / "src/hey_my_buddy/protocol/owned_process.py")
-    for node in owned.body:
-        if isinstance(node, ast.ClassDef) and node.name == "WindowsCommandLineTooLong":
-            codes |= _strings(_assigned(ast.Module(body=node.body, type_ignores=[]), "code"))
-            break
-    else:
-        raise AssertionError("Windows command-line failure producer was not found")
+    launch_errors = {"WindowsCommandLineTooLong", "WorkingDirectoryRejected"}
+    launch_error_classes = {node.name: node for node in owned.body
+                            if isinstance(node, ast.ClassDef) and node.name in launch_errors}
+    for name in launch_errors:
+        codes |= _strings(_assigned(ast.Module(body=launch_error_classes[name].body, type_ignores=[]), "code"))
     return codes
 
 
@@ -137,6 +136,7 @@ class RouterFailureCopyTests(unittest.TestCase):
         self.assertIn("profile-answer-invalid", produced)
         self.assertIn("native-stop", produced)
         self.assertIn("harness.command-line-too-long", produced)
+        self.assertIn("harness.working-directory-rejected", produced)
         for language in ("zh", "en"):
             with self.subTest(language=language):
                 copy = _copy(language)

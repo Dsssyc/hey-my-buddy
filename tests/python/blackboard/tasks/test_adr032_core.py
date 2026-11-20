@@ -11,6 +11,62 @@ from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 
 class CoreContractTests(WorkflowTestCase):
+    def test_boundary_continuation_changes_buddy_and_future_access_on_the_same_run(self):
+        from hey_my_buddy.protocol.workspace_manifest import turn_manifest
+
+        board = self.board()
+        run = self.submit(board, access="read")
+        first = self.claim(board, run_id=run["runId"])
+        first_input = first["claim"]["turn"]["input"]
+        self.finish_turn(board, first, disposition="attention")
+        boundary = board.call("workflow_get", {"runId": run["runId"]})
+        replacement = {**BUDDY, "effort": "high"}
+        continued = self.continue_run(
+            board, boundary, buddy=replacement, access="write", writeScope=["src"],
+            input="Update the implementation under src", note="Continue with write access after review",
+        )
+        self.assertEqual(continued["runId"], run["runId"])
+        second = self.claim(board, run_id=run["runId"])["claim"]
+        self.assertEqual(second["attempt"]["generation"], first["claim"]["attempt"]["generation"] + 1)
+        self.assertEqual(second["turn"]["resumeMode"], "reconstructed-new-session")
+        second_input = second["turn"]["input"]
+        self.assertEqual(second_input["context"]["buddy"], replacement)
+        manifest = turn_manifest(board.directory, second_input)
+        self.assertEqual((manifest["access"], manifest["writeScope"]), ("write", ["src"]))
+        self.assertEqual(turn_manifest(board.directory, first_input)["access"], "read")
+
+    def test_retired_continuation_fields_are_rejected_before_any_side_effect(self):
+        board = self.board()
+        run = self.submit(board)
+        self.finish_turn(board, self.claim(board), disposition="attention")
+        view = board.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
+        packet = {
+            "runId": run["runId"],
+            "requestId": view["activeRequest"]["requestId"],
+            "input": "Proceed with the current task",
+        }
+        head = board.store.head()
+        preparations = len(self.workspace.prepare_calls)
+        for field, value in {
+            "helpers": [],
+            "decision": "approve",
+            "autoContinue": False,
+            "helperPolicy": "cancel",
+            "targetRunId": run["runId"],
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaises(BoardError) as refused:
+                    board.call("workflow_continue", {**packet, field: value})
+                self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
+                self.assertEqual(refused.exception.details["field"], field)
+        self.assertEqual(board.store.head(), head)
+        self.assertEqual(len(self.workspace.prepare_calls), preparations)
+        self.assertEqual(board.call("workflow_get", {"runId": run["runId"], "includeAudit": True}), view)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind LIKE 'workflow.%'").fetchone()[0], 0)
+
     def test_a_new_continuation_generation_reholds_released_cwd_claims(self):
         board = self.board(max_concurrent=2)
         submitted = self.submit(board)
@@ -65,7 +121,7 @@ class CoreContractTests(WorkflowTestCase):
     def test_artifact_continuation_supersedes_the_same_turn_boundary(self):
         board = self.board()
         submitted = self.submit(board)
-        self.finish_turn(board,self.claim(board),disposition="assistance")
+        self.finish_turn(board,self.claim(board),disposition="attention")
         view = board.call("workflow_get",{"runId":submitted["runId"]})
         request_id = view["activeRequest"]["requestId"]
         artifact_id = next(item["artifactId"] for item in view["artifacts"] if item["kind"]=="output")
@@ -78,8 +134,7 @@ class CoreContractTests(WorkflowTestCase):
             request = connection.execute("SELECT * FROM workflow_requests WHERE request_id=?",(request_id,)).fetchone()
             self.assertEqual(request["state"],"superseded")
             self.assertEqual(request["response_id"],first["continuationId"])
-        for change in ({"requestId":request_id,"input":"A second answer"},
-                       {"requestId":request_id,"decision":"approve"}):
+        for change in ({"requestId":request_id,"input":"A second answer"},):
             with self.subTest(change=change),self.assertRaises(BoardError) as refused:
                 board.call("workflow_continue",{"runId":view["runId"],**change})
             self.assertEqual(refused.exception.code,"CONFLICT")
@@ -124,34 +179,6 @@ class CoreContractTests(WorkflowTestCase):
         self.assertEqual(refused.exception.code,"CONFLICT")
         self.assertEqual(board.call("workflow_continue",packet)["continuationId"],first["continuationId"])
 
-    def test_helper_artifact_continuation_closes_its_ancestor_proxy(self):
-        board = self.board()
-        root = self.submit(board)
-        self.finish_turn(board,self.claim(board),disposition="assistance")
-        waiting = board.call("workflow_get",{"runId":root["runId"]})
-        granted = self.decide(board,waiting,waiting["activeRequest"]["requestId"],autoContinue=False,helpers=[{
-            "title":"helper","task":"Inspect a dependency","cwd":str(self.workdir("proxy-helper")),
-            "buddy":" / ".join(BUDDY.values()),"checkout":"worktree","access":"read",
-            "inputs":[],"expectedSeconds":60,
-        }])
-        child_id = granted["children"][0]["taskId"]
-        self.finish_turn(board,self.claim(board,run_id=child_id),disposition="assistance")
-        child = board.call("workflow_get",{"runId":child_id})
-        proxy = board.call("workflow_get",{"runId":root["runId"]})["activeRequest"]
-        artifact = next(item["artifactId"] for item in child["artifacts"] if item["kind"]=="output")
-        result = board.call("workflow_continue",{"runId":root["runId"],"targetRunId":child_id,
-                                                 "artifactId":artifact,"input":"Continue the helper"})
-        with board.store.db.read() as connection:
-            rows = list(connection.execute("SELECT state,response_id FROM workflow_requests WHERE request_id IN (?,?)",
-                                           (proxy["requestId"],child["activeRequest"]["requestId"])))
-        self.assertEqual(len(rows),2)
-        self.assertTrue(all(row["state"]=="superseded" and row["response_id"]==result["continuationId"] for row in rows))
-        self.assertIsNone(board.call("workflow_get",{"runId":root["runId"]})["activeRequest"])
-        with self.assertRaises(BoardError) as refused:
-            board.call("workflow_continue",{"runId":root["runId"],"targetRunId":child_id,
-                                            "requestId":proxy["requestId"],"input":"Second answer"})
-        self.assertEqual(refused.exception.code,"CONFLICT")
-
     def test_cancelled_reply_result_can_be_concluded_and_replayed(self):
         board = self.board()
         submitted = self.submit(board)
@@ -184,16 +211,16 @@ class CoreContractTests(WorkflowTestCase):
         self.assertEqual(first["state"],"concluded")
         self.assertEqual(replay["conclusionId"],first["conclusionId"])
 
-    def test_decision_replay_normalizes_an_explicit_self_target(self):
+    def test_request_input_replay_returns_the_same_continuation(self):
         board = self.board()
         submitted = self.submit(board)
-        self.finish_turn(board,self.claim(board),disposition="assistance")
+        self.finish_turn(board,self.claim(board),disposition="attention")
         request = board.call("workflow_get",{"runId":submitted["runId"]})["activeRequest"]
-        packet = {"runId":submitted["runId"],"requestId":request["requestId"],"decision":"decline"}
-        first = board.call("workflow_continue",{**packet,"targetRunId":submitted["runId"]})
+        packet = {"runId":submitted["runId"],"requestId":request["requestId"],"input":"Use the current findings"}
+        first = board.call("workflow_continue",packet)
         replay = board.call("workflow_continue",packet)
         self.assertTrue(replay["alreadyResponded"])
-        self.assertEqual(first["decision"],replay["decision"])
+        self.assertEqual(first["continuationId"],replay["continuationId"])
 
     def test_console_escalation_preserves_the_first_stop_identity(self):
         board = self.board()
@@ -212,39 +239,6 @@ class CoreContractTests(WorkflowTestCase):
         self.assertEqual(replay["stopEventId"],first["stopEventId"])
         self.assertEqual(board.store.head(),head)
 
-    def test_host_helper_mutations_require_the_root_and_current_descendant(self):
-        board=self.board()
-        root=self.submit(board)
-        self.finish_turn(board,self.claim(board),disposition="assistance")
-        waiting=board.call("workflow_get",{"runId":root["runId"]})
-        granted=self.decide(board,waiting,waiting["activeRequest"]["requestId"],autoContinue=False,helpers=[{
-            "title":"helper", "task":"Inspect one isolated dependency", "cwd":str(self.workdir("helper")),
-            "buddy":" / ".join(BUDDY.values()), "checkout":"worktree", "access":"write",
-            "inputs":[], "writeScope":["."], "expectedSeconds":60,
-        }])
-        helper=granted["children"][0]
-        child_id=helper["taskId"]
-        self.assertNotIn("role",helper)
-        self.assertNotIn("integrator",helper)
-        for operation,parameters in (
-            ("workflow_cancel",{}),
-            ("workflow_continue",{"turnId":"missing","input":"Continue the helper"}),
-            ("workflow_accept",{"artifactId":"missing","note":"Reviewed","notRequired":"No target"}),
-            ("workflow_conclude",{"note":"End the helper"}),
-        ):
-            with self.subTest(operation=operation):
-                with self.assertRaises(BoardError) as refused:
-                    board.call(operation,{"runId":child_id,**parameters})
-                self.assertEqual(refused.exception.code,"UNAUTHORIZED")
-        foreign=self.submit(board,request_id="foreign",cwd=str(self.workdir("foreign")))
-        with self.assertRaises(BoardError) as refused:
-            board.call("workflow_cancel",{"runId":root["runId"],"targetRunId":foreign["runId"]})
-        self.assertEqual(refused.exception.code,"UNAUTHORIZED")
-        stopped=board.call("workflow_cancel",{"runId":root["runId"],"targetRunId":child_id})
-        self.assertEqual(stopped["targetRunId"],child_id)
-        self.assertEqual(board.call("workflow_get",{"runId":child_id})["state"],"cancelled")
-        self.assertNotEqual(board.call("workflow_get",{"runId":root["runId"]})["state"],"cancelled")
-
     def test_same_submission_replays_original_choices_without_preparation(self):
         board = self.board()
         first = self.submit(board, request_id="replay", task="do the thing", access="read")
@@ -262,26 +256,27 @@ class CoreContractTests(WorkflowTestCase):
         self.assertEqual(replay["buddy"], {**BUDDY, "alias": None})
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
 
-    def test_request_is_consumed_by_only_one_decision(self):
+    def test_request_is_consumed_by_only_one_continuation(self):
         board = self.board()
         submitted = self.submit(board)
         claim = self.claim(board)
-        self.finish_turn(board, claim, disposition="assistance")
+        self.finish_turn(board, claim, disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         request_id = view["activeRequest"]["requestId"]
 
-        def decide(choice):
+        def answer(input_text):
             try:
-                return board.call("workflow_continue", {"runId": view["runId"], "requestId": request_id, "decision": choice})
+                return board.call("workflow_continue", {"runId": view["runId"], "requestId": request_id, "input": input_text})
             except BoardError as error:
                 return error.code
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            outcomes = list(pool.map(decide, ["approve", "decline"]))
+            inputs = ["Proceed with the current plan", "Use the existing schema"]
+            outcomes = list(pool.map(answer, inputs))
         self.assertEqual(sum(isinstance(value, dict) for value in outcomes), 1)
         self.assertIn("CONFLICT", outcomes)
         winner = next(value for value in outcomes if isinstance(value, dict))
-        replay = board.call("workflow_continue", {"runId": view["runId"], "requestId": request_id, "decision": winner["decision"]})
+        replay = answer(inputs[outcomes.index(winner)])
         self.assertTrue(replay["alreadyResponded"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (view["runId"],)).fetchone()[0], 1)

@@ -171,13 +171,13 @@ describe("the head of the detail", () => {
   });
 
   it("writes a wait for a Lead's decision as a wait for the Lead, in the head and on the rail", async () => {
-    const awaiting = workflow({ state: "awaiting-host", activeRequest: { requestId: "req-2", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null,
-      childTaskId: null, routing: false, summary: "要不要改范围", reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
+    const awaiting = workflow({ state: "awaiting-host", activeRequest: { requestId: "req-2", state: "open", createdAt: at("11:00"), decidedAt: null, decisionId: null,
+      routing: false, summary: "要不要改范围", reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
     counts: { turns: 2, openRequests: 1 } });
     const leadTimeline = timeline();
     leadTimeline.rows = [row({ state: "awaiting-host", rootLeadRunId: "lead-1" })];
     leadTimeline.spans = leadTimeline.spans.filter(item => item.spanId !== "e2" && item.spanId !== "q2");
-    leadTimeline.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2", requestKind: "assistance" }));
+    leadTimeline.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2" }));
     leadTimeline.events = leadTimeline.events.filter(item => item.kind === "dispatch");
     open({ timeline: leadTimeline, replies: { workflow: awaiting, task: task({ workflow: { ...task().workflow, state: "awaiting-host" }, lineage: { ...task().lineage, rootLeadRunId: "lead-1" } }) } });
     await ready();
@@ -243,10 +243,10 @@ describe("the head of the detail", () => {
 describe("the delegation", () => {
   it("is the task, where it came from and the micro tasks around it", async () => {
     const long = "第一段。".repeat(120);
-    const helper = workflow({ children: [{ taskId: "h1", role: "helper", state: "succeeded" }, { taskId: "d1", role: "router", state: "succeeded" }], delegationAuthority: true });
+    const lead = workflow({ ownedMicroTasks: [{ runId: "h1" }], delegationAuthority: true });
     const withFixes = timeline();
-    withFixes.rows = [row({ fixes: "m0", fixesTitle: "被修正的微任务", fixesTitleSource: "title", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
-    const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, parentRunId: "m0" } }), workflow: helper } });
+    withFixes.rows = [row({ fixes: "m0", fixesTitle: "被修正的微任务", fixesTitleSource: "title", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "核对路径" })];
+    const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, leadOwnership: { leadRunId: "m0", leadTurnId: "turn-0", createdAt: at("10:00") } } }), workflow: lead } });
     await ready();
     const text = pane().textContent!;
     expect(text).not.toContain("原始委派方");
@@ -258,7 +258,7 @@ describe("the delegation", () => {
     // Height folding keeps the complete Markdown tree; geometry is checked in the browser.
     expect(text).toContain(long);
     expect(within(pane()).queryByRole("button", { name: /复制标识 m1/ })).toBeNull();
-    await f.user.click(within(pane()).getByRole("button", { name: "协助查路径" }));
+    await f.user.click(within(pane()).getByRole("button", { name: "核对路径" }));
     expect(f.onOpenRun).toHaveBeenLastCalledWith("h1");
     expect(within(pane()).queryByRole("button", { name: "路由计算" })).toBeNull();
     await f.user.click(within(pane()).getAllByRole("button", { name: "被修正的微任务" })[0]!);
@@ -380,7 +380,7 @@ describe("a turn", () => {
   it("keeps a later turn's own result without repeating continuation input", async () => {
     open({ step: 7 });
     await ready();
-    expect(pane().textContent).not.toContain("继续。读取样例目录已获批准");
+    expect(pane().textContent).not.toContain("继续。工作区已恢复");
     expect(pane().textContent).not.toContain("实现微任务详情，左边是步骤");
     expect(pane().textContent).toContain("第二轮：详情页已经按回合重做。");
     expect(pane().textContent).toContain("浏览器检查还要补两项");
@@ -553,24 +553,24 @@ describe("a Host's decision", () => {
     const text = pane().textContent!;
     expect(text).toContain("需要读取样例目录");
     expect(text).toContain("已读完工作树");
-    expect(text).toContain("批准读取样例目录");
+    expect(text).toContain("核对样例目录");
     expect(text).toContain("读取后继续");
-    expect(text).toContain("批准");
+    expect(text).toContain("已记录处置");
     expect(text).toContain("Host");
-    expect(text).toContain("可以读取");
+    expect(text).toContain("已恢复授权范围");
     // What the blackboard says of why it waits is not shown.
     expect(text).not.toMatch(/the current turn|awaiting/i);
   });
 
   it("names a request still open, with another count when several wait, and offers no way to decide", async () => {
-    const open2 = { requestId: "req-2", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null, childTaskId: "child-1", routing: false,
+    const open2 = { requestId: "req-2", state: "open", createdAt: at("11:00"), decidedAt: null, routing: false,
       summary: "要不要扩大范围", reason: null, attempted: "已试过窄范围", neededWork: ["选一个范围"], expectedArtifacts: ["docs/x.md"], acceptance: "范围确定", preparationError: { code: "WORKSPACE_INVALID", message: "检出准备失败" } };
     const live = timeline();
     live.spans = live.spans.filter(item => !["e2", "q2"].includes(item.spanId));
-    live.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2", requestKind: "assistance" }));
+    live.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2" }));
     live.events = live.events.filter(item => item.kind === "dispatch");
     live.rows = [row({ state: "awaiting-host", category: "host" })];
-    const f = open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: open2 as never, counts: { turns: 2, openRequests: 3 } }) } });
+    open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: open2 as never, counts: { turns: 2, openRequests: 3 } }) } });
     await ready();
     const text = pane().textContent!;
     expect(text).toContain("要不要扩大范围");
@@ -580,16 +580,14 @@ describe("a Host's decision", () => {
     expect(text).toContain("docs/x.md");
     expect(within(pane()).getAllByText("等待 Host").length).toBeGreaterThan(0);
     expect(pane().querySelectorAll("input, textarea, select, form")).toHaveLength(0);
-    await f.user.click(within(pane()).getByRole("button", { name: "打开协助任务" }));
-    expect(f.onOpenRun).toHaveBeenCalledWith("child-1");
   });
 
   it("is a routing boundary for a request about routing: read, and nothing to fill in or to try again", async () => {
-    const boundary = { requestId: "req-3", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null, childTaskId: null, routing: true,
+    const boundary = { requestId: "req-3", state: "open", createdAt: at("11:00"), decidedAt: null, routing: true,
       summary: "路由需要 Host 指定 buddy", reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null };
     const live = timeline();
     live.spans = live.spans.filter(item => !["e2", "q2"].includes(item.spanId));
-    live.spans.push(span("h3", "host", at("11:00"), null, { state: "open", requestId: "req-3", requestKind: "assistance" }));
+    live.spans.push(span("h3", "host", at("11:00"), null, { state: "open", requestId: "req-3" }));
     live.events = live.events.filter(item => item.kind === "dispatch");
     open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: boundary as never, counts: { turns: 2, openRequests: 1 } }) } });
     await ready();
@@ -603,7 +601,7 @@ describe("a Host's decision", () => {
     open({ step: 5 });
     await ready();
     expect(within(pane()).getByRole("heading", { name: "继续" })).toBeTruthy();
-    expect(pane().textContent).toContain("批准后继续");
+    expect(pane().textContent).toContain("恢复后继续");
     expect(pane().textContent).toContain("Host");
   });
 

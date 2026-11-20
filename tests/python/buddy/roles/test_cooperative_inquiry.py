@@ -4,8 +4,8 @@ import json
 import unittest
 from pathlib import Path
 import tempfile
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.worker_services import pending_inquiries, read_inquiry_entries, attention_requests
 from hey_my_buddy.buddy.harnesses.session_receipts import (MAX_ANSWER_BYTES, MAX_INQUIRIES, ReceiptError,
     sign_receipt, verify_inquiry_receipt, verify_receipt, verify_tool_refusal)
@@ -133,11 +133,8 @@ class FinishToolTests(unittest.TestCase):
         self.assertIn("what is the deployment word?", envelope["detail"])
         self.assertIn("q-1", envelope["detail"])
         self.assertIn("hey_my_buddy_checkpoint", envelope["detail"])
-        # Assistance and attention stay legal with a pending question.
-        for disposition in ("assistance", "attention"):
-            with self.subTest(disposition=disposition):
-                accepted = self.call("hey_my_buddy_finish_turn", self.outcome(disposition))
-                self.assertFalse(accepted.get("isError"), accepted)
+        accepted = self.call("hey_my_buddy_finish_turn", self.outcome("attention"))
+        self.assertFalse(accepted.get("isError"), accepted)
         # Once answered, completion passes again.
         import hashlib
 
@@ -150,7 +147,7 @@ class FinishToolTests(unittest.TestCase):
                                                 "at": "2026-01-01T00:00:00Z"}, **IDENTITY}) + "\n")
         settled = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         self.assertFalse(settled.get("isError"), settled)
-        verify_receipt(settled["content"][0]["text"], self.config, turn_io.validate_outcome)
+        verify_receipt(settled["content"][0]["text"], self.config, validate_outcome)
 
     def test_foreign_or_unversioned_journal_records_are_never_exposed(self):
         import hashlib
@@ -216,17 +213,17 @@ class FinishToolTests(unittest.TestCase):
         self.assertIn("attention", envelope["detail"])
         attention = self.call("hey_my_buddy_finish_turn", self.outcome("attention"))
         self.assertFalse(attention.get("isError"), attention)
-        receipt = verify_receipt(attention["content"][0]["text"], self.config, turn_io.validate_outcome)
+        receipt = verify_receipt(attention["content"][0]["text"], self.config, validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "attention")
 
     def test_a_completed_outcome_still_verifies_without_attention(self):
         accepted = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
-        receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
+        receipt = verify_receipt(accepted["content"][0]["text"], self.config, validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
         tampered = json.loads(accepted["content"][0]["text"])
         tampered["outcome"]["summary"] = "changed"
         with self.assertRaises(ReceiptError):
-            verify_receipt(json.dumps(tampered), self.config, turn_io.validate_outcome)
+            verify_receipt(json.dumps(tampered), self.config, validate_outcome)
 
     def test_unknown_tools_and_invalid_outcomes_are_bounded_errors(self):
         unknown = self.call("hey_my_buddy_something_else", {})
@@ -267,24 +264,16 @@ class FinishToolTests(unittest.TestCase):
                                 foreign, "mcp__buddy_x__hey_my_buddy_finish_turn",
                                 ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
 
-    def test_an_explicit_null_suggested_buddy_is_the_accepted_no_suggestion(self):
-        # The incident's finish arguments are now valid: an explicit null
-        # suggestedBuddyId means no suggestion and mints a success receipt,
-        # while a non-string value is refused with a signed envelope whose
-        # detail names the correction.
-        with_null = self.outcome("attention")
-        with_null["request"]["suggestedBuddyId"] = None
-        accepted = self.call("hey_my_buddy_finish_turn", with_null)
-        self.assertFalse(accepted.get("isError"), accepted)
-        receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
-        self.assertIsNone(receipt["outcome"]["request"]["suggestedBuddyId"])
-        for invalid in (5, True, {}, []):
-            with self.subTest(invalid=invalid):
-                bad = self.outcome("attention")
-                bad["request"]["suggestedBuddyId"] = invalid
+    def test_retired_finish_fields_receive_signed_refusals(self):
+        attention = self.outcome("attention")
+        for bad in ({**attention, "disposition": "assistance"},
+                    {**attention, "request": {**attention["request"], "suggestedBuddyId": None}}):
+            with self.subTest(arguments=bad):
                 envelope = self.refusal(self.call("hey_my_buddy_finish_turn", bad), "hey_my_buddy_finish_turn")
                 self.assertEqual(envelope["reason"], "invalid-arguments")
-                self.assertIn("references are invalid", envelope["detail"])
+        accepted = self.call("hey_my_buddy_finish_turn", attention)
+        receipt = verify_receipt(accepted["content"][0]["text"], self.config, validate_outcome)
+        self.assertEqual(receipt["outcome"], attention)
 
     def test_pathological_questions_batch_into_a_verifiable_checkpoint(self):
         # JSON escaping can inflate an accepted 4000-byte question far past

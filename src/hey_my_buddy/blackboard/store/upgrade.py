@@ -7,7 +7,7 @@ import sqlite3
 
 from ...errors import BoardError
 from . import (schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35, schema_35_36,
-               schema_36_37, schema_37_38, schema_38_39, schema_39_40, schema_40_41)
+               schema_36_37, schema_37_38, schema_38_39, schema_39_40, schema_40_41, schema_41_42)
 from .db import SCHEMA_VERSION
 
 UPGRADE_FLOOR_SCHEMA = 30
@@ -15,7 +15,7 @@ UPGRADE_FLOOR_RELEASE = "0.54.1"
 STEPS = {30: schema_30_31.upgrade, 31: schema_31_32.upgrade, 32: schema_32_33.upgrade,
          33: schema_33_34.upgrade, 34: schema_34_35.upgrade, 35: schema_35_36.upgrade,
          36: schema_36_37.upgrade, 37: schema_37_38.upgrade, 38: schema_38_39.upgrade,
-         39: schema_39_40.upgrade, 40: schema_40_41.upgrade}
+         39: schema_39_40.upgrade, 40: schema_40_41.upgrade, 41: schema_41_42.upgrade}
 
 
 def supported_schema(value: str | None) -> int:

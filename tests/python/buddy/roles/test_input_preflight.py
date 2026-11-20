@@ -29,8 +29,7 @@ class PartitionTests(unittest.TestCase):
         host = '中文😀e\u0301\\"\n\x00'
         turn = real_turn_input()
         turn["context"].update(delegationAuthority=True,
-            continuation={"kind": "host", "input": host, "note": "备注😀", "trigger": None},
-            hostDecision={"requestId": "request", "decision": "continue", "note": host})
+            continuation={"kind": "host", "input": host, "note": "备注😀", "trigger": None})
         prompt = prompts.worker_prompt(host, turn, delivery=(host, ""), credential_file='/private/证据".json')
         expected = (resource_path("roles.worker").read_text(encoding="utf-8") + "\n"
                     + resource_path("roles.lead").read_text(encoding="utf-8") + "\n\n"
@@ -40,8 +39,7 @@ class PartitionTests(unittest.TestCase):
         self.assertEqual(prompt, expected)
         self.assertEqual(prompt.parts.task, "\n\n" + host)
         self.assertEqual(prompt.parts.host_input,
-            '"input":' + canonical_json(host) + ',"note":' + canonical_json("备注😀")
-            + ',"hostDecision":' + canonical_json(turn["context"]["hostDecision"]))
+            '"input":' + canonical_json(host) + ',"note":' + canonical_json("备注😀"))
         self.assertIn(resource_path("roles.lead").read_text(encoding="utf-8"), prompt.parts.role)
         self.assertIn(canonical_json('/private/证据".json'), prompt.parts.delivery)
         self.assertNotIn('"input":', prompt.parts.context)

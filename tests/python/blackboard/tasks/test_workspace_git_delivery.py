@@ -264,7 +264,7 @@ class GitDeliveryWorkflowTests(LifecycleTestCase):
             with self.subTest(committed=committed):
                 board = self.board()
                 view, artifact, initial, checkout, seal = self.deliver(
-                    board, committed=committed, disposition="assistance", request_id="committed-" + str(committed))
+                    board, committed=committed, disposition="attention", request_id="committed-" + str(committed))
                 self.assertEqual(artifact["integrationSource"]["kind"], "commits" if committed else "patch")
                 self.assertNotIn("outputCommit", artifact)
                 self.assertNotIn("outputCommit", artifact["cumulativePatch"])
@@ -319,6 +319,45 @@ class GitDeliveryWorkflowTests(LifecycleTestCase):
             board.store.workflow.precheck_result({"attemptId": attempt_id, "status": "failed",
                 "result": {"workspaceSeal": record_reference(self.directory, sealed)}})
         self.assertEqual(refused.exception.code, "WORKSPACE_MANIFEST_CHANGED")
+
+    def test_precheck_judges_the_report_result_own_turn(self):
+        """The settled history reads the report result's own turn; precheck judges the same object."""
+        board = self.board()
+        submitted = self.submit_run(board, {"cwd": str(self.repo), "title": "nested-turn", "task": "Git delivery",
+                                          "checkout": "worktree", "access": "write", "writeScope": ["."]})
+        claimed = self.claim(board, submitted["runId"], request_id="nested-turn-claim")
+        attempt = claimed["claim"]["attempt"]
+        valid = self.turn_record(claimed["claim"])
+        report = {"status": "ok", "processState": {"shutdownConfirmed": True}, "turnResultPath": "/tmp/turn-result.json"}
+        # An object nested under the report's own result key is data, not a
+        # second report: precheck never unwraps it to find another turn.
+        with self.assertRaises(BoardError) as refused:
+            board.store.workflow.precheck_result({"attemptId": attempt["attemptId"], "status": "ok",
+                "shutdownConfirmed": True,
+                "result": {**report, "turn": "not a turn", "result": {"turn": valid}}})
+        self.assertEqual(refused.exception.code, "TURN_INVALID")
+        for smuggled in ({}, {"turn": {"version": 1}}):
+            with self.subTest(smuggled=smuggled):
+                self.assertIsNone(board.store.workflow.precheck_result(
+                    {"attemptId": attempt["attemptId"], "status": "ok", "shutdownConfirmed": True,
+                     "result": {**report, "turn": valid, "result": smuggled}}))
+        # The full boundary imports that same outer turn into the settled history.
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
+        checkout = Path(manifest["path"])
+        (checkout / "tracked.txt").write_text("Worker output\n")
+        git(checkout, "add", ".")
+        git(checkout, "commit", "-qm", "Worker output")
+        seal = workspace.seal(self.directory, manifest, submitted["runId"], attempt["attemptId"])
+        board.call("execution_result", {"attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": "n" * 16, "status": "ok", "terminationReason": "completed",
+            "result": {**report, "turn": valid, "result": {"turn": {"version": 1}},
+                       "workspaceSeal": record_reference(board.directory, seal)},
+            "shutdownConfirmed": True, "exitCode": 0})
+        self.assertEqual(self.view(board, submitted["runId"])["state"], "delivered")
+        with board.store.db.read() as connection:
+            stored = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                                   (attempt["attemptId"],)).fetchone()[0])
+        self.assertEqual(board.store.workflow.result_payload(stored)["turn"], valid)
 
     def test_export_preserves_new_record_and_patch_bytes(self):
         board = self.board()

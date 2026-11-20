@@ -95,11 +95,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         """
         outcome = {"disposition": disposition, "summary": "did the work", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
-        if disposition in ("assistance", "attention"):
+        if disposition == "attention":
             outcome["request"] = {
                 "summary": "please review the failed seal",
                 "attempted": "tried the obvious fix",
-                "neededWork": ["decide the scope"],
+                "neededWork": "decide the scope",
                 "expectedArtifacts": ["a reviewed decision"],
                 "acceptance": "the scope decision is recorded",
             }
@@ -131,18 +131,18 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
 
     def resolution_facts(self, board, run_id, conflict_id, request_id, reply):
         """Read the detailed facts from get and immutable records after a compact action reply."""
-        self.assertFalse(set(reply) - {"runId", "state", "actions", "requestId", "requestKind",
-                                       "nextRequestId", "nextRequestKind", "artifactId", "continuationId",
-                                       "alreadyResponded", "resolutionState", "resolvedFingerprint"})
+        self.assertFalse(set(reply) - {"runId", "state", "actions", "requestId",
+                                       "nextRequestId", "artifactId", "continuationId",
+                                       "alreadyResponded", "resolutionState", "resolvedFingerprint", "continuationBlocked"})
         view = self.view(board, run_id)
         conflict = next(row for row in view["workspaceConflicts"] if row["conflictId"] == conflict_id)
         with board.store.db.read() as connection:
             request = connection.execute(
-                "SELECT decision_json FROM workflow_requests WHERE request_id=?", (request_id,)
+                "SELECT resolution_json FROM workflow_requests WHERE request_id=?", (request_id,)
             ).fetchone()
             row = (connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",
                                       (conflict["artifactId"],)).fetchone() if conflict["artifactId"] else None)
-        result = json.loads(request["decision_json"])["result"]
+        result = json.loads(request["resolution_json"])["result"]
         record = artifact_manifest(board.directory, row) if row is not None else None
         artifact_view = next((item for item in view["artifacts"]
                               if item["artifactId"] == conflict["artifactId"]), None)
@@ -180,10 +180,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         return {**self.view(board, view["runId"]), **reply}
 
     # -- scenarios -----------------------------------------------------------
-    def scoped_failure(self, *, request_id="scope-run", scope=("src",), kind="existing"):
+    def scoped_failure(self, *, request_id="scope-run", scope=("src",), kind="existing", excluded_change=None):
         """One micro-task run whose seal refused tracked and untracked outside changes."""
         board = self.board()
         self.register(board)
+        if excluded_change:
+            (self.repo / excluded_change).write_text("Original excluded contents\n", encoding="utf-8")
         submitted = self.micro_task_submit(board, request_id=request_id, scope=scope, kind=kind)
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
@@ -193,6 +195,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
         (checkout / "outside.txt").write_text("untracked outside\n", encoding="utf-8", newline="\n")
+        if excluded_change:
+            (checkout / excluded_change).write_text("Changed excluded contents\n", encoding="utf-8")
         error = None
         try:
             workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
@@ -262,7 +266,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(manifest["version"], 6)
         self.assertEqual(manifest["integrator"], {"role": "host"})
-        self.assertEqual(view["activeRequest"]["kind"], "attention")
+        self.assertEqual(view["activeRequest"]["reason"]["code"], "workspace-scope-violation")
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["state"], "open")
         self.assertEqual(conflict["blockingPaths"], ["outside.txt", "tracked.txt"])
@@ -598,6 +602,28 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(execution["manifestSha256"], manifest["manifestSha256"])
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
 
+    def test_abandon_with_excluded_changes_blocks_continuation_and_replays(self):
+        board, submitted, _, _, _ = self.scoped_failure(excluded_change="local-cache.txt")
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        answer = {"note": "Preserve the changed excluded file", "input": "Resume after the site is clear"}
+        first = self.resolve(board, view, conflict, "abandon", **answer)
+        self.assertEqual(first["resolutionState"], "open")
+        self.assertIsNotNone(first["artifactId"])
+        self.assertTrue(first["reply"]["continuationBlocked"])
+        self.assertNotIn("continuationId", first["reply"])
+        head = board.store.head()
+        replay = self.resolve(board, view, conflict, "abandon", **answer)
+        self.assertEqual(replay["reply"], {**first["reply"], "alreadyResponded": True})
+        with self.assertRaises(BoardError) as refused:
+            self.resolve(board, view, conflict, "abandon", **{**answer, "input": "Use another plan"})
+        self.assertEqual(refused.exception.code, "CONFLICT")
+        self.assertEqual(board.store.head(), head)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (submitted["runId"],)
+            ).fetchone()[0], 0)
+
     def test_historical_resolution_replays_without_rewriting_sealed_bytes(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="historical-adopt")
         run_id = submitted["runId"]
@@ -892,9 +918,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertFalse(resolved["delivered"])
         self.assertEqual(resolved["state"], "awaiting-host")
 
-    def test_native_assistance_request_survives_as_the_next_boundary(self):
+    def test_native_attention_request_survives_as_the_next_boundary(self):
         board, submitted, claimed, manifest, checkout = self.native_scope_failure(
-            request_id="native-assist", disposition="assistance")
+            request_id="native-attention", disposition="attention")
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
@@ -905,7 +931,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["state"], "awaiting-host")
         self.assertIsNotNone(resolved["nextBoundaryRequestId"])
         self.assertEqual(resolved["activeRequest"]["requestId"], resolved["nextBoundaryRequestId"])
-        self.assertEqual(resolved["activeRequest"]["kind"], "assistance")
+        self.assertEqual(resolved["activeRequest"]["neededWork"], ["decide the scope"])
         self.assertEqual(resolved["activeRequest"]["summary"], "please review the failed seal")
         self.assertEqual(resolved["activeRequest"]["attemptId"], claimed["claim"]["attempt"]["attemptId"])
         with board.store.db.read() as connection:
@@ -938,44 +964,6 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             self.view(board, run_id)
         self.assertEqual(raised.exception.code, "STATE_INTEGRITY")
         self.assertEqual(raised.exception.details["runId"], run_id)
-
-    def test_helper_admission_records_its_own_scope_v1(self):
-        board = self.board()
-        self.register(board)
-        submitted = self.micro_task_submit(board, request_id="helper-scope", scope=("src",))
-        run_id = submitted["runId"]
-        claimed = self.claim(board, run_id, request_id="helper-scope-claim")
-        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
-        native_path(Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
-        seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
-        self.finish_turn(board, claimed, seal, disposition="assistance")
-        view = self.view(board, run_id)
-        self.assertEqual(view["state"], "awaiting-host")
-        approved = board.call("workflow_continue", {
-            "runId": run_id, "requestId": view["activeRequest"]["requestId"],
-            "decision": "approve", "note": "one isolated helper", "autoContinue": True,
-            "helpers": [{
-                "title": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
-                "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
-                "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
-            }],
-        })
-        approved_view = self.view(board, run_id)
-        self.assertEqual(len(approved_view["children"]), 1)
-        child = approved_view["children"][0]["taskId"]
-        child_view = self.view(board, child)
-        self.assertEqual(child_view["scope"]["scopeVersion"], 1)
-        self.assertEqual(child_view["scope"]["writeScope"], ["."])
-        with board.store.db.read() as connection:
-            rows = connection.execute(
-                "SELECT scope_version, note, stopped_evidence_json FROM workflow_scope_versions"
-                " WHERE run_id=? ORDER BY scope_version",
-                (child,),
-            ).fetchall()
-        self.assertEqual([row["scope_version"] for row in rows], [1])
-        self.assertIsNone(rows[0]["note"])
-        self.assertEqual(json.loads(rows[0]["stopped_evidence_json"])["parentRunId"], run_id)
-
 
 if __name__ == "__main__":
     unittest.main()

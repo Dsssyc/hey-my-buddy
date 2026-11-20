@@ -53,7 +53,6 @@ def _view(run: dict, *, outcome: str, started: float, wait_seconds: int,
     }
     if request_id and run.get("workflowState") == "awaiting-host":
         view["requestId"] = request_id
-        view["requestKind"] = request.get("kind") or workflow.get("requestKind")
     if artifact_id:
         view["artifactId"] = artifact_id
     if run.get("workflowShutdown") is not None:
@@ -228,20 +227,18 @@ def conclude_run(
     request = params if isinstance(params, ConcludeRequest) else parse_request("conclude", params)
     wire = dump_request(request)
     wire.pop("waitSeconds", None)
-    owner_id = request.runId
-    target_id = request.targetRunId or owner_id
+    run_id = request.runId
     wait_seconds = request.waitSeconds
     started = clock()
     deadline = started + wait_seconds
     try:
         return service("conclude", wire, state_dir)
     except KeyboardInterrupt:
-        return {"runId": owner_id, "actions": ["get", "conclude"],
+        return {"runId": run_id, "actions": ["get", "conclude"],
                 "cancellationRecorded": None, "conclusionRecorded": None,
                 "shutdownConfirmed": None, "waitedSeconds": round(max(clock() - started, 0.0), 1),
                 "waitSeconds": wait_seconds, "timedOut": False,
-                "error": {"code": "WAIT_ABANDONED", "message": "The initial conclude reply was interrupted"},
-                **({"targetRunId": target_id} if request.targetRunId is not None else {})}
+                "error": {"code": "WAIT_ABANDONED", "message": "The initial conclude reply was interrupted"}}
     except ServiceError as error:
         if error.code != "SHUTDOWN_UNCONFIRMED" or error.details.get("cancellationRecorded") is not True:
             raise
@@ -250,14 +247,12 @@ def conclude_run(
 
     def pending_error(error: dict, *, timed_out: bool = False,
                       conclusion_recorded: bool | None = False) -> dict:
-        result = {"runId": owner_id, "actions": _actions(run) if run is not None else ["get", "conclude"],
+        result = {"runId": run_id, "actions": _actions(run) if run is not None else ["get", "conclude"],
                   "cancellationRecorded": True,
                   "conclusionRecorded": conclusion_recorded,
                   "shutdownConfirmed": _shutdown_confirmed(run) if run is not None else False,
                   "waitedSeconds": round(max(clock() - started, 0.0), 1),
                   "waitSeconds": wait_seconds, "timedOut": timed_out, "error": error}
-        if request.targetRunId is not None:
-            result["targetRunId"] = target_id
         if run is not None:
             result["status"] = run.get("state")
             result["workflowState"] = run.get("workflowState")
@@ -291,7 +286,7 @@ def conclude_run(
                                      timed_out=True)
             if run is None:
                 try:
-                    run = service("task_get", {"runId": target_id}, state_dir)
+                    run = service("task_get", {"runId": run_id}, state_dir)
                 except ServiceError as error:
                     if _upgrade_handover(state_dir, deadline, clock):
                         continue

@@ -35,7 +35,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, _claim, manifest, checkout, _seal, awaiting, _artifact = self.run_worktree(
-            board, request_id="relocate-continue", disposition="assistance")
+            board, request_id="relocate-continue", disposition="attention")
         original_manifest = manifest.copy()
         moved = self._move_repository()
         request = {"runId": submitted["runId"], "requestId": awaiting["activeRequest"]["requestId"],
@@ -211,4 +211,3 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integrations"][0]["target"]["path"], str(moved))
         self.assertEqual(accepted["integrations"][0]["target"]["projectId"], manifest["projectId"])
-

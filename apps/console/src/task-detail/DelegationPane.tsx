@@ -1,8 +1,5 @@
-import { cn } from "cn";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Section } from "./parts";
-import { StateMark } from "@/components/ui/state-mark";
 import { actorText, workflowOwnerText } from "../actor";
 import { taskProject } from "../console-data";
 import { displayTitle } from "../macro-task-display";
@@ -11,16 +8,9 @@ import { Ask } from "./ask";
 import { Fold, LinkButton, Moment, Pane, PaneTitle } from "./parts";
 import type { Context } from "./types";
 
-/** The word and the mark a helper micro task's state has. */
-const HELPER_WORD = {
-  active: { key: "running", mark: "live" }, attention: { key: "attention", mark: "hand" }, succeeded: { key: "done", mark: "done" },
-  failed: { key: "failed", mark: "fail" }, cancelled: { key: "ended", mark: "idle" },
-} as const;
-
 /**
- * The delegation: the task as it was given, where it came from, the helpers it
- * has and the micro tasks it fixes or is fixed by. The one step every micro task
- * has, whether or not the timeline read still holds its row.
+ * The task as delegated, its owner, its owned micro tasks and its repair links.
+ * The delegation is present even when the timeline read has no row for the task.
  */
 export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
   const { t } = useTranslation("taskDetail");
@@ -32,7 +22,7 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
     return row?.fixes === runId ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).text : runId;
   };
   const project = taskProject(task);
-  const parent = task.lineage?.parentRunId ?? null;
+  const leadRunId = task.lineage?.leadOwnership?.leadRunId ?? null;
   const fixes = row?.fixes ?? null;
   const fixedBy = row?.fixedBy ?? [];
   const sender = step.events[0]?.actor;
@@ -47,19 +37,11 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
     <Section name={t("delegation.owner")}>{owner}</Section>
     <Section name={t("delegation.project")}>{project?.label ?? t("delegation.unknownProject")}</Section>
     <Section name={t("delegation.cwd")}><span className="font-mono text-xs">{workflow.cwd ?? task.cwd}</span></Section>
-    {parent && <Section name={t("delegation.parent")}><LinkButton onClick={() => ctx.open(parent)}>{title(parent)}</LinkButton></Section>}
+    {leadRunId && <Section name={t("delegation.parent")}><LinkButton onClick={() => ctx.open(leadRunId)}>{title(leadRunId)}</LinkButton></Section>}
     {workflow.delegationAuthority && <Section name={t("delegation.authority")}>{t("delegation.authorityYes")}</Section>}
-    {workflow.children.some(child => child.role !== "router") && <Section name={t("delegation.helpers")}>
-      <ul className="space-y-1.5">{workflow.children.filter(child => child.role !== "router").map(child => {
-        const word = HELPER_WORD[child.state];
-        return <li key={child.taskId} className="flex flex-wrap items-center gap-x-2">
-          <StateMark kind={word.mark} />
-          <LinkButton onClick={() => ctx.open(child.taskId)}>{title(child.taskId)}</LinkButton>
-          <span className={cn("text-xs", word.mark === "hand" ? "text-hand" : word.mark === "fail" ? "text-fail" : "text-ink2")}>
-            {t(`state.${word.key === "attention" ? (view.lead ? "lead" : "host") : word.key}`)}
-          </span>
-        </li>;
-      })}</ul>
+    {workflow.ownedMicroTasks.length > 0 && <Section name={t("delegation.owned")}>
+      <ul className="space-y-1.5">{workflow.ownedMicroTasks.map(({ runId }) =>
+        <li key={runId}><LinkButton onClick={() => ctx.open(runId)}>{title(runId)}</LinkButton></li>)}</ul>
     </Section>}
     {(fixes || fixedBy.length > 0) && <Section name={t("delegation.fixes")}>
       <ul className="space-y-1.5">

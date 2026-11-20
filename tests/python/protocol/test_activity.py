@@ -423,6 +423,12 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.addCleanup(lambda: (control.stop(), control.join(2)) if control.ident is not None else None)
         return board, client, execution, attempt, directory, control
 
+    def start_forwarding(self, execution):
+        flusher = execution._flusher
+        flusher.start()
+        self.addCleanup(lambda: (flusher.stop(), flusher.join(2)))
+        execution.control.start()
+
     def local_endpoint(self, attempt, control):
         identity = RunIdentity(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
                                generation=attempt["generation"], invocation_id="activity-invocation",
@@ -440,7 +446,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         endpoint = self.local_endpoint(attempt, control)
         publisher = ActivityPublisher(endpoint.publish_activity, min_interval_seconds=0.0)
         first = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
-        control.start()
+        self.start_forwarding(execution)
         self.assertTrue(publisher.publish(first))
         self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == first, 3))
         time.sleep(0.4)
@@ -462,7 +468,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         board, client, execution, attempt, directory, control = self.live_attempt()
         endpoint = self.local_endpoint(attempt, control)
         with mock.patch.object(endpoint, "current_activity", side_effect=BoardError("SERVICE_UNAVAILABLE", "fixture endpoint")) as observation:
-            control.start()
+            self.start_forwarding(execution)
             self.assertTrue(wait_for(lambda: observation.call_count >= 2, 3),
                             "an unavailable observation is retried without inventing progress")
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
@@ -482,28 +488,31 @@ class ExecutionActivityForwarding(BoardTestCase):
         endpoint.publish_activity(payload)
         original = client.progress
         online = threading.Event()
+        attempted = threading.Event()
 
         def progress(*args, **kwargs):
             if not online.is_set():
+                attempted.set()
                 raise BoardError("SERVICE_UNAVAILABLE", "private service is offline")
             return original(*args, **kwargs)
 
         with mock.patch.object(client, "progress", side_effect=progress):
-            control.start()
-            self.assertTrue(wait_for(lambda: execution._hints.get("activity") == payload, 3))
+            self.start_forwarding(execution)
+            self.assertTrue(attempted.wait(3))
+            self.assertEqual(execution._hints.get("activity"), payload)
             self.assertEqual(self.activity_events(client), [])
             self.assertIsNone(control.handle.process.poll())
             online.set()
             self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == payload, 3))
             self.assertEqual(len(self.activity_events(client)), 1)
 
-    def test_invalid_nonce_is_an_explicit_fatal_control_failure(self):
+    def test_invalid_nonce_is_an_explicit_fatal_progress_failure(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
         endpoint = self.local_endpoint(attempt, control)
         payload = {"phase": "tool-running", "eventSeq": 1}
         endpoint.publish_activity(payload)
         execution.nonce = "d" * 32
-        control.start()
+        self.start_forwarding(execution)
         self.assertTrue(wait_for(lambda: control.fatal is not None, 3))
         with self.assertRaises(BoardError) as refused:
             control.raise_fatal()
@@ -514,7 +523,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         board, client, execution, attempt, directory, control = self.live_attempt()
         endpoint = self.local_endpoint(attempt, control)
         first = {"phase": "starting", "eventSeq": 1}
-        control.start()
+        self.start_forwarding(execution)
         endpoint.publish_activity(first)
         self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == first, 3))
         control.implementation.cancel(control.handle)
@@ -530,7 +539,11 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.assertEqual(replacement["generation"], attempt["generation"] + 1)
         second = {"phase": "tool-running", "eventSeq": 2}
         endpoint.publish_activity(second)
-        self.assertTrue(wait_for(lambda: execution._hints.get("activity") == second, 3))
+        self.assertTrue(wait_for(lambda: control.fatal is not None, 3))
+        with self.assertRaises(BoardError) as refused:
+            control.raise_fatal()
+        self.assertEqual(refused.exception.code, "STALE_GENERATION")
+        self.assertEqual(execution._hints.get("activity"), second)
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
         self.assertEqual(len(self.activity_events(client)), 1)
 

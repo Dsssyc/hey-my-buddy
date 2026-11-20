@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import json
+from urllib.parse import quote
 
 from ...protocol.structured_schema import schema_errors
 from ...protocol.task_types import TASK_TYPES
@@ -51,7 +52,11 @@ def _kind(value):
 
 
 def _kind_id(value):
-    return json.dumps(_kind(value), ensure_ascii=False, separators=(",", ":"))
+    parts = _kind(value)
+    if any(not isinstance(part, str) or not part.strip() for part in parts):
+        raise ValueError("Maintenance kind identifier components must be nonblank strings")
+    # quote always leaves tilde unescaped. Encode it to keep the key alphabet fixed.
+    return ":".join(quote(part, safe="-_.").replace("~", "%7E") for part in parts)
 
 
 def _kind_payload(connection, harness, model_id, effort):
@@ -152,11 +157,11 @@ def build_packet(connection) -> dict | None:
         })
     boundaries = defaultdict(list)
     for row in connection.execute(
-        "SELECT run_id,request_id,kind,state,reason_code,summary,created_at,decided_at"
+        "SELECT run_id,request_id,state,reason_code,summary,created_at,decided_at"
         f" FROM workflow_requests WHERE run_id IN ({placeholders})"
         " ORDER BY created_at,request_id", run_ids):
         boundaries[row["run_id"]].append({
-            "requestId": row["request_id"], "kind": row["kind"], "state": row["state"],
+            "requestId": row["request_id"], "state": row["state"],
             "reasonCode": row["reason_code"], "summary": row["summary"],
             "createdAt": row["created_at"], "decidedAt": row["decided_at"],
         })
@@ -236,16 +241,40 @@ def _object(properties):
             "required": list(properties), "additionalProperties": False}
 
 
+def _frozen_kind_id(kind, summary_properties) -> str:
+    """Validate the kindId a sealed packet was written with; forms never rewrite.
+
+    New packets build their kindId from the current percent-encoded form, but a
+    packet already queued by an older installed version is validated in the
+    form it was written with, so its in-flight answer still binds to the same
+    kind triple.
+    """
+    _kind_id(kind)
+    kind_id = kind.get("kindId")
+    if (not isinstance(kind_id, str) or not kind_id.strip() or not kind_id.isprintable()
+            or any(c in kind_id for c in "\"'\r\n")):
+        raise ValueError("Maintenance kindId must be a nonblank printable string without quotes or newlines")
+    if kind_id in summary_properties:
+        raise ValueError("Maintenance packet has a duplicate kindId")
+    return kind_id
+
+
 def answer_schema(packet) -> dict:
     """Use only the JSON Schema keywords supported by structured_call."""
     ids = packet["classificationRunIds"]
     summary_properties = {}
     for kind in packet["kinds"]:
+        kind_id = _frozen_kind_id(kind, summary_properties)
         original = (kind.get("summary") or {}).get("citations") or []
         citation_ids = sorted(set(kind["citationRunIds"]) | set(original))
-        summary_properties[kind["kindId"]] = _object({
+        citations = {"type": "array", "items": {"type": "string"}}
+        if citation_ids:
+            citations["items"]["enum"] = citation_ids
+        else:
+            citations["maxItems"] = 0
+        summary_properties[kind_id] = _object({
             "text": _string(4000),
-            "citations": {"type": "array", "items": {"type": "string", "enum": citation_ids}},
+            "citations": citations,
         })
     schema = _object({
         "newNodes": {"type": "array", "items": _object({
@@ -257,8 +286,7 @@ def answer_schema(packet) -> dict:
             "runId": {"type": "string", "enum": ids},
             "domainNodeId": _string(128),
             "taskType": {"type": "string", "enum": list(TASK_TYPES)}})},
-        "summaries": {"type": "object", "properties": summary_properties,
-                      "required": list(summary_properties), "additionalProperties": False},
+        "summaries": _object(summary_properties),
     })
     if not ids:
         schema["properties"]["classifications"]["maxItems"] = 0
@@ -522,14 +550,14 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
             continue
         cited = item["citations"]
         if len(cited) != len(set(cited)):
-            errors.append(f"summaries[{key}]: duplicate citation")
+            errors.append(f"summaries[{kind_id}]: duplicate citation")
             continue
         if cited:
             cited_placeholders = ",".join("?" for _ in cited)
             existing_citations = {row["run_id"] for row in connection.execute(
                 f"SELECT run_id FROM workflow_runs WHERE run_id IN ({cited_placeholders})", cited)}
             if len(existing_citations) != len(cited):
-                errors.append(f"summaries[{key}]: cited micro task was deleted; rewrite summary")
+                errors.append(f"summaries[{kind_id}]: cited micro task was deleted; rewrite summary")
                 continue
         connection.execute(
             "INSERT INTO kind_summaries(harness,model_id,effort,text,maintenance_run_id) VALUES(?,?,?,?,?)"

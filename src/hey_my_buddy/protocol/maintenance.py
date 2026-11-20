@@ -72,7 +72,7 @@ def discard_orphans(state: Path, active_run_ids, *, namespace="maintenance") -> 
     """Reconcile material left by a service that died before its transaction hooks."""
     root = Path(state) / namespace
     if linked(root):
-        raise BoardError("PRIVATE_PATH_UNSAFE", "Maintenance root must be an ordinary private directory")
+        return
     active = {hashlib.sha256(run_id.encode()).hexdigest() for run_id in active_run_ids}
     for path in native_path(root).glob("*"):
         if path.name not in active:

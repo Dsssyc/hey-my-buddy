@@ -163,6 +163,16 @@ class Schema34To35Tests(unittest.TestCase):
             for label, query in counts.items():
                 self.assertGreater(connection.execute(query).fetchone()[0], 0, label)
             schema_34_35.upgrade(connection)
+            self.assertNotIn('role', {row['name'] for row in connection.execute('PRAGMA table_info(workflow_children)')})
+            for continuation_id in empty_manual:
+                self.assertIsNone(connection.execute('SELECT helper_policy FROM workflow_continuations WHERE continuation_id=?',
+                                                      (continuation_id,)).fetchone()[0])
+            helper_without_children = connection.execute(
+                "SELECT helper_policy FROM workflow_continuations c WHERE kind='helper'"
+                " AND NOT EXISTS(SELECT 1 FROM workflow_children h WHERE h.parent_run_id=c.run_id)"
+            ).fetchall()
+            self.assertTrue(helper_without_children)
+            self.assertTrue(all(row[0] is None for row in helper_without_children))
 
         with mock.patch.dict(upgrade.STEPS, {34: audit_schema_34_stock}):
             self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
@@ -180,18 +190,8 @@ class Schema34To35Tests(unittest.TestCase):
                                    ('workflow_artifacts', {'generation'})):
                 self.assertTrue(removed.isdisjoint({row['name'] for row in connection.execute(
                     f'PRAGMA table_info({table})')}), table)
-            self.assertNotIn('role', {row['name'] for row in connection.execute('PRAGMA table_info(workflow_children)')})
             self.assertEqual({row[0]: {key:value for key,value in json.loads(row[1]).items() if key in ('base','targetRef')}
                               for row in connection.execute('SELECT run_id,execution_workspace_json FROM workflow_runs')},bases)
-            for continuation_id in empty_manual:
-                self.assertIsNone(connection.execute('SELECT helper_policy FROM workflow_continuations WHERE continuation_id=?',
-                                                      (continuation_id,)).fetchone()[0])
-            helper_without_children = connection.execute(
-                "SELECT helper_policy FROM workflow_continuations c WHERE kind='helper'"
-                " AND NOT EXISTS(SELECT 1 FROM workflow_children h WHERE h.parent_run_id=c.run_id)"
-            ).fetchall()
-            self.assertTrue(helper_without_children)
-            self.assertTrue(all(row[0] is None for row in helper_without_children))
             for table, rows in frozen.items():
                 key, column = {'workflow_turns': ('turn_id', 'input_json'),
                                'workflow_artifacts': ('artifact_id', 'manifest_json'),
@@ -266,12 +266,16 @@ class Schema34To35Tests(unittest.TestCase):
                                    'workspace_manifest_sha256=NULL WHERE turn_id=?',
                                    ('{"version":5,"executionWorkspace":{}}', git_turn))
             connection.rollback()
-            request = connection.execute('SELECT request_id FROM workflow_requests LIMIT 1').fetchone()[0]
-            changed = connection.execute("UPDATE workflow_requests SET response_kind='decision',response_id='recorded'"
-                                         " WHERE request_id=? AND response_kind IS NULL", (request,))
+            run = connection.execute('SELECT run_id FROM workflow_runs LIMIT 1').fetchone()[0]
+            connection.execute("INSERT INTO workflow_requests(request_id,run_id,summary,payload_json,state,created_at,updated_at)"
+                               " VALUES('slot-fence',?,'Fixture boundary','{}','open','then','then')", (run,))
+            changed = connection.execute("UPDATE workflow_requests SET state='superseded',"
+                                         "response_kind='continue',response_id='recorded'"
+                                         " WHERE request_id='slot-fence' AND response_kind IS NULL")
             self.assertEqual(changed.rowcount, 1)
-            changed = connection.execute("UPDATE workflow_requests SET response_kind='decision',response_id='other'"
-                                         " WHERE request_id=? AND response_kind IS NULL", (request,))
+            changed = connection.execute("UPDATE workflow_requests SET state='superseded',"
+                                         "response_kind='continue',response_id='other'"
+                                         " WHERE request_id='slot-fence' AND response_kind IS NULL")
             self.assertEqual(changed.rowcount, 0)
             macros = [row[0] for row in connection.execute('SELECT macro_task_id FROM macro_tasks ORDER BY rowid LIMIT 2')]
             connection.execute('UPDATE macro_tasks SET creation_key=? WHERE macro_task_id=?', ('same-key', macros[0]))

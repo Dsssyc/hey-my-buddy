@@ -16,7 +16,7 @@ for (const harness of running ? ["zcode"] : ["codex", "claude", "zcode", "dsh"])
       const source = timeline.spans.find(span => span.kind === "execution")!;
       const row = timeline.rows.find(row => row.runId === source.runId)!;
       timeline.rows = Array.from({ length: 12 }, (_, index) => ({ ...row, runId: `palette-${index}`, parentRunId: null,
-        rootRunId: `palette-${index}`, depth: 0, rootLeadRunId: null, state: running ? "executing" : "accepted",
+        rootRunId: `palette-${index}`, rootLeadRunId: null, state: running ? "executing" : "accepted",
         title: `Buddy ${index + 1}`, titleSource: "title", delegationAuthority: surface === "card" }));
       timeline.spans = timeline.rows.map((row, index) => ({ ...source, runId: row.runId, spanId: `palette-span-${index}`,
         startAt: new Date(Date.parse(source.startAt!) + index * 1000).toISOString(),

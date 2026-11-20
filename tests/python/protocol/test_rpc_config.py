@@ -20,12 +20,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from support import stop_private_service, _child_environment, shutdown_private_rpc, remove_private_test_root
+from support import BoardTestCase, stop_private_service, _child_environment, shutdown_private_rpc, remove_private_test_root
 
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
-from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
 from hey_my_buddy.paths import native_path
 
@@ -574,7 +573,7 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
         state = work / "state"
         state.mkdir(mode=private_dirs.directory_mode())
         fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
-        fixture.work, fixture.state = work, state
+        fixture.work, fixture.directory = work, state
         child = mock.Mock()
         fixture.children = [child]
         with mock.patch(__name__ + ".stop_private_service") as stop, \
@@ -596,7 +595,7 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
         state = work / "state"
         state.mkdir(mode=private_dirs.directory_mode())
         fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
-        fixture.work, fixture.state, fixture.children = work, state, [mock.Mock()]
+        fixture.work, fixture.directory, fixture.children = work, state, [mock.Mock()]
         with mock.patch(__name__ + ".stop_private_service", side_effect=AssertionError("stop unconfirmed")), \
                 mock.patch(__name__ + ".remove_private_test_root") as remove:
             with self.assertRaisesRegex(AssertionError, "stop unconfirmed"):
@@ -605,7 +604,7 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
         self.assertTrue(work.is_dir())
 
 
-class RealDaemonControlTests(unittest.TestCase):
+class RealDaemonControlTests(BoardTestCase):
     """Real command executions leave control RPC responsive while waits are admitted."""
 
     WAIT_CAPACITY = 6
@@ -613,26 +612,24 @@ class RealDaemonControlTests(unittest.TestCase):
     CONTROL_BUDGET_SECONDS = 2.0
 
     def setUp(self):
-        self.work = Path(tempfile.mkdtemp(prefix="hey-my-buddy-rpc-daemon-"))
-        if os.name != "nt":
-            os.chmod(self.work, 0o700)
-        self.state = self.work / "state"
-        self.state.mkdir(mode=private_dirs.directory_mode())
+        super().setUp()
+        self.work = self.directory
+        self.directory = self.work / "state"
         self.children: list[subprocess.Popen] = []
-        self.addCleanup(self._cleanup)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         self.endpoint = self._start_daemon()
-        health = call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)
+        health = call_board("health", {}, endpoint=self.endpoint, state_dir=self.directory)
         self.assertIs(health["rpcProfile"]["overrides"]["pool_enabled"], False)
 
     def _cleanup(self):
-        stop_private_service(self.state)
+        stop_private_service(self.directory)
         for child in self.children:
             child.wait(timeout=15)
         shutdown_private_rpc()
         remove_private_test_root(self.work)
 
     def _start_daemon(self) -> dict:
-        environment = private_environment(self.state, HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
+        environment = private_environment(self.directory, HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
                                           HMB_MAX_CONCURRENT="2")
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")
@@ -643,10 +640,10 @@ class RealDaemonControlTests(unittest.TestCase):
         deadline = time.monotonic() + 30
         health = None
         while time.monotonic() < deadline:
-            endpoint = _read_endpoint(self.state)
+            endpoint = _read_endpoint(self.directory)
             if endpoint:
                 try:
-                    health = _request(endpoint, "health", {}, state_dir=self.state)
+                    health = _request(endpoint, "health", {}, state_dir=self.directory)
                     break
                 except ServiceError:
                     pass
@@ -657,7 +654,7 @@ class RealDaemonControlTests(unittest.TestCase):
         log.close()
         if health is None:
             raise AssertionError(f"daemon never became healthy: {log_path.read_text(encoding="utf-8")[-2000:]}")
-        return _read_endpoint(self.state)
+        return _read_endpoint(self.directory)
 
     def _submit_command(self, request_id: str, *, release: Path | None = None) -> str:
         cwd = self.work / request_id
@@ -667,21 +664,15 @@ class RealDaemonControlTests(unittest.TestCase):
             f"release=pathlib.Path({str(release)!r})\n"
             "release.with_suffix('.started').touch()\n"
             "while not release.exists(): time.sleep(.05)\n")
-        capacity = call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)["capacity"]
-        store = BoardStore(self.state, max_concurrent=capacity["totalLimit"])
-        try:
-            reply = store.task_submit({
-                "requestId": request_id, "task": "private command probe", "cwd": str(cwd),
-                "adapter": "command", "argv": [sys.executable, "-c", script],
-                "expectedSeconds": 30,
-            })
-        finally:
-            store.db.close()
+        reply = self.submit_execution(
+            requestId=request_id, task="private command probe", cwd=str(cwd),
+            adapter="command", argv=[sys.executable, "-c", script], expectedSeconds=30,
+        )
         return reply["task"]["runId"]
 
     def _admission(self) -> dict:
         return call_board("health", {}, endpoint=self.endpoint,
-                          state_dir=self.state)["waitAdmission"]
+                          state_dir=self.directory)["waitAdmission"]
 
     def _await_admitted(self, expected: int) -> None:
         deadline = time.monotonic() + 10
@@ -695,7 +686,7 @@ class RealDaemonControlTests(unittest.TestCase):
 
     def _wait(self, run_id: str) -> dict:
         return call_board("task_wait", {"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS},
-                          endpoint=self.endpoint, state_dir=self.state, resource="wait")
+                          endpoint=self.endpoint, state_dir=self.directory, resource="wait")
 
     def test_admitted_waits_do_not_starve_control_or_command_completion(self):
         release = self.work / "waited.release"
@@ -707,7 +698,7 @@ class RealDaemonControlTests(unittest.TestCase):
                                (cancellable, cancel_release.with_suffix('.started'))):
             while not marker.exists():
                 task = call_board("task_get", {"runId": run_id}, endpoint=self.endpoint,
-                                  state_dir=self.state)["task"]
+                                  state_dir=self.directory)["task"]
                 self.assertNotIn(task["state"], ("completed", "failed", "cancelled"), task)
                 self.assertLess(time.monotonic(), deadline, f"command never reached its gate: {marker.name}")
                 time.sleep(0.05)
@@ -718,7 +709,7 @@ class RealDaemonControlTests(unittest.TestCase):
 
             def control(name: str, operation: str, params: dict) -> dict:
                 begin = time.monotonic()
-                reply = call_board(operation, params, endpoint=self.endpoint, state_dir=self.state)
+                reply = call_board(operation, params, endpoint=self.endpoint, state_dir=self.directory)
                 measured[name] = round(time.monotonic() - begin, 3)
                 return reply
 
@@ -733,7 +724,7 @@ class RealDaemonControlTests(unittest.TestCase):
                 deadline = time.monotonic() + 180
                 while True:
                     final = call_board("task_get", {"runId": quick}, endpoint=self.endpoint,
-                                       state_dir=self.state)["task"]
+                                       state_dir=self.directory)["task"]
                     if final["state"] in ("completed", "failed", "cancelled"):
                         break
                     self.assertFalse(any(wait.done() for wait in waits),

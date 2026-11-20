@@ -40,13 +40,6 @@ class RouterBoundaryTests(unittest.TestCase):
                 self.assertEqual(result["continuationProblem"], changes.get("continuation_problem"))
                 self.assertEqual(result["candidates"], [CANDIDATE])
 
-    def test_owned_descendant_keeps_the_root_and_target_ids(self):
-        result = self.build(run_id="root", target_run_id="nested-child", helper_policy="keep")
-        self.assertEqual(result["runId"], "root")
-        self.assertEqual(result["targetRunId"], "nested-child")
-        self.assertEqual(result["helperPolicy"], "keep")
-        self.assertEqual(result["actions"], ["continue", "cancel"])
-
     def test_retry_time_is_a_fact_without_changing_available_actions(self):
         result = self.build(retry_at=None)
         self.assertIsNone(result["retryAt"])

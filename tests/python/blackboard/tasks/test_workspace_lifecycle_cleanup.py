@@ -14,7 +14,6 @@ import os
 import shutil
 from pathlib import Path
 from unittest import mock
-from blackboard.tasks.test_workflow_real import BUDDY
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
@@ -89,7 +88,6 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertIsNotNone(host_output)
         self.assertNotEqual(host_output["output_manifest_sha256"], initial["manifestSha256"])
         self.assertEqual(latest["snapshotSha256"], host_output["output_snapshot_sha256"])
-
 
 
     def partial_output_recovery(self):
@@ -200,7 +198,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         concluded = board.call('workflow_conclude', {
             'runId': run_id, 'note': 'reviewed the failure and ended this micro task',
         })
-        self.assertEqual(self.view(board,concluded.get('targetRunId',concluded['runId']))['state'], 'concluded')
+        self.assertEqual(self.view(board,concluded['runId'])['state'], 'concluded')
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
         self.assertTrue(native_path(native).exists())
@@ -215,37 +213,6 @@ class CleanupLifecycleTests(LifecycleTestCase):
             connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
                                (run_id,))
         self.assert_service_reclaims_evidence(board, run_id, root)
-
-    def test_borrowed_helpers_private_evidence_uses_its_own_conclusion(self):
-        board = self.board()
-        self.register(board)
-        submitted, _claim, _manifest, checkout, _seal, yielded, _artifact = self.run_worktree(
-            board, request_id='borrowed-evidence', disposition='assistance')
-        run_id = submitted['runId']
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect the shared checkout', 'cwd': str(checkout), 'title': 'evidence-helper', 'buddy': " / ".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
-        helper_id = decided['children'][0]['taskId']
-        claim = self.claim(board, helper_id, request_id='evidence-helper-claim')['claim']
-        attempt = claim['attempt']
-        helper_manifest = turn_manifest(self.directory, claim['turn']['input'])
-        self.assertEqual(helper_manifest['checkoutRoot'], str(checkout))
-        evidence = private_dirs.ensure_private_dir(private_dirs.attempt_root(
-            board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
-        native_path(evidence).write_text('helper failure evidence', encoding="utf-8", newline="\n")
-        seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
-        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)}})
-        concluded = board.call('workflow_conclude', {
-            'runId': run_id, 'targetRunId': helper_id, 'note': 'end the failed helper',
-        })
-        self.assertEqual(self.view(board,concluded.get('targetRunId',concluded['runId']))['state'], 'concluded')
-        self.assertTrue(checkout.exists())
-        self.assertEqual(native_path(evidence).read_text(encoding="utf-8"), 'helper failure evidence')
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
-                               (helper_id,))
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
-        reclaim_native(board.store)
-        self.assertFalse(native_path(evidence).exists())
-        self.assertTrue(checkout.exists())
 
     def test_reclaim_reports_a_checkout_that_vanished_before_the_delete(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanished")
@@ -487,7 +454,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         # No reservation survived either refused claim.
         with board.store.db.read() as connection:
             held = connection.execute(
-                "SELECT COUNT(*) FROM workspace_reservations WHERE checkout_root=? AND state IN ('held','transferred')",
+                "SELECT COUNT(*) FROM workspace_reservations WHERE checkout_root=? AND state='held'",
                 (manifest["checkoutRoot"],),
             ).fetchone()[0]
         self.assertEqual(held, 0)
@@ -614,38 +581,3 @@ class CleanupLifecycleTests(LifecycleTestCase):
         applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
         self.assertFalse(checkout.exists())
-
-    def test_a_helper_that_only_borrowed_the_worktree_cannot_clean_it(self):
-        board = self.board()
-        self.register(board)
-        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
-            board, request_id="helper-owner", disposition="assistance"
-        )
-        run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper on the parent checkout", 'cwd': str(checkout), 'title': "borrow-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "existing", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
-        self.assertEqual(decided["decision"], "approve")
-        helper_id = decided["children"][0]["taskId"]
-        with board.store.db.read() as connection:
-            helper_row = connection.execute(
-                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?", (helper_id,)
-            ).fetchone()
-        helper_manifest = resolve_manifest(self.directory, {"workspaceId": helper_row["workspace_id"],
-                                                            "manifestSha256": helper_row["workspace_manifest_sha256"]})
-        self.assertEqual(helper_manifest["kind"], "existing")
-        self.assertEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
-        self.assertNotEqual(helper_manifest["workspaceId"], manifest["workspaceId"])
-        # A helper run that only borrowed the parent's worktree has no allocation
-        # provenance of its own, even though its cwd is under state/workspaces.
-        owner_view = self.view(board, run_id)
-        # Reclaim always carries the controlling root's Host control, even when it
-        # only proves that a borrowed run owns nothing disposable.
-        raised = self.reclaim(board, owner_view, targetRunId=helper_id)
-        self.assertFalse(raised["removed"])
-        self.assertIn("not-a-managed-worktree", raised["reasons"])
-        with self.assertRaises(BoardError) as raised:
-            workspace_module.cleanup_remove(self.directory, helper_manifest)
-        # The owner's own allocation cannot be removed while the helper holds it.
-        blocked = self.reclaim(board, owner_view)
-        self.assertFalse(blocked["removed"])
-        self.assertIn("workspace-dependency", blocked["reasons"])
-        self.assertTrue(checkout.exists())

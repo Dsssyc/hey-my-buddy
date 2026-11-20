@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.protocol.turn_output import TURN_OUTPUT_VERSION
 
 FINISH_TOOL = "hey_my_buddy_finish_turn"
 
@@ -90,7 +91,7 @@ def provenance_for(harness: str, turn: dict, session_id: str) -> dict:
 def micro_task_record(*, harness: str, task_id: str, attempt_id: str, generation: int,
                     turn_id: str, resume_mode: str, previous_session_id, input_sha256: str,
                     outcome: dict, session_id: str | None = None,
-                    prompt_sha256: str = "a" * 64) -> dict:
+                    prompt_sha256: str = "a" * 64, version: int = TURN_OUTPUT_VERSION) -> dict:
     """One micro-task turn record carrying current synthetic native provenance."""
     turn = {"turnId": turn_id, "input": {"taskId": task_id, "attemptId": attempt_id,
                                          "generation": generation, "turnId": turn_id,
@@ -98,7 +99,7 @@ def micro_task_record(*, harness: str, task_id: str, attempt_id: str, generation
                                          "previousSessionId": previous_session_id}}
     session = session_id or session_id_for(turn)
     return {
-        "version": 1, "taskId": task_id, "attemptId": attempt_id, "generation": generation,
+        "version": version, "taskId": task_id, "attemptId": attempt_id, "generation": generation,
         "turnId": turn_id, "resumeMode": resume_mode, "previousSessionId": previous_session_id,
         "sessionId": session, "promptSha256": prompt_sha256, "inputSha256": input_sha256,
         "outcome": outcome,
@@ -107,7 +108,7 @@ def micro_task_record(*, harness: str, task_id: str, attempt_id: str, generation
 
 
 def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
-                 prompt_sha256: str = "a" * 64) -> dict:
+                 prompt_sha256: str = "a" * 64, version: int = TURN_OUTPUT_VERSION) -> dict:
     """One micro-task turn record for an admitted execution attempt."""
     attempt, turn = claim["attempt"], claim["turn"]
     turn_input = turn.get("input") or {}
@@ -118,5 +119,5 @@ def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
         resume_mode=turn["resumeMode"],
         previous_session_id=turn_input.get("previousSessionId"),
         input_sha256=turn["inputSha256"], outcome=outcome,
-        session_id=session_id, prompt_sha256=prompt_sha256,
+        session_id=session_id, prompt_sha256=prompt_sha256, version=version,
     )

@@ -11,13 +11,13 @@ from hey_my_buddy.blackboard.tasks import macro_tasks, macro_task_summary_cache 
 class HistoryScalingTests(unittest.TestCase):
     def test_cold_list_and_timeline_steps_grow_less_than_quadratically(self):
         # Both boards fit an explicit 100-item project page. Double every relationship,
-        # including helpers and Routers; timeline displays the same four-run group.
+        # including Router executions. The timeline displays the same four-run group.
         # 2.5 leaves room for sorting/index construction, but excludes a 4x scan.
         measurements = []
         with private_state_dir("history-scaling-") as root:
             for size in (20, 40):
                 recipe = fixture_module.Recipe(
-                    macros=size, members_per_macro=4, helpers=size, plain=size,
+                    macros=size, members_per_macro=4, plain=size,
                     pending_roots=size * 3, routed_roots=size, accepted_roots=0,
                     large_results=0, evidence_files=0,
                 )

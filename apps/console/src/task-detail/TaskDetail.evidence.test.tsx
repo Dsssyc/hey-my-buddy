@@ -236,27 +236,54 @@ describe("the turns and what the compact record leaves out", () => {
 });
 
 describe("a Host wait that ends in a continuation", () => {
-  it("shows the request it was for, though the continuation names none", async () => {
+  it("opens the recorded continuation from its request wait", async () => {
     const found = timeline();
-    found.spans.find(item => item.spanId === "h1")!.endAt = at("10:41");
+    Object.assign(found.spans.find(item => item.spanId === "h1")!, { state: "superseded", endAt: at("10:40") });
     found.events = [event(1, "dispatch", at("10:00")), event(3, "continue", at("10:41"), { continuationId: "cont-1" })];
-    open({ timeline: found, step: 4 });
+    const history = audit();
+    Object.assign(history.requests[0]!, { state: "superseded", resolution: null });
+    open({ timeline: found, origin: "span:h1", replies: { audit: history } });
     await ready();
     expect(within(pane()).getByRole("heading", { name: "继续" })).toBeTruthy();
     expect(pane().textContent).toContain("需要读取样例目录");
-    expect(pane().textContent).toContain("批准读取样例目录");
+    expect(pane().textContent).toContain("核对样例目录");
+  });
+
+  it("opens a standalone workspace resolution from its wait without a later turn or marker", async () => {
+    const found = timeline();
+    found.spans = found.spans.slice(0, 4);
+    found.events = found.events.slice(0, 1);
+    found.rows = [row({ state: "awaiting-host" })];
+    const history = audit({ continuations: [] });
+    history.requests[0]!.resolution = {
+      conflictId: "conflict-1", state: "open", action: "abandon", actor: null, note: "保留现场", continuationBlocked: true,
+    };
+    open({ timeline: found, origin: "span:h1", replies: { audit: history } });
+    await ready();
+    const resolution = pane().querySelector("[data-slot=workspace-resolution]");
+    expect(resolution?.textContent).toContain("放弃");
+    expect(resolution?.textContent).toContain("冲突仍未解决");
+    expect(resolution?.textContent).toContain("保留现场");
+    expect(resolution?.textContent).toContain("工作区冲突阻止了续接。");
   });
 
   it("gives each of two requests answered at the same instant its own", async () => {
     const found = timeline();
     found.spans = [found.spans[0]!, found.spans[1]!, found.spans[2]!,
-      span("hA", "host", at("10:30"), at("10:40"), { state: "approved", requestId: "req-A" }),
-      span("hB", "host", at("10:31"), at("10:40"), { state: "approved", requestId: "req-B" }),
+      span("hA", "host", at("10:30"), at("10:40"), { state: "superseded", requestId: "req-A" }),
+      span("hB", "host", at("10:31"), at("10:40"), { state: "superseded", requestId: "req-B" }),
       found.spans[5]!];
     found.events = [event(1, "dispatch", at("10:00")), event(2, "continue", at("10:40"), { continuationId: "c-A" }), event(3, "continue", at("10:40"), { continuationId: "c-B" })];
-    const full = (id: string, summary: string) => ({ requestId: id, kind: "assistance", state: "approved", createdAt: at("10:30"), decidedAt: at("10:40"), childTaskId: null,
-      routing: false, summary, reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null, turnId: "turn-1", decisionId: null, decision: null });
-    const audited = audit({ requests: [full("req-A", "第一个请求"), full("req-B", "第二个请求")] });
+    const full = (id: string, summary: string) => ({ requestId: id, state: "superseded" as const, createdAt: at("10:30"), decidedAt: at("10:40"),
+      routing: false, summary, reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null, turnId: "turn-1", decisionId: null, resolution: null });
+    const continuation = audit().continuations[0]!;
+    const audited = audit({
+      requests: [full("req-A", "第一个请求"), full("req-B", "第二个请求")],
+      continuations: [
+        { ...continuation, continuationId: "c-B", requestId: "req-B", input: "第二条回答" },
+        { ...continuation, continuationId: "c-A", requestId: "req-A", input: "第一条回答" },
+      ],
+    });
     const f = open({ timeline: found, replies: { audit: audited } });
     await ready();
     // The two continuations happened at one instant: the strip shows them as one cluster, and each keeps its own step.
@@ -408,20 +435,6 @@ describe("the title of a turn that runs", () => {
   });
 });
 
-describe("the helpers of a micro task", () => {
-  it("writes the state of each in the fixed words and a mark, not in the board's own", async () => {
-    const children = [["h1", "active"], ["h2", "attention"], ["h3", "succeeded"], ["h4", "failed"], ["h5", "cancelled"]] as const;
-    const found = timeline();
-    found.rows = [row(), ...children.map(([runId]) => row({ runId, title: `协助 ${runId}` }))];
-    open({ step: 1, timeline: found, replies: { workflow: workflow({ children: children.map(([taskId, state]) => ({ taskId, role: "helper", state })) }) } });
-    await ready();
-    const list = within(pane()).getByText("协助 h1").closest("ul")!;
-    const words = [...list.children].map(item => item.textContent);
-    expect(words).toEqual(["协助 h1进行中", "协助 h2等待 Host", "协助 h3已完成", "协助 h4失败", "协助 h5已结束"]);
-    expect(list.textContent).not.toMatch(/active|attention|succeeded|cancelled|delivered/);
-    expect(list.querySelectorAll("[data-slot=state-mark]")).toHaveLength(5);
-  });
-});
 
 describe("the turn that ended otherwise than it should", () => {
   const ended = (record: Record<string, unknown>) => open({ step: 7, replies: { task: task(record), workflow: workflow({ state: "cancelled" }) } });

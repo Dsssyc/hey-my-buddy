@@ -76,7 +76,8 @@ const buddies = [
 function world(sessionPresent = true) {
   return fixture(snapshot({
     routers: [buddies[0].buddyId], sessionPresent,
-    routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
+    routingHealth: health({ available: true, currentRouterBuddyId: buddies[0].buddyId,
+      consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
       recentFailures: [{ decisionId: "decision-1", runId: "run-1", macroTaskId: "run:run-1", title: "Review the routing result", at: AT, code: "router-out-of-bounds" }] }),
     extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
@@ -158,6 +159,10 @@ describe("the roles in English", () => {
     await user.click(screen.getByRole("link", { name: /^Router/ }));
     const roles = await screen.findByRole("region", { name: "Router" });
     expect(chinese()).toEqual([]);
+    const list = within(roles).getByRole("group", { name: "Router list" });
+    const records = within(roles).getByRole("group", { name: "Records" });
+    expect(within(list).queryByRole("status")).toBeNull();
+    expect(within(records).getByText("Failed in a row").parentElement?.textContent).toBe("Failed in a row2");
     await user.click(within(roles).getByRole("button", { name: "Add" }));
     const dialog = await screen.findByRole("dialog");
     // The buddies that cannot serve in the default mode keep the reason in the page's words.
@@ -165,7 +170,6 @@ describe("the roles in English", () => {
     expect(chinese()).toEqual([]);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    // The first buddy of the list refused in the mode: the note names the reason.
     expect(chinese()).toEqual([]);
   });
 

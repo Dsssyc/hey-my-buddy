@@ -22,6 +22,7 @@ _CREDENTIAL_FILES = frozenset({
     'zcode-control.json', 'builtin-provider.json', 'personal-provider.json',
     'auth.json', 'patch.json', 'settings.json', 'inquiry.sock',
 })
+_PUBLICATION_TEMPORARY = re.compile(r'\.(.+)\.[0-9a-f]{32}\.tmp')
 
 
 def linked(path: Path) -> bool:
@@ -211,18 +212,22 @@ def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt
         with os.scandir(native_path(directory)) as entries:
             children = [directory / entry.name for entry in entries]
         for child in children:
+            temporary = _PUBLICATION_TEMPORARY.fullmatch(child.name)
+            credential = child.name in _CREDENTIAL_FILES or (
+                temporary is not None and temporary[1] in _CREDENTIAL_FILES
+            )
             if linked(child):
-                if child.name in _CREDENTIAL_FILES:
+                if credential:
                     if native_path(child).is_junction():
                         native_path(child).rmdir()
                     else:
                         native_path(child).unlink()
                     removed.append(str(child))
             elif native_path(child).is_dir():
-                if child.name in _CREDENTIAL_FILES:
+                if credential:
                     raise BoardError('PRIVATE_PATH_UNSAFE', 'Credential path is a directory', path=str(child))
                 inspect(child)
-            elif child.name in _CREDENTIAL_FILES:
+            elif credential:
                 native_path(child).unlink()
                 removed.append(str(child))
 

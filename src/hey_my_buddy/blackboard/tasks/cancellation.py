@@ -6,8 +6,8 @@ import json
 
 
 def for_run(connection, run_id: str) -> dict | None:
-    # A helper cancelled by its owner has its own event. Never borrow a later
-    # cancellation from an ancestor or a subsequent explicit cancel command.
+    # Historical helper cancellation and resumption retain their original
+    # event names after the former helper becomes an independent micro task.
     row = connection.execute(
         "SELECT seq,payload_json,actor_role,actor_id FROM events WHERE task_id=?"
         " AND kind IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"

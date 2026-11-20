@@ -32,7 +32,6 @@ export default {
     upgrade: "Router 设置需要升级",
     unset: "未指定 Router",
     unusable: "Router 不可用",
-    failing: "路由连续失败",
   },
   /** One clear choice and three buddy preference modes. */
   preference: {

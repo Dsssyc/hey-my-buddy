@@ -471,7 +471,10 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (!macroTaskTimelineSchema.safeParse(data).success) {
         throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
-      return { timeline: data, verifiedAtMs };
+      // Historical timeline events still carry the retired approval and refusal markers.
+      const events = data.events.filter(event =>
+        event?.eventKind !== "workflow.request_approved" && event?.eventKind !== "workflow.request_declined");
+      return { timeline: { ...data, events }, verifiedAtMs };
     },
     async macroTaskGoals(macroTaskId: string, signal?: AbortSignal) {
       const data = await request(`/macro-tasks/${encodeURIComponent(macroTaskId)}/goals`, { signal });

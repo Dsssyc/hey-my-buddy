@@ -187,8 +187,6 @@ def native_tool_call(tool, arguments, *, call_id=None, root=None, turn=None, rel
 
 def outcome_for(disposition="completed"):
     outcome = {"disposition": disposition, "summary": "fixture work completed", "remaining": [], "decisions": [], "artifacts": [], "request": None}
-    if disposition == "assistance":
-        outcome.update(summary="fixture asks for help", request={"summary": "help", "attempted": "examined fixture", "neededWork": "review decision", "expectedArtifacts": [], "acceptance": "decision reviewed"})
     if disposition == "attention":
         outcome.update(summary="native approval needed", request={"summary": "native approval needed", "attempted": "requested fixture permission", "neededWork": "Host decision", "expectedArtifacts": [], "acceptance": "decision recorded"})
     return outcome
@@ -212,12 +210,12 @@ def complete_turn():
         if completed:
             return
         completed = True
-    content, _error = finish("assistance" if case == "assistance" else "completed")
+    content, _error = finish("attention" if case == "needs-help" else "completed")
     if content is None and case in ("attention", "live"):
         # The finish tool refuses completed while a native interactive request is
         # refused or a queued Host question is unanswered; a compliant root
         # retries with the softer outcome in the same turn.
-        content, _error = finish("assistance" if case == "live" else "attention")
+        content, _error = finish("attention")
     tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
     if case == "task-tool":
         # The root uses one real task tool (scheduled + result) before it
@@ -315,12 +313,11 @@ def refusal_turn():
         completed = True
     tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
     if case == "refusal-argument":
-        # The confirmed incident: an invalid finish argument (a non-string
+        # The confirmed incident: an invalid finish argument (the retired
         # suggestedBuddyId) is refused by the MCP with a signed envelope that
         # the native wrapper reports as a successful result. A child relay and a
         # foreign root deliver validly signed refusals first and must be ignored;
-        # the root then corrects itself — an explicit null suggestedBuddyId is
-        # the accepted "no suggestion" spelling — and completes the turn.
+        # the root then drops that field and completes the turn.
         _, envelope = mcp_call("hey_my_buddy_finish_turn", {"disposition": "bogus"})
         child_relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-fin"}
         event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "child-fin", **child_relay},
@@ -332,10 +329,9 @@ def refusal_turn():
         event("tool.updated", {"kind": "result", "toolCallId": "foreign-fin",
                                "result": {"success": True, "truncated": False, "content": envelope}}, root="sess-wrong")
         bad = outcome_for("attention")
-        bad["request"]["suggestedBuddyId"] = 5
+        bad["request"]["suggestedBuddyId"] = None
         native_tool_call("hey_my_buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result=True)
         corrected = outcome_for("attention")
-        corrected["request"]["suggestedBuddyId"] = None
         native_tool_call("hey_my_buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return
@@ -344,10 +340,9 @@ def refusal_turn():
         # the signed envelope must still recover the turn for a corrected
         # same-turn retry.
         bad = outcome_for("attention")
-        bad["request"]["suggestedBuddyId"] = 5
+        bad["request"]["suggestedBuddyId"] = None
         native_tool_call("hey_my_buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result="failed")
         corrected = outcome_for("attention")
-        corrected["request"]["suggestedBuddyId"] = None
         native_tool_call("hey_my_buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return

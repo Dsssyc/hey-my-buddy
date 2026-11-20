@@ -100,17 +100,17 @@ class ExecutionInstallFenceTests(BoardTestCase):
             execution = destination / "src/hey_my_buddy/buddy/runtime/execution.py"
             text = execution.read_text(encoding="utf-8")
             if activity_refusal:
-                error = "            except BoardError as error:\n                if error.code in RETRYABLE:\n"
+                error = "            except BoardError as error:\n                if is_retryable(error):\n"
                 self.assertEqual(text.count(error), 1)
                 observation = ("            except BoardError as error:\n"
                                f"                if error.code == 'UPGRADE_IN_PROGRESS' and pending.get('activity') is not None: Path({str(refused)!r}).touch()\n"
-                               "                if error.code in RETRYABLE:\n")
+                               "                if is_retryable(error):\n")
                 text = text.replace(error, observation, 1)
             else:
-                start = "        receipt = self.execute()\n"
+                start = "            receipt = self.execute()\n"
                 self.assertEqual(text.count(start), 1)
-                gate = (f"        Path({str(ready)!r}).touch()\n"
-                        f"        while not Path({str(release)!r}).exists(): time.sleep(0.05)\n")
+                gate = (f"            Path({str(ready)!r}).touch()\n"
+                        f"            while not Path({str(release)!r}).exists(): time.sleep(0.05)\n")
                 text = text.replace(start, gate + start, 1)
                 error = "                    except BoardError as error:\n"
                 self.assertEqual(text.count(error), 1)

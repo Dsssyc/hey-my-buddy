@@ -169,8 +169,9 @@ for (const w of words) for (const theme of ["dark", "light"] as const) test.desc
 
 test.describe("Router toolbar attention", () => {
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-for (const theme of ["dark", "light"] as const) for (const variant of ["success", "failed", "unset"] as const) test(`shows ${variant} routing attention in ${theme}`, async ({ page }) => {
+for (const theme of ["dark", "light"] as const) for (const variant of ["success", "recorded failures", "unavailable", "unset"] as const) test(`shows ${variant} routing attention in ${theme}`, async ({ page }) => {
   await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+  const dot = variant === "unavailable" || variant === "unset" ? 1 : 0;
   await page.route("**/api/console", async route => {
     const response = await route.fetch(); const snapshot = await response.json();
     if (variant === "success") {
@@ -186,18 +187,40 @@ for (const theme of ["dark", "light"] as const) for (const variant of ["success"
       snapshot.configuration.maintenanceBuddyId = null;
       snapshot.configuration.profileBuddyId = null;
     }
-    if (variant === "failed") snapshot.routingHealth.consecutiveFailures = 2;
+    if (variant === "recorded failures") {
+      snapshot.routingHealth.failureCount = 2;
+      snapshot.routingHealth.consecutiveFailures = 2;
+    }
+    if (variant === "unavailable") {
+      snapshot.routingHealth.available = false;
+      snapshot.routingHealth.currentRouterBuddyId = null;
+      snapshot.routingHealth.reason = { code: "router-all-unavailable", params: {} };
+    }
     await route.fulfill({ response, json: snapshot });
   });
   await open(page, "#buddies/router/routing");
   const nav = page.locator('[data-slot="router-works"]');
   const links = nav.getByRole("link");
+  const buddyTab = page.getByRole("navigation", { name: "主要导航" }).getByRole("link", { name: /^Buddy/ });
+  const routerTab = page.locator('[data-slot="buddy-header"]').getByRole("link", { name: /^Router/ });
+  const list = page.getByRole("group", { name: "Router 列表" });
+  const records = page.getByRole("group", { name: "记录", exact: true });
+  await expect(buddyTab.locator(".bg-bar-hand")).toHaveCount(dot);
+  await expect(routerTab.locator(".bg-hand-mark")).toHaveCount(dot);
   await expect(links).toHaveCount(3);
-  await expect(links.nth(0).locator(".bg-hand-mark")).toHaveCount(variant === "success" ? 0 : 1);
+  await expect(links.nth(0).locator(".bg-hand-mark")).toHaveCount(dot);
   await expect(links.nth(1).locator(".bg-hand-mark")).toHaveCount(0);
   await expect(links.nth(2).locator(".bg-hand-mark")).toHaveCount(0);
+  if (variant === "recorded failures") {
+    await expect(records.getByText("连续失败", { exact: true }).locator("..")).toHaveText(/连续失败\s*2$/);
+    await expect(list.getByRole("status")).toHaveCount(0);
+  }
+  if (variant === "unavailable") {
+    await expect(list.getByRole("status")).toHaveText("列表中没有可担任 Router 的 buddy。");
+    await expect(records.getByText("列表中的 Router 当前均不可用。", { exact: true })).toBeVisible();
+  }
   for (const link of await links.all()) await expect(link).not.toContainText(/最近|未设置|Latest|Not set|deepseek|dsh/);
-  if (variant !== "success") {
+  if (dot) {
     const description = (await links.first().getAttribute("aria-description"))!;
     const [work, reason] = description.split("\n");
     expect(work).toBe("在路由边界内，为一个微任务选择 Worker buddy。");

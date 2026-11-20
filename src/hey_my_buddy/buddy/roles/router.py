@@ -50,8 +50,9 @@ Distinguish ability evidence from infrastructure failures and work stopped for o
 reasons. State when evidence is missing; do not invent strengths or weaknesses.
 Do not list completed tasks. Who the Host chose to delegate to is a selection,
 not evidence of ability.
-The summaries object is keyed by the supplied kindId strings; each value has text
-and citations. The blackboard records every task read, including tasks not cited.
+Use each supplied kindId exactly as written as a key in summaries. Each value has
+text and citations. The blackboard records every task read, including tasks not
+cited.
 Only cite that kind's citationRunIds or its existing summary's citations. Do not write
 sample counts or rates into prose: the program calculates and displays them.
 Return the supplied JSON Schema. The blackboard saves valid entries immediately;

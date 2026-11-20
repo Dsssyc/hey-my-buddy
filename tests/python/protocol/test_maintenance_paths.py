@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,11 +18,19 @@ class MaintenancePathTests(unittest.TestCase):
         self.state = Path(directory.name)
         self.run = self.state / "maintenance" / hashlib.sha256(b"run").hexdigest()
 
+    def symlink(self, link: Path, target: Path, *, target_is_directory: bool = False):
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except OSError as error:
+            if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows symlink privilege is unavailable")
+            raise
+
     def test_publish_and_read_refuse_linked_content_directory(self):
         outside = self.state / "outside"
         outside.mkdir()
         root = self.run.parent
-        root.symlink_to(outside, target_is_directory=True)
+        self.symlink(root, outside, target_is_directory=True)
         reference = {"sha256": "0" * 64}
         try:
             with self.assertRaises(BoardError) as raised:
@@ -35,7 +44,7 @@ class MaintenancePathTests(unittest.TestCase):
             root.unlink()
 
         root.mkdir()
-        self.run.symlink_to(outside, target_is_directory=True)
+        self.symlink(self.run, outside, target_is_directory=True)
         try:
             with self.assertRaises(BoardError) as raised:
                 maintenance.publish(self.state, "run", {"value": 1})
@@ -50,7 +59,7 @@ class MaintenancePathTests(unittest.TestCase):
     def test_discard_checks_only_the_item_it_removes(self):
         material = self.state / "private-material"
         material.mkdir()
-        self.run.parent.symlink_to(material, target_is_directory=True)
+        self.symlink(self.run.parent, material, target_is_directory=True)
         self.run.mkdir()
         reference = {"sha256": "0" * 64}
         file = self.run / (reference["sha256"] + ".json")
@@ -68,12 +77,44 @@ class MaintenancePathTests(unittest.TestCase):
         outside.write_text("retained", encoding="utf-8")
         reference = {"sha256": "0" * 64}
         file = self.run / (reference["sha256"] + ".json")
-        file.symlink_to(outside)
+        self.symlink(file, outside)
         with self.assertRaises(BoardError) as raised:
             maintenance.discard_reference(self.state, "run", reference)
         self.assertEqual(raised.exception.code, "PRIVATE_PATH_UNSAFE")
         self.assertTrue(file.is_symlink())
         self.assertEqual(outside.read_text(encoding="utf-8"), "retained")
+
+    def test_discard_orphans_skips_a_missing_or_linked_namespace(self):
+        root = self.run.parent
+        maintenance.discard_orphans(self.state, [])
+        self.assertFalse(root.exists())
+        outside = self.state / "outside"
+        content = outside / self.run.name
+        content.mkdir(parents=True)
+        self.symlink(root, outside, target_is_directory=True)
+        maintenance.discard_orphans(self.state, [])
+        self.assertTrue(root.is_symlink())
+        self.assertTrue(content.is_dir())
+
+    def test_discard_orphans_removes_only_inactive_trees(self):
+        self.run.mkdir(parents=True)
+        orphan = maintenance.publish(self.state, "orphan", "stale")
+        directory = self.run.parent / hashlib.sha256(b"orphan").hexdigest()
+        self.assertTrue((directory / (orphan["sha256"] + ".json")).is_file())
+        maintenance.discard_orphans(self.state, ["run"])
+        self.assertTrue(self.run.is_dir())
+        self.assertFalse(directory.exists())
+
+    def test_discard_orphans_refuses_a_linked_child(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        self.run.parent.mkdir()
+        self.symlink(self.run, outside, target_is_directory=True)
+        with self.assertRaises(BoardError) as raised:
+            maintenance.discard_orphans(self.state, [])
+        self.assertEqual(raised.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertTrue(self.run.is_symlink())
+        self.assertTrue(outside.is_dir())
 
 
 if __name__ == "__main__":

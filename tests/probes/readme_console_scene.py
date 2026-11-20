@@ -141,15 +141,14 @@ def configure(p: ModuleType, language: str) -> None:
     samples = task("readme-samples", "Validate the sample corpus", "核对样例语料", p.instant(8, 17),
                    buddy=codex, result=True, continuation_count=1)
     dispatch(samples)
-    execution(samples, p.instant(8, 18), p.instant(8, 22), codex, disposition="assistance")
+    execution(samples, p.instant(8, 18), p.instant(8, 22), codex, disposition="attention")
     samples["spans"].append(p.span("host:readme-corpus", "host", p.instant(8, 22), p.instant(8, 30),
-        "approved", request_id="readme-corpus", request_kind="assistance",
+        "superseded", request_id="readme-corpus",
         summary=text("Confirm the public sample licence.", "确认公开样例的许可。")))
     aid = execution(samples, p.instant(8, 31), p.instant(8, 38), codex)
     samples["continuations"].append(p.continuation("readme-corpus-next", aid,
         text("Use the public CC0 corpus.", "使用公开的 CC0 语料。"), request_id="readme-corpus", created=p.instant(8, 30)))
-    samples["markers"] += [p.marker(p.instant(8, 30), "decide", actor=host, request_id="readme-corpus", decision="approve"),
-                           p.marker(p.instant(8, 30), "continue", actor=host, continuation_id="readme-corpus-next")]
+    samples["markers"].append(p.marker(p.instant(8, 30), "continue", actor=host, continuation_id="readme-corpus-next"))
     accept(samples, p.instant(8, 39))
 
     fix = task("readme-corpus-fix", "Fix corpus decoding", "修正语料解码", p.instant(9, 7),
@@ -163,13 +162,13 @@ def configure(p: ModuleType, language: str) -> None:
     docs = task("readme-guide", "Write the migration guide", "编写迁移指南", p.instant(9, 20),
                 buddy=claude, state="awaiting-host", category="host", result=True)
     dispatch(docs)
-    execution(docs, p.instant(9, 21), p.instant(9, 33), claude, disposition="assistance")
+    execution(docs, p.instant(9, 21), p.instant(9, 33), claude, disposition="attention")
     question = text("Confirm the default index location.", "确认默认的索引位置。")
     docs["activeRequest"] = {**p.ACTIVE_REQUEST, "requestId": "readme-guide-location", "createdAt": p.instant(9, 33),
         "summary": question, "attempted": text("Checked the configuration examples.", "已核对配置示例。"),
         "neededWork": [question], "acceptance": text("Record the default location.", "记录默认位置。")}
     docs["spans"].append(p.span("host:readme-guide-location", "host", p.instant(9, 33), None, "open",
-        request_id="readme-guide-location", request_kind="assistance", summary=question))
+        request_id="readme-guide-location", summary=question))
 
     live = task("preview-run-a3", "Run the search regression", "运行搜索回归", p.instant(9, 34),
                 buddy=codex, state="executing", status="running", category="active", shutdown_confirmed=False)
@@ -228,7 +227,7 @@ def configure(p: ModuleType, language: str) -> None:
         entry["cwd"] = f"~/checkouts/{entry['runId']}"
         entry["requestAttempted"] = text("Checked the public sample licence.", "已核对公开样例的许可。")
         entry["requestNeededWork"] = [text("Confirm the CC0 corpus.", "确认 CC0 语料。")]
-        entry["requestAcceptance"] = text("Use the approved corpus in the regression.", "在回归中使用已批准的语料。")
+        entry["requestAcceptance"] = text("Use the public CC0 corpus in the regression.", "在回归中使用公开的 CC0 语料。")
         entry["timelineSummary"] = text("Evidence ready for review.", "证据已交回，等待核对。")
         for artifact in entry["artifacts"]:
             artifact["createdAt"] = next(item["finishedAt"] for item in entry["attempts"]

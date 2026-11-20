@@ -11,7 +11,7 @@ from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.dsh.protocol import NativeError, RootTurnEvidence
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+from hey_my_buddy.protocol.turn_output import validate_outcome
 
 IDENTITY = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"}
 

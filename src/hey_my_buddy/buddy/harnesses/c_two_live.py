@@ -88,9 +88,13 @@ class CTwoLiveEndpoint:
     for replay and conflict checks over the run's inquiry budget.
     """
 
-    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities):
+    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, *,
+                 event_seq_offset: int = 0):
+        if isinstance(event_seq_offset, bool) or not isinstance(event_seq_offset, int) or event_seq_offset < 0:
+            raise ValueError("event_seq_offset must be a nonnegative integer")
         self._identity = identity
         self._capabilities = capabilities
+        self._event_seq_offset = event_seq_offset
         self._lock = threading.RLock()
         self._queue: queue.Queue[tuple[LiveRequest, _PendingRequest]] = \
             queue.Queue(maxsize=MAX_INQUIRIES_PER_RUN)
@@ -203,6 +207,9 @@ class CTwoLiveEndpoint:
         candidate only when it advances the projection — an identical repeat is
         idempotent and an older receipt never replaces a newer one.
         """
+        if (self._event_seq_offset and isinstance(payload, Mapping)
+                and type(seq := payload.get("eventSeq")) is int and seq >= 0):
+            payload = {**payload, "eventSeq": seq + self._event_seq_offset}
         normalized = activity_protocol.normalize_activity(payload)
         with self._lock:
             previous = self._activity.value if self._activity is not None else None

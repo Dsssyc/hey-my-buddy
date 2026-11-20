@@ -168,7 +168,7 @@ class LeadStopPreviewTests(unittest.TestCase):
                        if item['macroTaskId'] == preview.MACRO_C)
         self.assertEqual(summary['state'], 'host')
         self.assertEqual({key: summary['counts'][key] for key in ('host', 'failed', 'ended', 'accepted')},
-                         {'host': 2, 'failed': 1, 'ended': 5, 'accepted': 2})
+                         {'host': 2, 'failed': 2, 'ended': 5, 'accepted': 2})
         filtered = preview.macro_task_timeline({'macroTaskId': preview.MACRO_C, 'filter': 'host'}, 'normal')
         self.assertEqual({row['runId'] for row in filtered['rows']}, {'preview-run-d2', 'preview-run-d3'})
         self.assertEqual({row['category'] for row in filtered['rows']}, {'host'})
@@ -207,27 +207,19 @@ class LeadStopPreviewTests(unittest.TestCase):
     def test_preview_root_stop_states_match_the_board_host_filter(self):
         from hey_my_buddy.blackboard.tasks.macro_tasks import _state
         for owned in (False, True):
-            for helper in (False, True):
-                for run_state in ('awaiting-host', 'failed', 'cancelled'):
-                    for status in ('queued', 'running', 'cancelling', 'reconciliation-needed', 'failed', 'cancelled'):
-                        root = preview.run('matrix-root', project='alpha', title='root', title_source='title', task_text='root',
-                                           created=preview.instant(1, 0), updated=preview.instant(1, 1), state=run_state,
-                                           status=status, category='ended', buddy=None,
-                                           lead_owner=('lead', 'lead-turn') if owned else None)
-                        rows = [root]
-                        if helper:
-                            rows.append(preview.run('matrix-child', project='alpha', title='helper', title_source='title',
-                                                    task_text='helper', created=preview.instant(1, 0), updated=preview.instant(1, 1),
-                                                    state=run_state, status=status, category='ended', buddy=None, parent='matrix-root'))
-                        indexed = preview.index_runs(rows)
-                        entry = indexed['runs']['matrix-child' if helper else 'matrix-root']
-                        self.assertEqual(entry['lineage']['rootLeadRunId'], 'lead' if owned else None)
-                        expected = _state({'run_state': run_state, 'state': status,
-                                           'root_lead_run_id': 'lead' if owned else None,
-                                           'child_parent_run_id': 'matrix-root' if helper else None,
-                                           'accepted_at': None, 'decision_id': None, 'adapter': 'codex',
-                                           'micro_task_run_id': entry['runId'], 'review_ready': 0})
-                        self.assertEqual(entry['category'], expected, (owned, helper, run_state, status))
+            for run_state in ('awaiting-host', 'failed', 'cancelled'):
+                for status in ('queued', 'running', 'cancelling', 'reconciliation-needed', 'failed', 'cancelled'):
+                    root = preview.run('matrix-root', project='alpha', title='root', title_source='title', task_text='root',
+                                       created=preview.instant(1, 0), updated=preview.instant(1, 1), state=run_state,
+                                       status=status, category='ended', buddy=None,
+                                       lead_owner=('lead', 'lead-turn') if owned else None)
+                    entry = preview.index_runs([root])['runs']['matrix-root']
+                    self.assertEqual(entry['lineage']['rootLeadRunId'], 'lead' if owned else None)
+                    expected = _state({'run_state': run_state, 'state': status,
+                                       'root_lead_run_id': 'lead' if owned else None,
+                                       'accepted_at': None, 'decision_id': None, 'adapter': 'codex',
+                                       'micro_task_run_id': entry['runId'], 'review_ready': 0})
+                    self.assertEqual(entry['category'], expected, (owned, run_state, status))
 
     def test_lead_stop_is_attributed_in_the_execution_event_and_cancellation(self):
         view = preview.workflow_get({"runId": "preview-run-b6"})

@@ -2,7 +2,6 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
-import type { MacroTaskTimeline } from "../src/macro-task-types";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -16,31 +15,16 @@ async function middle(node: Locator) {
   return box.x + box.width / 2;
 }
 
-test("shares one vertical axis per tree level in the timeline and detail list", async ({ page }) => {
+test("shares the Lead lane vertical axis in the timeline and detail list", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
-  await page.route(`**/api/macro-tasks/${B}/timeline*`, async route => {
-    const response = await route.fetch();
-    const timeline = await response.json() as MacroTaskTimeline;
-    const parent = timeline.rows.find(row => row.runId === "preview-run-b4")!;
-    const ownHelper = timeline.rows.find(row => row.runId === "preview-run-b1-h1")!;
-    timeline.rows.splice(timeline.rows.indexOf(parent) + 1, 0, { ...ownHelper, runId: "axis-helper", parentRunId: parent.runId,
-      rootRunId: parent.runId, rootLeadRunId: parent.rootLeadRunId, depth: 1, title: "Axis helper", titleSource: "title" });
-    timeline.totals.rows++; timeline.totals.allRows++;
-    timeline.macroTask.counts.helpers++; timeline.macroTask.matchingRuns++;
-    await route.fulfill({ response, json: timeline });
-  });
   await open(page, `#tasks/${B}`);
   const axes = async (slot: "timeline-lane" | "detail-lane") => {
     const lane = page.locator(`[data-slot=${slot}]`).filter({ has: page.locator('[data-key="row:preview-run-b3"]') });
     const axis = await middle(lane.locator('[data-slot=lane-toggle] [data-slot=disclosure]'));
     const member = lane.locator('[data-key="row:preview-run-b4"]');
-    const helper = lane.locator('[data-key="row:axis-helper"]');
-    for (const node of [member.locator('[data-slot=lane-guide]'), member.locator('[data-slot=row-state-edge]'), helper.locator('[data-slot=lane-guide][data-level="1"]')]) {
+    for (const node of [member.locator('[data-slot=lane-guide]'), member.locator('[data-slot=row-state-edge]')]) {
       expect(await middle(node)).toBeCloseTo(axis, 1);
-    }
-    for (const node of [helper.locator('[data-slot=lane-guide][data-level="2"]'), helper.locator('[data-slot=row-state-edge]')]) {
-      expect(await middle(node)).toBeCloseTo(axis + 18, 1);
     }
   };
   await axes("timeline-lane");

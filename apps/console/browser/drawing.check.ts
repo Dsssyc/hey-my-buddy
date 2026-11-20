@@ -18,7 +18,7 @@ function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
     reminders: null, inquiries: kind === "execution" ? [] : null, ...extra,
   });
   timeline.observedAt = at("09:31");
-  timeline.rows = timeline.rows.slice(0, 5).map((row, index) => ({ ...row, title: titles[index]!, titleSource: "title", parentRunId: null, rootRunId: row.runId, depth: 0, kind: "micro-task",
+  timeline.rows = timeline.rows.slice(0, 5).map((row, index) => ({ ...row, title: titles[index]!, titleSource: "title", rootRunId: row.runId, kind: "micro-task",
     state: index === 0 ? "accepted" : index === 3 ? "executing" : "delivered", status: index === 3 ? "running" : "completed", category: index === 0 ? "ended" : index === 3 ? "active" : "review",
     shutdownConfirmed: index !== 3, acceptedAt: index === 0 ? at("09:08") : null, reviewRejectedAt: null, reviewRejectionNote: null }));
   timeline.spans = [piece(0, "foundation", "execution", "06:00", "06:04"),
@@ -31,7 +31,7 @@ function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
   const event = timeline.events[0]!;
   timeline.events = [{ ...event, seq: 1, runId: ids[0]!, kind: "accept", at: at("09:08"), verdict: "accepted", note: "Review passed" }];
   timeline.totals = { rows: 5, allRows: 5, spans: timeline.spans.length, events: timeline.events.length };
-  timeline.macroTask = { ...timeline.macroTask, title: "控制台前端重建", rootRunIds: ids, counts: { ...timeline.macroTask.counts, roots: 5, helpers: 0, active: 1, host: 0, review: 3, accepted: 1, ended: 1 } };
+  timeline.macroTask = { ...timeline.macroTask, title: "控制台前端重建", rootRunIds: ids, counts: { ...timeline.macroTask.counts, roots: 5, active: 1, host: 0, review: 3, accepted: 1, ended: 1 } };
   return timeline;
 }
 
@@ -214,7 +214,7 @@ test.describe("inquiry beside a short wait", () => {
       const data = comparison(await response.json() as MacroTaskTimeline);
       const last = data.spans.find(span => span.spanId === "repair")!;
       last.endAt = last.inquiries![0]!.createdAt;
-      data.spans.push({ ...last, spanId: "short-wait", kind: "host", startAt: last.endAt, endAt: new Date(Date.parse(last.endAt!) + 60000).toISOString(), state: "approved", inquiries: null, expectedSeconds: null, reminders: null });
+      data.spans.push({ ...last, spanId: "short-wait", kind: "host", startAt: last.endAt, endAt: new Date(Date.parse(last.endAt!) + 60000).toISOString(), state: "resolved", inquiries: null, expectedSeconds: null, reminders: null });
       data.totals.spans = data.spans.length;
       data.rows[4] = { ...data.rows[4]!, state: "accepted", category: "ended", acceptedAt: null };
       await route.fulfill({ response, json: data });

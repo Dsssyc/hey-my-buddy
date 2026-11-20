@@ -46,7 +46,8 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
-from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
+from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
@@ -242,8 +243,8 @@ class FastSeamTests(NativeRunCase):
 
     def test_session_open_obeys_the_router_budget(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/new:1.5"]
-        result = run(self.fast_request("prompt", timeout=1),
+        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/new:8.0"]
+        result = run(self.fast_request("prompt", timeout=4),
                      observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, "deadline")
@@ -1641,11 +1642,11 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(methods.count('session/close'), 1)
 
     def test_initialize_obeys_the_discovery_budget(self):
-        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "initialize:1.5"]
+        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "initialize:8.0"]
         with self.assertRaises(native_run.NativeError) as caught:
             native_run.run_discovery(
                 cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
-                native_root=self.root, timeout_seconds=1, cancelled=lambda: False)
+                native_root=self.root, timeout_seconds=4, cancelled=lambda: False)
         self.assertEqual(caught.exception.code, "deadline")
         methods = [entry.get("raw", {}).get("method") for entry in self.agent_log()
                    if entry.get("dir") == "in"]

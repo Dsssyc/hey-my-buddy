@@ -65,9 +65,9 @@ def argv_value(flag):
 def outcome(case):
     request = None
     disposition = "completed"
-    if case == "assistance":
-        disposition = "assistance"
-        request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
+    if case == "attention":
+        disposition = "attention"
+        request = {"summary": "Need help", "attempted": "Inspected source", "neededWork": "Check dependency",
                    "expectedArtifacts": [], "acceptance": "Dependency verified"}
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",

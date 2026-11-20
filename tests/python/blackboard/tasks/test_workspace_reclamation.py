@@ -7,7 +7,7 @@ from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
-from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from support import occupied_directory
 
 
@@ -430,13 +430,13 @@ class ReclamationTests(LifecycleTestCase):
             with occupied_directory(checkout) as child:
                 processes.return_value = ([psutil.Process(child.pid)], True)
                 maintenance.run()
-                self.assertEqual(scan.call_count, 2)
+                self.assertEqual(scan.call_count, 1)
                 self.assertTrue(checkout.exists())
                 self.assertEqual(board.store.service_issues(), [])
                 entry = maintenance._allocation_entry(checkout.parent)
             self.assertEqual(maintenance._allocation_entry(checkout.parent), entry)
             maintenance.run()
-            self.assertEqual(scan.call_count, 3)
+            self.assertEqual(scan.call_count, 2)
         self.assertFalse(checkout.parent.exists())
         self.assertTrue(static_directory.exists())
         self.assertEqual(board.store.service_issues(), [])
@@ -587,46 +587,6 @@ class ReclamationTests(LifecycleTestCase):
             self.assertTrue(Path(second['checkoutRoot']).exists())
         self.assertEqual(board.store.service_issues(), [])
 
-    def test_failed_or_cancelled_borrower_uses_its_concluded_parents_retention_time(self):
-        from support import FakeClock
-        from hey_my_buddy import private_dirs
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
-        from blackboard.tasks.test_workflow_real import BUDDY
-        for terminal in ('failed', 'cancelled'):
-            with self.subTest(terminal=terminal):
-                clock = FakeClock()
-                board = self.board(clock=clock)
-                submitted, _, _, checkout, _, yielded, _ = self.run_worktree(
-                    board, request_id='parent-' + terminal, disposition='assistance')
-                decided = self.continue_run(board, {'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect shared files', 'cwd': str(checkout), 'title': 'borrower-' + terminal, 'buddy': " / ".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
-                child_id = decided['children'][0]['taskId']
-                if terminal == 'failed':
-                    child = self.claim(board, child_id, request_id='borrower-failed-claim')['claim']
-                    attempt = child['attempt']
-                    seal = workspace.seal(board.directory, turn_manifest(board.directory, child['turn']['input']),
-                                          child_id, attempt['attemptId'])
-                    board.call('execution_result', {
-                        'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16,
-                        'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1,
-                        'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)},
-                    })
-                root = private_dirs.ensure_private_dir(private_dirs.micro_task_root(board.directory, 'dsh', child_id))
-                (root / 'failed-evidence.log').write_text('retained', encoding='utf-8')
-                board.call('workflow_cancel', {'runId': submitted['runId']})
-                board.call('workflow_conclude', {'runId': submitted['runId'], 'note': 'Ended the parent'})
-                reclaim_native(board.store)
-                self.assertTrue(root.exists())
-                clock.advance(3 * 86400)
-                reclaim_native(board.store)
-                self.assertFalse(root.exists())
-                with board.store.db.read() as connection:
-                    row = connection.execute('SELECT state FROM workflow_runs WHERE run_id=?', (child_id,)).fetchone()
-                    self.assertEqual(row['state'], 'concluded')
-                    conclusion = connection.execute(
-                        'SELECT execution_status FROM workflow_host_conclusions WHERE run_id=?', (child_id,),
-                    ).fetchone()
-                    self.assertIn(conclusion['execution_status'], ('failed', 'cancelled'))
-
     def test_shell_with_a_live_request_is_retained_until_its_task_has_gone(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
@@ -716,6 +676,122 @@ class ReclamationTests(LifecycleTestCase):
                 maintenance.run()
                 self.assertFalse(directory.exists())
                 self.assertEqual(board.store.service_issues(), [])
+
+    def test_unreadable_manifest_does_not_block_other_orphan_allocations(self):
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('unreadable-manifest', 'reclaimable-manifest')]
+        # The manifest and fixed refs still need reclamation after checkout removal.
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        unreadable, reclaimable = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        read_record = workspace._record
+
+        def read_with_denial(path):
+            if path == unreadable / 'manifest.json':
+                raise PermissionError(errno.EACCES, 'fixture unreadable manifest', str(path))
+            return read_record(path)
+
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, '_record', side_effect=read_with_denial):
+            maintenance.run()
+            self.assertTrue(unreadable.is_dir())
+            self.assertFalse(reclaimable.exists())
+            issue, = board.store.service_issues()
+            self.assertEqual((issue['stage'], issue['code']), ('allocation-reclamation', 'PermissionError'))
+            self.assertIn('fixture unreadable manifest', issue['message'])
+            with self.assertRaisesRegex(PermissionError, 'fixture unreadable manifest'):
+                reclamation.allocation_inventory(board.store, [unreadable])
+
+        maintenance.run()
+        self.assertFalse(unreadable.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_unreadable_request_defers_only_its_own_candidate(self):
+        """One unreadable request.json must not abort the other candidates' round.
+
+        The unlocked pre-read runs before any candidate is yielded, so a
+        PermissionError there used to break the whole generator and every
+        allocation after it lost its round. The unreadable candidate is now
+        deferred to its own locked re-read, which reports the failure through
+        its candidate while the healthy ones before and after it are reclaimed.
+        """
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('unreadable-request', 'reclaimable-before', 'reclaimable-after')]
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        unreadable, before, after = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        read_record = workspace._record
+
+        def read_with_denial(path):
+            if path == unreadable / 'request.json':
+                raise PermissionError(errno.EACCES, 'fixture unreadable request', str(path))
+            return read_record(path)
+
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, '_record', side_effect=read_with_denial):
+            maintenance.run()
+            self.assertFalse(before.exists())
+            self.assertFalse(after.exists())
+            self.assertTrue(unreadable.is_dir())
+            issue, = board.store.service_issues()
+            self.assertEqual((issue['stage'], issue['code']), ('allocation-reclamation', 'PermissionError'))
+            self.assertIn('fixture unreadable request', issue['message'])
+            with self.assertRaisesRegex(PermissionError, 'fixture unreadable request'):
+                reclamation.allocation_inventory(board.store, [unreadable])
+
+        maintenance.run()
+        self.assertFalse(unreadable.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_deeply_nested_record_retains_corrupt_candidate_in_fixed_order(self):
+        from contextlib import closing
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('healthy-before', 'deep-manifest', 'deep-request', 'healthy-after')]
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        before, deep_manifest, deep_request, after = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        nested = '[' * 2000 + ']' * 2000
+        (deep_manifest / 'manifest.json').write_text(nested, encoding='utf-8')
+        (deep_request / 'request.json').write_text(nested, encoding='utf-8')
+
+        ordered = (before, deep_manifest, deep_request, after)
+        with closing(reclamation.allocation_records(board.store, ordered)) as records:
+            observed = [(item['directory'], list(item['reasons'])) for item in records]
+        self.assertEqual(observed, [
+            (before, []),
+            (deep_manifest, ['allocation-unproven']),
+            (deep_request, ['allocation-unproven']),
+            (after, []),
+        ])
+        inventory = reclamation.allocation_inventory(board.store, ordered)
+        self.assertEqual([(item['directory'], item['reasons']) for item in inventory], [
+            (deep_manifest, ['allocation-unproven', 'checkout-missing']),
+            (deep_request, ['allocation-unproven', 'checkout-missing']),
+        ])
+
+        maintenance = reclamation.Reclamation(board.store)
+        maintenance.run()
+        self.assertFalse(before.exists())
+        self.assertFalse(after.exists())
+        self.assertTrue(deep_manifest.is_dir())
+        self.assertTrue(deep_request.is_dir())
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
         from unittest.mock import patch
@@ -1036,7 +1112,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(observed, ['proof', 'process', 'revoke', 'checkout', 'refs', 'refs', 'refs', 'refs', 'records'])
         self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())
 
-    def test_unproven_allocations_are_scanned_once_each_and_wait_for_entry_or_related_task_changes(self):
+    def test_unproven_allocations_share_a_scan_and_wait_for_entry_or_related_task_changes(self):
         import os
         from unittest.mock import patch
         from hey_my_buddy.blackboard.tasks import reclamation, storage
@@ -1047,17 +1123,22 @@ class ReclamationTests(LifecycleTestCase):
         for index, manifest in enumerate(manifests):
             git(Path(manifest['checkoutRoot']), 'switch', '-q', '-c', 'private-branch-' + str(index))
         maintenance = reclamation.Reclamation(board.store)
+        directories = [Path(manifest['checkoutRoot']).parent for manifest in manifests]
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
+            inventory = reclamation.allocation_inventory(board.store, directories)
+            self.assertEqual(len(inventory), 2)
+            scan.assert_called_once()
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             maintenance.run()
-            self.assertEqual(scan.call_count, 2)
+            scan.assert_called_once()
             maintenance.run()
             maintenance.changed(['unrelated-task'])
             maintenance.run()
-            self.assertEqual(scan.call_count, 2)
+            scan.assert_called_once()
             directory = Path(manifests[0]['checkoutRoot']).parent
             os.utime(directory, None)
             maintenance.run()
-            self.assertEqual(scan.call_count, 3)
+            self.assertEqual(scan.call_count, 2)
         self.assertEqual(board.store.service_issues(), [])
         submitted, _, _, _, _, _, _ = self.run_worktree(board, request_id='reference-source')
         third = workspace.prepare(board.directory, 'reference-retained', intent)
@@ -1071,6 +1152,34 @@ class ReclamationTests(LifecycleTestCase):
         maintenance.changed([submitted['runId']])
         maintenance.run()
         self.assertFalse(Path(third['checkoutRoot']).parent.exists())
+
+    def test_reference_committed_after_the_batch_scan_prevents_revocation(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifest = workspace.prepare(board.directory, 'newly-referenced-orphan', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        plan = workspace.submission_revoke_plan
+
+        def add_reference(*args):
+            result = plan(*args)
+            with board.store.db.write() as connection:
+                connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('retainer',?,?)",
+                                   (json.dumps({'path': str(checkout)}), board.store.now()))
+            return result
+
+        with (
+            patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan,
+            patch.object(workspace, 'submission_revoke_plan', side_effect=add_reference),
+            patch.object(workspace, 'revoke_submission') as revoke,
+        ):
+            reclamation.Reclamation(board.store).run()
+            self.assertEqual(scan.call_count, 2)
+            revoke.assert_not_called()
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_allocation_internal_git_and_process_errors_are_visible(self):
         from unittest.mock import patch

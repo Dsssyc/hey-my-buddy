@@ -39,11 +39,17 @@ def self_identity_for_endpoint() -> dict:
 
 class ExecutionEndpointTests(unittest.TestCase):
     def test_harness_retry_requires_proof_the_native_request_was_not_sent(self):
+        from hey_my_buddy.blackboard.routing.statistics import round_classification
+        from hey_my_buddy.buddy.harnesses.run_contract import RunEnd, WorkingDirectoryRejection
         from hey_my_buddy.buddy.roles import controller
         from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 
-        for sent, started in ((True, False), (None, False), (False, False), (False, None)):
-            with self.subTest(nativeRequestSent=sent, modelResponded=started), \
+        cases = [("transport-error", sent, started)
+                 for sent, started in ((True, False), (None, False), (False, False), (False, None))]
+        cases.append((WorkingDirectoryRejected.code, False, False))
+        for code, sent, started in cases:
+            with self.subTest(code=code, nativeRequestSent=sent, modelResponded=started), \
                  tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
                 state = Path(directory)
                 spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60, "decision": {"kind": "maintain"}}
@@ -58,13 +64,18 @@ class ExecutionEndpointTests(unittest.TestCase):
                                          stop_initiator=None, grace_expired=False)
                 holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
                 outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
-                    result={"code": "transport-error", "nativeRequestSent": sent, "modelResponded": started})
+                    result={"code": code, "nativeRequestSent": sent, "modelResponded": started})
+                directory_rejected = code == WorkingDirectoryRejected.code
+                if directory_rejected:
+                    rejection = WorkingDirectoryRejection(cwd=directory, system_reason="WinError 267")
+                    handle.result = SimpleNamespace(activity=None, end=RunEnd(
+                        status="error", reason_code=code, working_directory_rejection=rejection))
                 with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
                      mock.patch.object(controller, "worker_executor", return_value=object()), \
                      mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
                      mock.patch.object(controller, "worker_start", return_value=handle) as start, \
                      mock.patch.object(controller, "worker_collect", return_value=outcome):
-                    if sent is False:
+                    if sent is False and not directory_rejected:
                         with self.assertRaises(BoardError) as refused:
                             execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
                         self.assertEqual(refused.exception.code, "HARNESS_PREMODEL_FAILED")
@@ -73,7 +84,764 @@ class ExecutionEndpointTests(unittest.TestCase):
                         report = execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
                         self.assertEqual(report["result"]["nativeRequestSent"], sent)
                         self.assertIs(holder["handle"], handle)
+                        if directory_rejected:
+                            self.assertEqual(report["terminationReason"], "workspace-error")
+                            self.assertEqual(round_classification(report), "neither")
+                            self.assertEqual(report["result"]["reason"], {"code": code, "params": {
+                                "cwd": directory, "systemReason": "WinError 267"}})
                     start.assert_called_once()
+
+    def test_harness_prepare_preflight_replays_the_same_command_across_ipc_tear_down(self):
+        # A same-contract hot swap tears the old daemon down mid-call; the
+        # idempotent preflight must replay its exact commandId, not fail.
+        from hey_my_buddy.blackboard.service import harness_health
+        from hey_my_buddy.buddy.harnesses import runtime_selection
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "maintain"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "maintain", "routingMode": "fast",
+                                       "buddy": {"harness": "dsh"}}}
+            client = mock.Mock()
+            execution = Execution(claim, state, "n" * 32, client=client)
+            calls = []
+
+            def harness_prepare(operation, params):
+                calls.append((operation, dict(params)))
+                if len(calls) == 1:
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE", "IPC client closed",
+                                     category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
+                return {"harness": {"status": "ready", "revision": 1}}
+
+            client.call.side_effect = harness_prepare
+            waits = []
+            with mock.patch.object(harness_health, "HARNESSES", {"dsh"}), \
+                 mock.patch.object(runtime_selection, "bound") as bound, \
+                 mock.patch.object(execution.control, "wait",
+                                   side_effect=lambda seconds: waits.append(seconds)), \
+                 mock.patch.object(execution, "_execute_selected",
+                                   return_value={"report": {"status": "ok"}}) as selected:
+                receipt = execution._execute_guarded(claim, claim["task"], spec,
+                                                     claim["attempt"], execution.directory, {})
+            self.assertEqual(receipt["report"]["status"], "ok")
+            selected.assert_called_once()
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][0], "harness_prepare")
+            self.assertEqual(calls[0][1]["commandId"], "harness-attempt-0")
+            self.assertEqual(waits, [15.0])
+            bound.assert_called_once()
+
+    def test_forced_preflight_replays_only_before_dispatch(self):
+        from hey_my_buddy.buddy.harnesses import runtime_selection
+
+        spec = {'adapter': 'codex'}
+        claim = {'task': {'taskId': 'task', 'spec': spec},
+                 'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+        for phase, unknown in (('pre_dispatch', False), ('dispatch_uncertain', False),
+                               ('dispatch_uncertain', True)):
+            with self.subTest(phase=phase, unknown=unknown), tempfile.TemporaryDirectory() as directory:
+                client = mock.Mock()
+                execution = Execution(claim, Path(directory), 'n' * 32, client=client)
+                failure = BoardError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+                                     category='transport', transport_kind='ipc', transport_phase=phase)
+                replies = [{'harness': {'status': 'unhealthy', 'revision': 1}}]
+                if unknown:
+                    replies.append({'harness': {'status': 'unknown', 'revision': 2}})
+                client.call.side_effect = [*replies, failure, {'harness': {'status': 'ready', 'revision': 3}}]
+                with mock.patch.object(runtime_selection, 'bound'), \
+                     mock.patch.object(execution.control, 'wait') as wait, \
+                     mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
+                    if phase == 'dispatch_uncertain' and not unknown:
+                        with self.assertRaises(BoardError) as caught:
+                            execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+                        self.assertIs(caught.exception, failure)
+                        wait.assert_not_called()
+                        selected.assert_not_called()
+                        self.assertEqual(client.call.call_count, 2)
+                    else:
+                        self.assertEqual(execution._execute_guarded(
+                            claim, claim['task'], spec, claim['attempt'], execution.directory, {}), {'status': 'ok'})
+                        selected.assert_called_once()
+                        self.assertEqual(client.call.call_count, len(replies) + 2)
+                        self.assertEqual(client.call.call_args_list[-2], client.call.call_args_list[-1])
+                        self.assertEqual(wait.call_count, 2 if unknown else 1)
+                self.assertTrue(client.call.call_args_list[1].args[1]['retry'])
+                self.assertEqual(client.call.call_args.args[1]['retry'], not unknown)
+
+        from c_two.error import CoreError
+        from hey_my_buddy.buddy.runtime.receipts import is_retryable
+        from hey_my_buddy.protocol import transport
+        from hey_my_buddy.protocol.client import BoardClient
+
+        self.assertFalse(is_retryable(
+            BoardError('SERVICE_UNAVAILABLE', 'uncertain', transport_phase='dispatch_uncertain'),
+            pre_dispatch_only=True))
+        direct_uncertain = CoreError('transport', 'peer closed mid-call')
+        direct_uncertain.transport_kind = 'ipc'
+        direct_uncertain.transport_phase = 'dispatch_uncertain'
+        direct_uncertain.io_kind = 'connection_refused'
+        self.assertTrue(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=False))
+        self.assertFalse(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=True))
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        torn = transport.ServiceError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+                                      category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
+        for fail_on in ('ping', 'prepare'):
+            with self.subTest(fail_on=fail_on), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                board_client = BoardClient(state, autostart=False)
+                execution = Execution(claim, state, 'n' * 32, client=board_client)
+                forced_calls = []
+                pings = 0
+
+                def request(_endpoint, operation, params, resource='control', *, state_dir):
+                    nonlocal pings
+                    if operation == 'ping':
+                        pings += 1
+                        if fail_on == 'ping' and pings == 2:
+                            raise torn
+                        return {'ok': True}
+                    if not params['retry']:
+                        return {'harness': {'status': 'unhealthy', 'revision': 1}}
+                    forced_calls.append(dict(params))
+                    if fail_on == 'prepare' and len(forced_calls) == 1:
+                        raise torn
+                    return {'harness': {'status': 'ready', 'revision': 2}}
+
+                with mock.patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                     mock.patch.object(transport.private_dirs, 'linked', return_value=True), \
+                     mock.patch.object(transport, '_request', side_effect=request), \
+                     mock.patch.object(runtime_selection, 'bound'), \
+                     mock.patch.object(execution.control, 'wait') as wait, \
+                     mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
+                    if fail_on == 'ping':
+                        self.assertEqual(execution._execute_guarded(
+                            claim, claim['task'], spec, claim['attempt'], execution.directory, {}), {'status': 'ok'})
+                        self.assertEqual(len(forced_calls), 1)
+                        wait.assert_called_once()
+                        selected.assert_called_once()
+                    else:
+                        with self.assertRaises(BoardError) as caught:
+                            execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+                        self.assertIs(caught.exception, torn)
+                        self.assertEqual(len(forced_calls), 1)
+                        wait.assert_not_called()
+                        selected.assert_not_called()
+
+    def test_signal_stop_is_lock_free_and_wakes_wait_even_while_progress_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spec = {'adapter': 'codex'}
+            claim = {'task': {'taskId': 'task', 'spec': spec},
+                     'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+            client = mock.Mock()
+            execution = Execution(claim, Path(directory), 'n' * 32, client=client)
+            control = execution.control
+            with mock.patch.object(control._interrupted, 'set',
+                                   side_effect=AssertionError('signal handler called _interrupted.set')), \
+                 mock.patch.object(control._wake, 'set',
+                                   side_effect=AssertionError('signal handler called _wake.set')):
+                execution.request_stop('unknown', None, force=True, from_signal=True)
+            self.assertFalse(control._interrupted.is_set())
+            self.assertEqual(control.cancel_view, {'cancelRequested': True, 'stopInitiator': 'unknown'})
+            control.cancel_view = None
+            control.requests = 0
+
+            progress_entered = threading.Event()
+            release_progress = threading.Event()
+
+            def blocked_progress(*_args, **_kwargs):
+                progress_entered.set()
+                release_progress.wait(5)
+                return {}
+
+            client.progress.side_effect = blocked_progress
+            execution.hint(waitingReason={'code': 'router-input-unknown', 'params': {}})
+            flusher = execution._flusher
+            flusher.start()
+            control.start()
+            thread = None
+            try:
+                self.assertTrue(progress_entered.wait(2), 'hint flusher did not enter progress')
+                entered = threading.Event()
+                finished = threading.Event()
+
+                def waiter():
+                    entered.set()
+                    control.wait(180.0)
+                    finished.set()
+
+                thread = threading.Thread(target=waiter)
+                thread.start()
+                self.assertTrue(entered.wait(2))
+                time.sleep(0.05)
+                execution.request_stop('unknown', None, force=True, from_signal=True)
+                self.assertTrue(finished.wait(1.0), 'wait did not observe signal stop while progress blocked')
+            finally:
+                flusher.stop()
+                release_progress.set()
+                control.stop()
+                flusher.join(2)
+                control.join(2)
+                if thread is not None:
+                    thread.join(2)
+
+    def test_a_late_stop_never_rewrites_an_already_ended_native_failure(self):
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.buddy.roles.run_execution import InlineRunHandle
+        from hey_my_buddy.install import runtime
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "profile"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "profile", "buddy": {"harness": "codex"}}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
+            handle = InlineRunHandle({"timeoutSeconds": None}, identity)
+            # The native run already failed and its evidence is settled: the
+            # handle reports ended and only the main thread's detach has not
+            # run yet — exactly the window a late stop request lands in.
+            handle.result = rc.RunResult(identity=identity, harness="codex",
+                end=rc.RunEnd(status="error", reason_code="native-turn-failed",
+                              message="Codex turn did not complete successfully"),
+                stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+            handle.exit_code = 1
+            handle.done.set()
+            consumed = threading.Event()
+
+            class Executor:
+                """The executor's flag effects on an inline handle, as the registry applies them."""
+
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    owned.force_stop_requested = True
+                    self.cancel(owned)
+
+                def cancel(self, owned, **_kwargs):
+                    owned.terminate()
+
+            def wait(timeout):
+                # The stop is requested while the handle is attached and
+                # finished, and the control thread consumes it before the
+                # main thread leaves this wait and detaches the handle.
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while control.applied != control.requests and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                consumed.set()
+                return handle.exit_code
+
+            handle.wait = wait
+            outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
+                result={"code": "native-error", "nativeRequestSent": True})
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertFalse(control.is_alive())
+            self.assertTrue(consumed.is_set())
+            self.assertEqual(control.applied, control.requests)
+            # The settled native failure keeps its own reason: the late stop
+            # neither cancelled the attempt nor named its initiator.
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["terminationReason"], "harness-error")
+            self.assertFalse(handle.cancel_requested)
+            self.assertFalse(handle.force_stop_requested)
+            self.assertIsNone(handle.stop_initiator)
+
+    def test_a_late_stop_still_stops_a_process_handle_with_living_descendants(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "command", "cwd": directory, "command": ["true"]}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+
+            class LivingJob:
+                def __init__(self):
+                    self.active_count = 1
+                    self.closed = False
+
+                def active(self):
+                    return self.active_count
+
+                def close(self, *, confirmed=False):
+                    self.closed = confirmed
+
+            job = LivingJob()
+            process = SimpleNamespace(pid=4242, returncode=7, poll=lambda: 7, _buddy_job=job)
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+            # Root process already exited with code 7, so handle.finished is
+            # True, while a child in the Job is still alive.
+            self.assertTrue(handle.finished)
+            self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+
+            calls = []
+
+            class Executor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    calls.append(("stop", stop_initiator))
+                    owned.cancel_requested = True
+                    owned.stop_initiator = stop_initiator
+
+                def cancel(self, owned, **_kwargs):
+                    calls.append(("cancel", owned.stop_initiator))
+                    owned.cancel_requested = True
+
+            def wait(timeout):
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while control.applied != control.requests and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                return 7
+
+            handle.wait = wait
+            outcome = AdapterOutcome(status="cancelled", shutdown_confirmed=True, exit_code=7)
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertFalse(control.is_alive())
+            self.assertEqual(len(calls), 1, "living Job descendants must still receive the stop")
+            self.assertEqual(report["status"], "cancelled")
+            self.assertEqual(report["terminationReason"], "console-stop")
+
+    def test_detach_dispatches_pending_stop_when_wait_beats_control_thread(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "command", "cwd": directory, "command": ["true"]}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+
+            class LivingJob:
+                def active(self):
+                    return 1
+
+                def close(self, *, confirmed=False):
+                    pass
+
+            process = SimpleNamespace(pid=4243, returncode=7, poll=lambda: 7, _buddy_job=LivingJob())
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+            calls = []
+
+            class Executor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    calls.append(("stop", stop_initiator))
+                    owned.cancel_requested = True
+                    owned.stop_initiator = stop_initiator
+
+                def cancel(self, owned, **_kwargs):
+                    calls.append(("cancel", owned.stop_initiator))
+                    owned.cancel_requested = True
+
+            # Request a force stop while the control thread is NOT started, so
+            # main-thread wait()->detach() is guaranteed to win the race.
+            def wait(timeout):
+                execution.request_stop("console", None, force=True)
+                return 7
+
+            handle.wait = wait
+            outcome = AdapterOutcome(status="cancelled", shutdown_confirmed=True, exit_code=7)
+            with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                 mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                 mock.patch.object(controller, "prepare_worker_run",
+                                   return_value=controller.WorkerPreparation(True)), \
+                 mock.patch.object(controller, "worker_start", return_value=handle), \
+                 mock.patch.object(controller, "worker_collect", return_value=outcome):
+                report = execution._execute_selected(
+                    claim, claim["task"], spec, claim["attempt"], execution.directory,
+                    {"preflightControl": control})
+            self.assertEqual(calls, [("cancel", "console")])
+            self.assertEqual(control.applied, control.requests)
+            self.assertEqual(report["status"], "cancelled")
+            self.assertEqual(report["terminationReason"], "console-stop")
+
+    def test_model_wait_begin_clears_previous_response_atomically_under_lock(self):
+        from hey_my_buddy.buddy.runtime import execution as entry
+        with tempfile.TemporaryDirectory() as directory:
+            clock = [0.0]
+            wait = entry.ModelResponseWait(
+                Path(directory) / "budget.json",
+                {"taskId": "task", "attemptId": "attempt", "generation": 1}, 1)
+            handle = SimpleNamespace(model_responded=True)
+            with mock.patch.object(entry, "time", SimpleNamespace(monotonic=lambda: clock[0])):
+                wait.begin(handle)
+                self.assertFalse(handle.model_responded)
+                self.assertFalse(wait.expired(handle))
+                clock[0] = 2.0
+                self.assertTrue(wait.expired(handle))
+                self.assertTrue(wait.timed_out)
+
+    def test_non_profile_inline_execute_aborts_before_harness_and_preserves_inflight_wrap_up(self):
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.buddy.roles import controller, inline_run, run_execution
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = {
+                "operation": "fast", "harness": "dsh", "privateRoot": str(root / "fast"),
+                "nativeRoot": str(root / "native"), "stateDir": str(root),
+                "sessionRecordPath": None, "cwd": str(root),
+                "taskId": "task", "attemptId": "attempt", "generation": 1,
+                "spec": {"provider": "deepseek-official", "model": "deepseek-v4-flash", "effort": "max"},
+            }
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="fast-1")
+            handle = run_execution.InlineRunHandle(control, identity)
+            handle.accepted_stop = lambda: {"stopInitiator": "console"}
+            fake_request = SimpleNamespace(identity=identity, harness="dsh", buddy=rc.RunBuddy(
+                provider="deepseek-official", model="deepseek-v4-flash", effort="max"))
+            fake_correction = SimpleNamespace(stop_reason=None)
+            parts = SimpleNamespace()
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "fast_request",
+                                   return_value=(fake_request, None, lambda _f: None, fake_correction, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=False)), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not enter harness")):
+                result, _request, _verdict, code = inline_run.execute(control, handle)
+            self.assertEqual(code, 1)
+            self.assertEqual(result.end.status, "cancelled")
+            self.assertIs(result.native_request_sent, False)
+            self.assertIs(handle.cancel_requested, True)
+            self.assertEqual(handle.stop_initiator, "console")
+
+            # While a Worker is already running inside run_harness, polling the
+            # in-flight cancelled callback never sets cancel_requested ahead of
+            # controller.worker_stop, so Host wrap-up grace stays intact.
+            worker_handle = run_execution.InlineRunHandle(control, identity)
+            worker_handle.accepted_stop = lambda: {"stopInitiator": "host"}
+            worker_control = {**control, "operation": "worker", "harness": "codex"}
+            stop_calls = []
+
+            class WorkerExecutor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    stop_calls.append((stop_initiator, grace_deadline))
+                    controller.start_wrap_up(owned, grace_deadline, stop_initiator=stop_initiator)
+
+            def fake_worker_run(_module, request, *, observer, services, cancelled):
+                # Polling cancelled before worker_stop runs must stay read-only.
+                self.assertFalse(cancelled())
+                self.assertFalse(worker_handle.cancel_requested)
+                controller.worker_stop(WorkerExecutor(), worker_handle,
+                                       stop_initiator="host", grace_deadline=time.monotonic() + 30)
+                self.assertTrue(cancelled())
+                self.assertTrue(worker_handle.wrap_up_started)
+                self.assertIsNotNone(worker_handle.grace_deadline)
+                return rc.RunResult(identity=request.identity, harness=request.harness,
+                    end=rc.RunEnd(status="cancelled"), buddy=rc.ResultBuddy(requested=request.buddy),
+                    stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+
+            worker_request = SimpleNamespace(identity=identity, harness="codex", buddy=fake_request.buddy,
+                                             input_text="task")
+            # Clear accepted_stop during pre-launch so worker enters run_harness,
+            # then enable it right before run_harness to mimic an in-flight stop.
+            in_flight = [None]
+            worker_handle.accepted_stop = lambda: in_flight[0]
+            def enter_worker(_module, request, *, observer, services, cancelled):
+                in_flight[0] = {"stopInitiator": "host"}
+                return fake_worker_run(_module, request, observer=observer, services=services, cancelled=cancelled)
+
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "worker_request",
+                                   return_value=(worker_request, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=False)), \
+                 mock.patch.object(inline_run, "_summary_run",
+                                   side_effect=lambda c, r, res, m, d, h: (c, r, res, False, False)) as summary_run, \
+                 mock.patch.object(inline_run, "run_harness", side_effect=enter_worker):
+                inline_run.execute(worker_control, worker_handle)
+            self.assertEqual(len(stop_calls), 1)
+            summary_run.assert_called_once()
+
+    def test_stop_arriving_during_collection_reaches_unconfirmed_process_handle(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "command", "cwd": directory, "command": ["true"]}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+
+            class LivingJob:
+                def __init__(self):
+                    self.active_count = 1
+
+                def active(self):
+                    return self.active_count
+
+                def terminate(self):
+                    self.active_count = 0
+
+                def close(self, *, confirmed=False):
+                    pass
+
+            job = LivingJob()
+            process = SimpleNamespace(pid=4244, returncode=7, poll=lambda: 7, _buddy_job=job)
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+            handle.wait = lambda timeout=None: 7
+            calls = []
+
+            class Executor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    calls.append(("stop", stop_initiator))
+                    owned.cancel_requested = True
+                    owned.stop_initiator = stop_initiator
+                    job.terminate()
+
+                def cancel(self, owned, **_kwargs):
+                    calls.append(("cancel", owned.stop_initiator))
+                    owned.cancel_requested = True
+                    job.terminate()
+
+            def collect(_impl, owned, _context):
+                # Emulate command.py reading shutdown_confirmed=False BEFORE
+                # the console force-stop arrives and terminates the Job.
+                self.assertFalse(owned.shutdown_confirmed(settle_seconds=0))
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while not calls and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                return AdapterOutcome(status="failed", shutdown_confirmed=False, exit_code=7,
+                                      result={"status": "nonzero", "processState": {"shutdownConfirmed": False}})
+
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", side_effect=collect):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertIsNone(control.handle)
+            self.assertEqual(calls, [("cancel", "console")])
+            self.assertTrue(report["shutdownConfirmed"])
+            self.assertTrue(report["result"]["processState"]["shutdownConfirmed"])
+            self.assertEqual(report["result"]["status"], "cancelled")
+            self.assertEqual(report["status"], "cancelled")
+            self.assertEqual(report["terminationReason"], "console-stop")
+
+    def test_prelaunch_stop_beats_input_rejection_live_bind_and_dsh_prompt(self):
+        from contextlib import contextmanager
+        import queue
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh_run
+        from hey_my_buddy.buddy.roles import inline_run, run_execution
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = {
+                "operation": "worker", "harness": "codex", "privateRoot": str(root / "worker"),
+                "nativeRoot": str(root / "native"), "stateDir": str(root),
+                "sessionRecordPath": None, "cwd": str(root),
+                "taskId": "task", "attemptId": "attempt", "generation": 1,
+                "spec": {"provider": "openai", "model": "gpt-6.2-sol", "effort": "high"},
+            }
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="w-1")
+            buddy = rc.RunBuddy(provider="openai", model="gpt-6.2-sol", effort="high")
+            req = SimpleNamespace(identity=identity, harness="codex", buddy=buddy, input_text="x",
+                                  session_record_failure=None)
+            req.model_copy = lambda update=None: req
+            parts = SimpleNamespace()
+
+            # (a) Accepted console stop beats preflight input_error/blocked.
+            h1 = run_execution.InlineRunHandle(control, identity)
+            h1.accepted_stop = lambda: {"stopInitiator": "console"}
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=True)), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run")):
+                res1, _, _, code1 = inline_run.execute(control, h1)
+            self.assertEqual((code1, res1.end.status), (1, "cancelled"))
+            self.assertIs(h1.cancel_requested, True)
+            self.assertEqual(h1.stop_initiator, "console")
+
+            # (b) Stop landing during _inline_live binding still blocks run_harness.
+            h2 = run_execution.InlineRunHandle(control, identity)
+            @contextmanager
+            def stopping_live(_req, _services, owned, **_kwargs):
+                owned.cancel_requested = True
+                owned.stop_initiator = "console"
+                owned.cancelled.set()
+                yield None
+
+            with mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                 mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "selected", return_value=None), \
+                 mock.patch.object(inline_run, "select_input_limit", return_value=None), \
+                 mock.patch.object(inline_run, "check_prompt_input",
+                                   return_value=SimpleNamespace(blocked=False)), \
+                 mock.patch.object(inline_run, "_inline_live", side_effect=stopping_live), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run")):
+                res2, _, _, code2 = inline_run.execute(control, h2)
+            self.assertEqual((code2, res2.end.status), (1, "cancelled"))
+            self.assertIs(res2.native_request_sent, False)
+
+            # (c) DSH _prompt_and_observe never sends a prompt when cancel is already set,
+            # and never sends session/cancel before session/prompt when cancelled mid-launch.
+            client = mock.Mock()
+            cancel = dsh_run.CancelFlag(lambda: True)
+            state = dsh_run._RunState()
+            activity = dsh_run.DshActivity()
+            with self.assertRaises(dsh_run.NativeError) as caught:
+                dsh_run._prompt_and_observe(
+                    client=client, pump=queue.Queue(), session_id="sess", input_text="hi",
+                    deadline=time.monotonic() + 60, cancel=cancel, state=state,
+                    fold=lambda _m: False, notify=lambda: None, activity=activity,
+                    denied=lambda: 0, send_cancel=lambda _s: None, session=None)
+            self.assertEqual(caught.exception.code, "cancelled")
+            client.prompt.assert_not_called()
+            self.assertIs(state.native_request_sent, False)
+
+            order = []
+            cancelled_now = [False]
+            real_thread = dsh_run.threading.Thread
+
+            class DelayedStartThread(real_thread):
+                def start(self):
+                    cancelled_now[0] = True
+                    super().start()
+
+            state2 = dsh_run._RunState()
+            client2 = mock.Mock()
+            client2.prompt.side_effect = lambda *_a, **_k: order.append("prompt")
+            with mock.patch.object(dsh_run.threading, "Thread", DelayedStartThread), \
+                 self.assertRaises(dsh_run.NativeError) as caught2:
+                dsh_run._prompt_and_observe(
+                    client=client2, pump=queue.Queue(), session_id="sess", input_text="hi",
+                    deadline=time.monotonic() + 60, cancel=dsh_run.CancelFlag(lambda: cancelled_now[0]),
+                    state=state2, fold=lambda _m: False, notify=lambda: None,
+                    activity=dsh_run.DshActivity(), denied=lambda: 0,
+                    send_cancel=lambda _s: order.append("cancel"), session=None)
+            self.assertEqual(caught2.exception.code, "cancelled")
+            self.assertEqual(order, [])
+            self.assertIs(state2.native_request_sent, False)
+
+            # (d) _summary_run rechecks summary_cancelled after _inline_live binds.
+            h3 = run_execution.InlineRunHandle(control, identity)
+            first_result = rc.RunResult(identity=identity, harness="codex",
+                end=rc.RunEnd(status="cancelled"), buddy=rc.ResultBuddy(requested=buddy),
+                native_identity=rc.NativeIdentity(session_id="sess-1"),
+                continuation=rc.ContinuationFacts(resumable=True),
+                stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+
+            @contextmanager
+            def force_stopping_live(_req, _services, owned, **_kwargs):
+                owned.force_cancelled.set()
+                yield None
+
+            with mock.patch.object(run_execution, "worker_request",
+                                   return_value=(req, None, lambda _f: None, None, parts)), \
+                 mock.patch.object(inline_run, "_inline_live", side_effect=force_stopping_live), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=AssertionError("must not run summary")):
+                _c, _r, res3, ok3, _exp = inline_run._summary_run(
+                    control, req, first_result, object(), time.monotonic() + 60, h3)
+            self.assertIs(res3, first_result)
+            self.assertFalse(ok3)
+
+    def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spec = {'adapter': 'codex'}
+            claim = {'task': {'taskId': 'task', 'spec': spec},
+                     'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+            client = mock.Mock()
+            execution = Execution(claim, Path(directory), 'n' * 32, client=client)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
+            wake = execution.control._wake
+            original_clear, original_wait = wake.clear, wake.wait
+            consumed = threading.Event()
+
+            def clear():
+                stopped = execution.stop_requested() and wake.is_set()
+                original_clear()
+                if stopped:
+                    consumed.set()
+
+            def wait(seconds):
+                self.assertLess(seconds, 1, 'preflight waited on the cleared control wake')
+                return original_wait(seconds)
+
+            def prepare(*_args):
+                execution.request_stop('console', force=True)
+                self.assertTrue(consumed.wait(2), 'control did not consume the stop wake')
+                raise BoardError('SERVICE_UNAVAILABLE', 'listener stopped')
+
+            client.call.side_effect = prepare
+            with mock.patch.object(wake, 'clear', side_effect=clear), \
+                 mock.patch.object(wake, 'wait', side_effect=wait), \
+                 mock.patch.object(execution, '_execute_selected') as selected:
+                receipt = execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+            self.assertEqual(receipt['report']['status'], 'cancelled')
+            self.assertEqual(receipt['report']['terminationReason'], 'console-stop')
+            self.assertTrue(receipt['report']['shutdownConfirmed'])
+            client.call.assert_called_once()
+            selected.assert_not_called()
 
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
         execution = object.__new__(Execution)
@@ -189,7 +957,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                                              cancel_requested=False, stop_initiator=None, grace_expired=False,
                                              result=None, model_responded=False)
                     outcome = AdapterOutcome(status='failed' if finished else 'ok', shutdown_confirmed=True,
-                        result={'code': 'native-error'} if finished else {'modelResponded': True})
+                        result={'code': 'native-error'} if finished else {'modelResponded': responded})
                     with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
                          mock.patch.object(controller, 'worker_executor', return_value=object()), \
                          mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
@@ -328,6 +1096,22 @@ class ExecutionEndpointTests(unittest.TestCase):
                     wait.responded(SimpleNamespace(model_responded=True))
             self.assertTrue(path.exists())
             self.assertIsNotNone(wait.deadline)
+
+    def test_a_timeout_keeps_an_earlier_rounds_model_response(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        wait = ModelResponseWait(Path("~/fixture/unused-budget") / module.BUDGET, binding, 60)
+        answered = AdapterOutcome(status="ok", shutdown_confirmed=True,
+                                  result={"modelResponded": True, "correctionCount": 0})
+        wait.mark_timeout(answered)
+        # A later round's expired start wait fails that round without erasing
+        # the answer an earlier round of the same attempt already delivered.
+        self.assertEqual(answered.status, "failed")
+        self.assertEqual(answered.result["code"], "router-not-responding")
+        self.assertIs(answered.result["modelResponded"], True)
+        silent = AdapterOutcome(status="ok", shutdown_confirmed=True, result={"nativeRequestSent": False})
+        wait.mark_timeout(silent)
+        self.assertIs(silent.result["modelResponded"], False)
 
     def test_normalized_native_observer_error_stays_an_execution_failure(self):
         from hey_my_buddy.buddy.runtime import execution as module

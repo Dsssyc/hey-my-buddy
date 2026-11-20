@@ -901,7 +901,7 @@ class TestInquiry(BoardTestCase):
                 owner.close()
                 outcome = {"disposition": "attention", "summary": "Host review needed", "remaining": ["review"],
                            "artifacts": [], "decisions": [], "request": {
-                               "summary": "review", "attempted": "bounded work", "neededWork": ["review"],
+                               "summary": "review", "attempted": "bounded work", "neededWork": "review",
                                "expectedArtifacts": ["reviewed work"], "acceptance": "Host accepts"}}
                 record = native_turn.claim_record(self._claim, outcome=outcome)
                 client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32,

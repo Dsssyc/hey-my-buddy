@@ -267,6 +267,11 @@ class NativeIdentity(InternalModel):
         return {key: value for key, value in handler(self).items() if value is not None}
 
 
+class WorkingDirectoryRejection(InternalModel):
+    cwd: str
+    system_reason: str
+
+
 class RunEnd(InternalModel):
     """The native/protocol end fact; never a role verdict.
 
@@ -282,6 +287,8 @@ class RunEnd(InternalModel):
     reason_code: OptionalText(128) = None
     native_exit_code: Optional[ExitCode] = None
     message: Optional[RawText(512)] = None
+    working_directory_rejection: WorkingDirectoryRejection | None = Field(
+        default=None, exclude_if=lambda value: value is None)
 
 
 class CheckedValue(InternalModel):

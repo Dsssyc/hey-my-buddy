@@ -195,22 +195,6 @@ class ConcludeTests(unittest.TestCase):
         self.assertEqual(calls[0][1], calls[3][1])
         self.assertNotIn("waitSeconds", calls[0][1])
 
-    def test_target_run_is_observed_but_owner_packet_is_retried(self):
-        packet = {**self.packet, "targetRunId": "child-1"}
-        calls = []
-        def service(method, params, directory):
-            calls.append((method, dict(params)))
-            if method == "conclude" and len(calls) == 1:
-                raise ServiceError("SHUTDOWN_UNCONFIRMED", "Child still stopping",
-                                   cancellationRecorded=True)
-            if method == "task_get":
-                return {**self.view(confirmed=True), "runId": "child-1"}
-            return {"runId": "lead-1", "targetRunId": "child-1", "conclusionId": "done"}
-        answer = conclude_run(packet, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual(answer["conclusionId"], "done")
-        self.assertEqual(calls[1], ("task_get", {"runId": "child-1"}))
-        self.assertEqual(calls[0], calls[2])
-
     def test_timeout_uses_bounded_slices_and_reports_recorded_cancellation(self):
         calls = []
         def service(method, params, directory):

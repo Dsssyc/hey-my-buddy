@@ -7,18 +7,12 @@ export function buddyQuad(identity: RouterHealthIdentity & { alias?: string | nu
   return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
 }
 
-/** What the recorded window says is wrong with routing; the user has something to do about either. */
-type HealthWarning = { kind: "unavailable"; reason: Reason | null } | { kind: "failing"; count: number };
+/** The Router's current unavailability. */
+type HealthWarning = { kind: "unavailable"; reason: Reason | null };
 
-/**
- * The warning the recorded routing window gives, or none. Absent data is
- * unknown, never success; abstentions and cancellations are not
- * failures.
- */
+/** Warn when the service reports that routing is currently unavailable. */
 export function healthSummary(health: RoutingHealth | undefined): { warning: HealthWarning | null } {
-  if (!health) return { warning: null };
-  if (health.available === false) return { warning: { kind: "unavailable", reason: health.reason ?? null } };
-  if (health.sampleCount > 0 && health.consecutiveFailures > 0) return { warning: { kind: "failing", count: health.consecutiveFailures } };
+  if (health?.available === false) return { warning: { kind: "unavailable", reason: health.reason ?? null } };
   return { warning: null };
 }
 
@@ -115,13 +109,13 @@ export function moveRouter(draft: Draft, buddyId: string, by: -1 | 1): Draft {
   });
 }
 
-/** What the list needs the user to know: nobody can serve now, the first buddy is refused in the mode, or routing is failing. */
+/** What the list needs the user to know: nobody can serve now, or the first buddy is refused in the mode. */
 export type RouterNote = { kind: "nobody" } | { kind: "head"; buddyId: string; refusal: RouterRefusal | null } | HealthWarning;
 
 /**
  * The one note the list carries, in the order of what matters: no buddy of a
  * non-empty list can serve, then the first buddy being refused in the default
- * mode, then the warning of the recorded window. `refusal` is null once the
+ * mode, then the service's availability warning. `refusal` is null once the
  * buddy is no longer in the catalogue.
  */
 export function routerNote(source: Pick<Draft, "configuration" | "buddies">, health: RoutingHealth | undefined): RouterNote | null {

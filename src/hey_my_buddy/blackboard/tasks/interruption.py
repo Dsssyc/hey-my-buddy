@@ -77,9 +77,14 @@ def _stop_native(board, attempt, identity, observed):
 def _reserve(board, snapshot, identity, kind):
     with board.db.write() as connection:
         attempt = board._attempt_row(connection, snapshot['attempt_id'])
-        if attempt['execution_state'] == 'finished' or read_identity(connection, attempt['attempt_id']) != identity:
+        if (attempt['shutdown_confirmed']
+                or (attempt['execution_state'] == 'finished' and attempt['result_json'] is None)
+                or read_identity(connection, attempt['attempt_id']) != identity):
             return False
-        board._require_effective_attempt(connection, attempt)
+        if attempt['result_json'] is None:
+            board._require_effective_attempt(connection, attempt)
+        elif not board.shutdown_needs_settlement(connection, attempt):
+            return False
         # A retry may gain stronger native-stop evidence before it has a result.
         # The interruption record and the eventual result must name that same fact.
         connection.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,state,seal_error)"
@@ -170,13 +175,20 @@ def _cleanup_dead_material(board, attempt, identity, observation):
 
 def _recover_one(board, attempt, identity, stopped_evidence):
     from ...protocol.execution import REFUSED, read_execution_receipt, receipt_reference
-    if stopped_evidence is None:
+    historical = False
+    if attempt['result_json'] is not None and not attempt['shutdown_confirmed']:
+        with board.db.read() as connection:
+            historical = not board.shutdown_needs_settlement(connection, attempt)
+    require_identity = (historical or (attempt['execution_state'] == 'finished' and not attempt['shutdown_confirmed']))
+    if stopped_evidence is None or (require_identity and identity is None):
         if identity is None:
             identity = marker_identity(board, attempt)
             if identity is not None:
                 with board.db.write() as connection:
                     record_identity(connection, attempt['attempt_id'], identity)
         if identity is None:
+            if require_identity:
+                return None
             with board.db.read() as connection:
                 proof = connection.execute('SELECT detail_json FROM attempt_shutdown_evidence WHERE attempt_id=?',
                                            (attempt['attempt_id'],)).fetchone()
@@ -198,8 +210,8 @@ def _recover_one(board, attempt, identity, stopped_evidence):
         # already inspected this identity or reaped its own pre-identity child.
         observed = stopped_evidence['kind']
     try:
-        if attempt['execution_state'] == 'finished':
-            return None  # Only pending endpoint/credential cleanup remains.
+        if attempt['execution_state'] == 'finished' and (attempt['shutdown_confirmed'] or attempt['result_json'] is None):
+            return None
         if attempt['result_json'] is not None:
             # Only the no-receipt interruption path can commit before native stop
             # is proven. Supplement that interruption without replaying a receipt.
@@ -211,19 +223,18 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             if original['status'] == 'cancelled' and original.get('terminationReason') is None:
                 evidence['terminationReason'] = (_stop_reason(attempt) if attempt['stop_initiator'] is not None
                                                  or attempt['cancel_requested_at'] is not None else 'unknown-stop')
-            with board.db.read() as connection:
-                interrupted = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
-                                                 (attempt['attempt_id'],)).fetchone()
-            if interrupted is not None:
-                # The first uncertain recovery could not safely seal native work.
-                # Preserve its immutable result; pin the newly safe output beside
-                # the supplementary stop proof and use the ordinary turn import.
-                partial = _partial_result(board, attempt, identity, interrupted['evidence_kind'], confirmed=True)
-                if partial is None:
-                    return None
-                for key in ('partialWorkspaceSeal', 'workspaceSealError'):
-                    if key in partial:
-                        evidence[key] = partial[key]
+            if not historical:
+                with board.db.read() as connection:
+                    interrupted = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
+                                                     (attempt['attempt_id'],)).fetchone()
+                if interrupted is not None:
+                    # The first uncertain recovery could not safely seal native work.
+                    partial = _partial_result(board, attempt, identity, interrupted['evidence_kind'], confirmed=True)
+                    if partial is None:
+                        return None
+                    for key in ('partialWorkspaceSeal', 'workspaceSealError'):
+                        if key in partial:
+                            evidence[key] = partial[key]
             return board.confirm_execution_shutdown(attempt['attempt_id'], evidence)
         directory = _directory(board, attempt)
         binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']}
@@ -293,7 +304,8 @@ def _recover_one(board, attempt, identity, stopped_evidence):
 def recover(board, *, attempt_id: str | None = None, stopped_evidence: dict | None = None) -> list[dict]:
     with board.db.read() as connection:
         rows = connection.execute(
-            "SELECT * FROM attempts WHERE (execution_state!='finished' OR cleanup_pending=1)" +
+            "SELECT * FROM attempts WHERE (execution_state!='finished' OR cleanup_pending=1"
+            " OR (execution_state='finished' AND shutdown_confirmed=0 AND result_json IS NOT NULL))" +
             (' AND attempt_id=?' if attempt_id is not None else '') + ' ORDER BY created_at,attempt_id',
             () if attempt_id is None else (attempt_id,)).fetchall()
         snapshots = [(dict(row), read_identity(connection, row['attempt_id'])) for row in rows]

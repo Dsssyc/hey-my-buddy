@@ -23,7 +23,7 @@ import { NameDivider, useNameWidth } from "./NameDivider";
 import { ZoomRuler } from "./ZoomRuler";
 import { useTimelineGestures } from "./useTimelineGestures";
 import { buddyColorsFor } from "./buddyColors";
-import { groupLanes, laneLevel, laneSummary, ownedWaits } from "./lanes";
+import { groupLanes, laneSummary, ownedWaits } from "./lanes";
 import type { ScaleInput } from "./scale";
 import type { LaneGroup } from "./lanes";
 import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
@@ -199,10 +199,10 @@ export function TaskWork(props: TaskWorkProps) {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
     setPointerScreenX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setHoveredMarker(null); setFocusedMarker(null);
   };
-  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; laneLevel?: number; lead?: boolean; ariaPrefix?: string } = {}) => <RowName
+  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; owned?: boolean; lead?: boolean; ariaPrefix?: string } = {}) => <RowName
     key={row.runId}
     ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-    row={row} rows={rows} list={options.list} tall={options.tall} laneLevel={options.laneLevel} lead={options.lead} ariaPrefix={options.ariaPrefix}
+    row={row} rows={rows} list={options.list} tall={options.tall} owned={options.owned} lead={options.lead} ariaPrefix={options.ariaPrefix}
     tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={options.list ? openedRunId === row.runId : selectedRunId === row.runId || highlightedRunId === row.runId} fresh={props.newRunIds.has(row.runId)}
     onClick={() => { select(row.runId); props.onOpen(row.runId); }}
     onEnter={() => { setPointerScreenX(null); setHoveredMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
@@ -227,11 +227,11 @@ export function TaskWork(props: TaskWorkProps) {
     className={cn("relative", lead ? "bg-card" : "bg-background")}>
     {narrow
       ? <><div className={cn("sticky left-0 z-10 flex", lead ? "bg-card" : "bg-background")} style={{ width: narrowPaintWidth }}>
-          <div className="shrink-0" style={{ width: Math.max(1, width - 2) }}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>{nameEdge(row)}
+          <div className="shrink-0" style={{ width: Math.max(1, width - 2) }}>{renderName(row, { owned: Boolean(lead) })}</div>{nameEdge(row)}
         </div>
         <div className="flex"><Track {...trackProps(row)} surface={lead ? "card" : "background"}/><div data-slot="timeline-row-edge" className={cn("flex-1 border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/></div></>
       : <div className="grid items-stretch" style={{ gridTemplateColumns: `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
-        <div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
+        <div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")}>{renderName(row, { owned: Boolean(lead) })}</div>
         <Track {...trackProps(row)} surface={lead ? "card" : "background"}/>
         <div data-slot="timeline-row-edge" className={cn("border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>
       </div>}
@@ -294,7 +294,7 @@ export function TaskWork(props: TaskWorkProps) {
           <div className="min-w-0 flex-1">{renderName(lead, { list: true, tall: true, lead: true, ariaPrefix: t("leadBadge") })}</div>
         </div>
         <Collapsible open={!collapsed}><CollapsibleContent><div id={`lane-${lead.runId}`}>
-          {lane.members.map(row => renderName(row, { list: true, laneLevel: laneLevel(lead, row) }))}
+          {lane.members.map(row => renderName(row, { list: true, owned: true }))}
         </div></CollapsibleContent></Collapsible>
       </section>;
     })}

@@ -32,7 +32,6 @@ export default {
     upgrade: "Router settings need an upgrade",
     unset: "No Router set",
     unusable: "Router unavailable",
-    failing: "Consecutive routing failures",
   },
   preference: {
     unset: "None",

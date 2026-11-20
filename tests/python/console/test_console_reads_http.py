@@ -202,13 +202,20 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         # Root parked on its Host.
         root = self.submit(board, request_id="pending-root", cwd=str(self.workdir("pending-root")))
         first = self.claim(board, claim_request_id="pending-c1")
-        self.finish_turn(board, first, disposition="assistance")
+        self.finish_turn(board, first, outcome={
+            "disposition": "attention", "summary": "Need the Host", "remaining": [], "decisions": [], "artifacts": [],
+            "request": {"summary": "Review the approach", "attempted": "Proposed a schema",
+                        "neededWork": "Decide the schema", "expectedArtifacts": [], "acceptance": "Record the decision"},
+        })
         # A second root still queued does not count.
         self.submit(board, request_id="pending-running", cwd=str(self.workdir("pending-running")))
         _, _headers, body = self.open(board).get("/api/console")
         self.assertEqual(json.loads(body)["tasks"], {"pendingCount": 1})
         view = board.call("workflow_get", {"runId": root["runId"]})
         self.assertTrue(view["awaitingHost"])
+        self.assertEqual(view["activeRequest"]["neededWork"], ["Decide the schema"])
+        for field in ("kind", "childTaskId"):
+            self.assertNotIn(field, view["activeRequest"])
 
     # -- R03: negotiation ------------------------------------------------------
     def test_gzip_identity_and_304_representations(self):

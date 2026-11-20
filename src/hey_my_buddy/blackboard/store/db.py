@@ -28,7 +28,7 @@ ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
 , exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)
 , profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT);"""
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -39,22 +39,62 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id             TEXT,
     attempt_id          TEXT,
-    child_task_id       TEXT,
-    kind                TEXT NOT NULL CHECK (kind IN ('assistance','attention','helper-attention','helper-report')),
     summary             TEXT,
     reason_code         TEXT,
     reason_params_json  TEXT,
     decision_id         TEXT REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
     payload_json        TEXT NOT NULL,
-    state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
-    decision_json       TEXT,
-    response_kind       TEXT,
+    state               TEXT NOT NULL CHECK (state IN ('open','resolved','superseded','cancelled')),
+    resolution_json     TEXT,
+    response_kind       TEXT CHECK (response_kind IN ('continue','resolution')),
     response_id         TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     decided_at          TEXT,
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
-    CHECK (response_kind IS NULL OR response_kind IN ('decision','continue','resolution')),
+    CHECK (CASE
+        WHEN resolution_json IS NULL THEN
+            (state IN ('open','superseded','cancelled') AND response_kind IS NULL)
+            OR (state='superseded' AND response_kind IS 'continue')
+        WHEN json_valid(resolution_json) AND json_type(resolution_json) IS 'object' AND state='resolved' THEN
+            CASE WHEN response_kind IS NULL THEN
+                json_type(resolution_json,'$.legacy') IS 'true'
+                AND json_type(resolution_json,'$.resolution') IS 'object'
+                AND json_type(resolution_json,'$.resolution.conflictId') IS 'text'
+                AND length(json_extract(resolution_json,'$.resolution.conflictId')) > 0
+                AND json_type(resolution_json,'$.resolution.action') IS 'text'
+                AND json_extract(resolution_json,'$.resolution.action') IN ('restore','adopt','abandon')
+                AND json_type(resolution_json,'$.resolution.state') IS 'text'
+                AND json_extract(resolution_json,'$.resolution.state') IN ('open','restored','adopted','abandoned')
+                AND json_type(resolution_json,'$.resolution.actor') IS 'object'
+                AND json_type(resolution_json,'$.parameters') IS NULL
+                AND json_type(resolution_json,'$.result') IS NULL
+            ELSE
+                json_type(resolution_json,'$.legacy') IS NULL
+                AND json_type(resolution_json,'$.resolution') IS NULL
+                AND json_type(resolution_json,'$.result') IS 'object'
+                AND json_type(resolution_json,'$.result.conflictId') IS 'text'
+                AND length(json_extract(resolution_json,'$.result.conflictId')) > 0
+                AND json_type(resolution_json,'$.result.state') IS 'text'
+                AND json_extract(resolution_json,'$.result.state') IN ('open','restored','adopted','abandoned')
+                AND json_type(resolution_json,'$.result.resolvedFingerprint') IS 'text'
+                AND length(json_extract(resolution_json,'$.result.resolvedFingerprint')) > 0
+                AND (json_type(resolution_json,'$.result.artifactId') IS 'null'
+                    OR (json_type(resolution_json,'$.result.artifactId') IS 'text'
+                        AND length(json_extract(resolution_json,'$.result.artifactId')) > 0))
+                AND CASE
+                    WHEN response_kind='resolution' THEN
+                        response_id=json_extract(resolution_json,'$.result.conflictId')
+                        AND json_type(resolution_json,'$.parameters') IS 'object'
+                        AND json_type(resolution_json,'$.parameters.resolution') IS 'text'
+                        AND json_extract(resolution_json,'$.parameters.resolution') IN ('restore','adopt','abandon')
+                        AND json_type(resolution_json,'$.parameters.observedFingerprint') IS 'text'
+                        AND length(json_extract(resolution_json,'$.parameters.observedFingerprint')) > 0
+                    WHEN response_kind='continue' THEN
+                        json_type(resolution_json,'$.parameters') IS NULL
+                    ELSE 0 END
+            END
+        ELSE 0 END),
     CHECK ((summary IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL AND decision_id IS NULL)
         OR (summary IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
             AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')
@@ -167,7 +207,11 @@ CREATE TABLE IF NOT EXISTS "tasks" (
     review_rejection_note   TEXT,
     CHECK ((adapter='decision' AND json_extract(spec_json,'$.expectedSeconds') IS NULL)
         OR (adapter!='decision' AND json_type(spec_json,'$.expectedSeconds') IS 'integer'
-            AND json_extract(spec_json,'$.expectedSeconds') > 0))
+            AND json_extract(spec_json,'$.expectedSeconds') > 0)),
+    -- A running task's reason lives on its active attempt row; the task's own
+    -- reason is the queued writer's fact and never coexists with an attempt.
+    CHECK (active_attempt_id IS NULL OR queue_reason IS NULL),
+    CHECK (queue_reason IS NULL OR queue_reason NOT IN ('attempt-uncertain-after-restart','execution-connection-unknown','harness-probe-unknown','router-input-unknown'))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 
@@ -179,6 +223,20 @@ CREATE TABLE IF NOT EXISTS attempts (
     execution_state     TEXT NOT NULL
         CHECK (execution_state IN ('starting','executing','finalizing','uncertain','finished')),
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
+    -- The attempt's own waiting facts, each owned by exactly one writer: the
+    -- connection reason while the execution's liveness is unresolved, an unknown
+    -- harness probe observed before or without a reconnect, and the Router's
+    -- control wait. A restart-marked uncertain attempt and a live-session
+    -- disconnect are distinguished by the reason itself.
+    connection_reason TEXT CHECK (connection_reason IN ('attempt-uncertain-after-restart','execution-connection-unknown')),
+    probe_unknown     INTEGER NOT NULL DEFAULT 0 CHECK (probe_unknown IN (0,1)),
+    waiting_reason    TEXT CHECK (waiting_reason IN ('router-input-unknown')),
+    -- The monotone barrier of the execution's waiting hints: every hint carries
+    -- a per-attempt sequence, and only a higher one rewrites waiting_reason,
+    -- so a late replay of an older dispatch cannot revive a cleared wait.
+    waiting_hint_seq  INTEGER NOT NULL DEFAULT 0 CHECK (waiting_hint_seq >= 0),
+    -- Frozen at admission for the attempt's own recorded session file.
+    session_group_id   TEXT,
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
     -- Frozen model-service identity (harness/provider/model, no effort dimension).
@@ -208,6 +266,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     revision            INTEGER NOT NULL DEFAULT 1,
     CHECK ((result_json IS NULL AND result_form IS NULL)
         OR (result_json IS NOT NULL AND result_form IS NOT NULL)),
+    -- The connection reason names why a still-running attempt is uncertain: it
+    -- is bound to execution_state, not ownership, because a finished attempt may
+    -- keep its historical uncertain ownership, and a committed result ends every
+    -- live connection question without proving a stop.
+    CHECK ((execution_state='uncertain' AND result_json IS NULL AND connection_reason IS NOT NULL)
+        OR ((execution_state!='uncertain' OR result_json IS NOT NULL) AND connection_reason IS NULL)),
+    -- Receiving a receipt settles every wait: no probe flag or Router wait may
+    -- survive into finalizing, finished or a committed result.
+    CHECK ((execution_state NOT IN ('finalizing','finished') AND result_json IS NULL)
+        OR (probe_unknown = 0 AND waiting_reason IS NULL)),
     UNIQUE(task_id, generation)
 );
 -- Relational guarantee of the documented invariant: at most one effective active
@@ -508,9 +576,8 @@ CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_prefere
 """,
     EVALUATION_DECISIONS_DDL,
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
-    # history row the console reads; this table carries the audit material (the
-    # helper envelope and the selected buddy)
-    # that must not sit on every console refresh.
+    # history row the console reads. This table preserves the request and
+    # routing evidence for detailed review.
     DECISION_REQUESTS_DDL,
     """
 CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_id);
@@ -560,7 +627,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
 """
 
 #: Current micro-task productivity workflow tables. A micro-task run is the existing
-#: logical task (``run_id`` = ``task_id``) plus durable turn, request, helper,
+#: logical task (``run_id`` = ``task_id``) plus durable turn, request,
 #: continuation, workspace-reservation, pinned-artifact and attempt-scoped
 #: credential records.
 WORKFLOW_RUNS_DDL = """
@@ -582,7 +649,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     workspace_id            TEXT,
     workspace_manifest_sha256 TEXT,
     state                   TEXT NOT NULL
-        CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
+        CHECK (state IN ('executing','awaiting-host','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
     active_request_id       TEXT,
     current_turn_id         TEXT,
     current_attempt_id      TEXT,
@@ -598,17 +665,6 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
         OR (checkout IN ('existing','worktree') AND project_kind='git' AND
             ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
             OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))))
-);
-"""
-
-WORKFLOW_CHILDREN_DDL = """
-CREATE TABLE IF NOT EXISTS workflow_children (
-    child_task_id       TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    parent_run_id       TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    request_id          TEXT NOT NULL,
-    state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
 );
 """
 
@@ -666,8 +722,7 @@ CREATE INDEX IF NOT EXISTS workflow_runs_macro_task_idx ON workflow_runs(macro_t
 CREATE INDEX IF NOT EXISTS workflow_runs_activity_idx ON workflow_runs(activity_seq);
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_creation_key_unique ON workflow_runs(creation_key) WHERE creation_key IS NOT NULL;
 """,
-    # Routing is owned work, but not a coding turn or a user-authorized helper.
-    # Each link binds one existing decision task to a run; old
+    # Each routing link binds one existing decision task to a run; old
     # links remain auditable and retain their real attempt/stop evidence.
     # exploration is this routing's frozen quota fact: what the routing was
     # allowed and what it did with it, written while the routing runs and never
@@ -693,18 +748,12 @@ CREATE INDEX IF NOT EXISTS workflow_routes_exploration_idx ON workflow_routes(ex
     """
 CREATE INDEX IF NOT EXISTS workflow_turns_attempt_idx ON workflow_turns(attempt_id);
 """,
-    # Assistance/attention requests. Only a Host decision closes one, and only an
-    # approval creates helpers.
+    # Worker, routing and system requests at the run's own boundary.
     WORKFLOW_REQUESTS_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_requests_run_idx ON workflow_requests(run_id, state);
 """,
-    # Explicitly scoped ordinary helper tasks created only by an approval.
-    WORKFLOW_CHILDREN_DDL,
-    """
-CREATE INDEX IF NOT EXISTS workflow_children_parent_idx ON workflow_children(parent_run_id, state);
-""",
-    # Lead ownership is independent of assistance approval and survives turns.
+    # Lead ownership survives turns.
     """
 CREATE TABLE IF NOT EXISTS workflow_lead_tasks (
     owned_run_id        TEXT PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
@@ -724,8 +773,7 @@ CREATE INDEX IF NOT EXISTS workflow_lead_tasks_lead_idx ON workflow_lead_tasks(l
 CREATE TABLE IF NOT EXISTS workflow_continuations (
     continuation_id   TEXT PRIMARY KEY,
     run_id            TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    controlling_run_id TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    kind              TEXT NOT NULL CHECK (kind IN ('manual','helper','lead-wakeup')),
+    kind              TEXT NOT NULL CHECK (kind IN ('manual','lead-wakeup')),
     request_id        TEXT,
     artifact_id       TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
     response_turn_id  TEXT REFERENCES workflow_turns(turn_id) ON DELETE RESTRICT,
@@ -735,8 +783,6 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     trigger_event_json TEXT,
     input_text        TEXT NOT NULL,
     note              TEXT,
-    helper_policy     TEXT CHECK (helper_policy IN ('cancel','keep') OR helper_policy IS NULL),
-    helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
     workspace_id      TEXT,
     workspace_manifest_sha256 TEXT,
     workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference','none')),
@@ -766,7 +812,7 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
             AND input_commit IS NULL AND staged_commit IS NULL))),
-    CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
+    CHECK ((kind='manual' AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
 );
@@ -775,10 +821,6 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
 CREATE INDEX IF NOT EXISTS workflow_continuations_run_idx ON workflow_continuations(run_id, state);
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_workspace_owner_unique
     ON workflow_continuations(workspace_id, workspace_manifest_sha256) WHERE workspace_facts_role='owner';
-""",
-    """
-CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_auto_unique
-    ON workflow_continuations(run_id, request_id) WHERE kind='helper';
 """,
     """
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_lead_pending_unique
@@ -794,10 +836,8 @@ CREATE TABLE IF NOT EXISTS workspace_reservations (
     checkout_root   TEXT NOT NULL,
     access          TEXT NOT NULL CHECK (access IN ('read','write')),
     holder_task_id  TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    holder_kind     TEXT NOT NULL CHECK (holder_kind IN ('parent','helper','reader')),
-    parent_run_id   TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     manifest_sha256 TEXT NOT NULL,
-    state           TEXT NOT NULL CHECK (state IN ('held','transferred','released')),
+    state           TEXT NOT NULL CHECK (state IN ('held','released')),
     created_at      TEXT NOT NULL,
     released_at     TEXT
 );

@@ -47,7 +47,8 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
-from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
+from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase

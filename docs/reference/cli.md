@@ -86,14 +86,13 @@ Use `fixes` only for repair of an accepted micro task. Explicitly authorized `de
 
 ### Continue
 
-`continue` answers exactly one returned `requestId`, `artifactId` or `turnId`. A boundary can take `decision: "approve"` or `"decline"`; approved helpers need complete submission packets and explicit `autoContinue`. A declined boundary forbids helpers and that flag. An artifact or failed turn requires new `input`; use the failed turn id only when it has no fixed result. Identical action replays are recognized; another action on the same answered fact conflicts.
+`continue` answers exactly one returned `requestId`, `artifactId` or `turnId`. Use nonempty `input` to continue. For a workspace conflict, provide the recorded `requestId`, `resolution` and `observedFingerprint` and any arguments the resolution requires. Include `input` to continue after resolution. [Workspace lifecycle](workspace-lifecycle.md) describes the available resolutions.
 
 ```sh
-"$HMB" continue '{"runId":"<runId>","requestId":"<requestId>","decision":"decline","note":"The proposed helper is unnecessary; return the current findings."}'
-"$HMB" continue '{"runId":"<runId>","artifactId":"<artifactId>","input":"Address the failed acceptance case and rerun the checks.","buddy":"route","note":"Choose an available buddy for this continuation."}'
+"$HMB" continue '{"runId":"<runId>","requestId":"<requestId>","input":"Return the current findings with a reproducible check."}'
 ```
 
-With continuation input, `buddy` selects routing or a named buddy, written as for `submit`; a change requires a note. Access and write scope changes take effect only on the new turn. Live helpers require an explicit `helperPolicy`, absent when none are live. A workspace-site reply uses `requestId`, `resolution: "restore"`, `"adopt"` or `"abandon"`, and the observed fingerprint; adopt and abandon require a note and forbid path selection. Resolution alone opens no turn; adding input continues only after resolution succeeds. [Workflow](workflow.md#host-boundaries-and-requests) and [workspace lifecycle](workspace-lifecycle.md) own these checks.
+With continuation input, `buddy` selects routing or a named buddy, written as for `submit`; a change requires a note. Access and write scope changes take effect only on the new turn. A workspace-site reply uses `requestId`, `resolution: "restore"`, `"adopt"` or `"abandon"`, and the observed fingerprint; adopt and abandon require a note and forbid path selection. Resolution alone opens no turn; adding input continues only after resolution succeeds. [Workflow](workflow.md#host-boundaries-and-requests) and [workspace lifecycle](workspace-lifecycle.md) own these checks.
 
 ### Accept, conclude and cancel
 
@@ -104,7 +103,7 @@ With continuation input, `buddy` selects routing or a named buddy, written as fo
 "$HMB" accept '{"runId":"<runId>","artifactId":"<artifactId>","note":"Checked the answer against the brief.","notRequired":"Answer-only work; no repository integration."}'
 ```
 
-`conclude` ends work that will not be accepted or continued, with `runId` and a note. Queued, running or boundary work is cancelled first and the CLI waits for the confirmed stop of the whole owned tree (`waitSeconds`, as for `await`) before it records the conclusion; an unconfirmed stop at the end of the wait is reported with `cancellationRecorded: true` and `conclusionRecorded: false`, and a reply lost after the retry with `conclusionRecorded: null`. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit the artifact id, or supply an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. `cancel` locates the micro task only by `runId` with an optional note and records ordered stop intent. `targetRunId` on applicable lifecycle calls addresses an authorized helper through its controlling run; it cannot reach a Lead-owned micro task from an ordinary Host. Neither operation bypasses real stop evidence. Cleanup blocked after acceptance or conclusion is retried by the service.
+`conclude` ends work that will not be accepted or continued, with `runId` and a note. Queued, running or boundary work is cancelled first and the CLI waits for the confirmed stop of the whole owned tree (`waitSeconds`, as for `await`) before it records the conclusion; an unconfirmed stop at the end of the wait is reported with `cancellationRecorded: true` and `conclusionRecorded: false`, and a reply lost after the retry with `conclusionRecorded: null`. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit the artifact id, or supply an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. `cancel` locates the micro task only by `runId` with an optional note and records ordered stop intent. Neither operation bypasses real stop evidence. Cleanup blocked after acceptance or conclusion is retried by the service.
 
 ```sh
 "$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the delivered output; no further work will be accepted."}'
@@ -182,6 +181,6 @@ Input errors name the field and legal combinations. `CONFLICT` can mean an answe
 
 ## `await` envelope
 
-The envelope contains `runId`, task `status`, `workflowState`, `outcome`, `actions`, wait duration/window, `timedOut` and aggregate `shutdownConfirmed`. At a Host boundary it carries `requestId` and `requestKind`; a fixed output carries `artifactId`. Applicable replies also include shutdown detail, routing, queue reason, reminders, input failure, execution/service issues and result evidence. A micro task without a checkout can carry `unsealedChanges`.
+The envelope contains `runId`, task `status`, `workflowState`, `outcome`, `actions`, wait duration/window, `timedOut` and aggregate `shutdownConfirmed`. At a Host boundary it carries `requestId`; a fixed output carries `artifactId`. Applicable replies also include shutdown detail, routing, queue reason, reminders, input failure, execution/service issues and result evidence. A micro task without a checkout can carry `unsealedChanges`.
 
 `delivered` asks for review of the fixed artifact. `waiting-host` asks for a response to its request. `expected-duration` and `native-silence` are reminders; `issue` delivers one new execution or service issue, once; `wait-timeout` and `unavailable` end only this wait. A missing or unreadable terminal receipt can return `result-unavailable`. The advertised `actions` come from the authoritative run view; the envelope supplies no full command templates. Follow [host.md](host.md) for all waiting decisions.

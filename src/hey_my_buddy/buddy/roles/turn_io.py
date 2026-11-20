@@ -12,7 +12,6 @@ from ...protocol.workspace_manifest import turn_manifest
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from ...private_dirs import context_root, ensure_private_dir
 from ..harnesses.base import ExecutionContext
-from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the shared byte bound
 
 MAX_RECORD_BYTES = 98304
 
@@ -63,50 +62,6 @@ def verify_workspace(context: ExecutionContext) -> None:
     workspace_module().verify(manifest, state_dir=Path(context.environment["HMB_STATE_DIR"]),
                               require_unchanged=bool(routing.get("decisionId")))
     context.effective_workspace = manifest
-
-
-def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> str | None:
-    fields = {"disposition", "summary", "remaining", "decisions", "artifacts", "request"}
-    if not isinstance(outcome, dict) or set(outcome) != fields:
-        return "the outcome must contain exactly the current outcome fields"
-    def text(value: object) -> bool:
-        return isinstance(value, str) and bool(value.strip()) and "\0" not in value
-    def strings(value: object) -> bool:
-        return isinstance(value, list) and all(text(x) for x in value)
-    dispositions = ("completed", "assistance", "attention", "waiting") if delegation_authority else (
-        "completed", "assistance", "attention")
-    if outcome["disposition"] not in dispositions:
-        return "the turn outcome requires a valid disposition and nonblank summary"
-    if not text(outcome["summary"]):
-        return "the turn summary is blank or contains NUL"
-    if not strings(outcome["remaining"]) or not strings(outcome["decisions"]):
-        return "remaining and decisions must be nonblank string arrays without NUL"
-    artifacts = outcome["artifacts"]
-    if not isinstance(artifacts, list):
-        return "artifacts must be an array"
-    try:
-        if any(not (text(x) or isinstance(x, dict) and bool(x)) for x in artifacts):
-            return "artifacts must contain nonempty references"
-        if len(canonical_json(outcome).encode()) > MAX_OUTCOME_BYTES:
-            return "the outcome exceeds its byte bound"
-    except (TypeError, ValueError, RecursionError):
-        return "the outcome must contain finite JSON values"
-    request = outcome["request"]
-    if outcome["disposition"] in ("completed", "waiting"):
-        return None if request is None else f"a {outcome['disposition']} outcome requires request: null"
-    required = {"summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"}
-    if not isinstance(request, dict) or not required <= set(request) or set(request) - required - {"suggestedBuddyId"}:
-        return "an assistance or attention outcome requires the current request fields"
-    if any(not text(request[k]) for k in ("summary", "attempted", "neededWork", "acceptance")):
-        return "the turn request requires nonblank summary, attempted, neededWork and acceptance"
-    # An explicit ``suggestedBuddyId: null`` is the honest spelling of "no
-    # suggestion" and equals an absent key; every other non-string value stays
-    # refused so the field can never smuggle an unbounded payload.
-    if not strings(request["expectedArtifacts"]) or (
-            "suggestedBuddyId" in request and request["suggestedBuddyId"] is not None
-            and (not text(request["suggestedBuddyId"]) or len(request["suggestedBuddyId"].encode()) > 256)):
-        return "the turn request references are invalid"
-    return None
 
 
 def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:

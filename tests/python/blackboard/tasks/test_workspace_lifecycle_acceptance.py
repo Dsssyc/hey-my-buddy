@@ -88,7 +88,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, first_claim, manifest, checkout, first_seal, yielded, first_artifact = self.run_worktree(
-            board, request_id="two-turns-1", output="first output\n", disposition="assistance"
+            board, request_id="two-turns-1", output="first output\n", disposition="attention"
         )
         run_id = submitted["runId"]
         self.assertEqual(yielded["state"], "awaiting-host")
@@ -195,7 +195,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, _first_claim, _first_manifest, checkout, _first_seal, yielded, first_artifact = self.run_worktree(
-            board, request_id="cleared-refs", output="first output\n", disposition="assistance"
+            board, request_id="cleared-refs", output="first output\n", disposition="attention"
         )
         run_id = submitted["runId"]
 
@@ -241,7 +241,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, first_claim, first_manifest, checkout, first_seal, yielded, first = self.run_worktree(
-            board, request_id="noop-final", output="first output\n", disposition="assistance"
+            board, request_id="noop-final", output="first output\n", disposition="attention"
         )
         continued = self.continue_run(board, {'runId': submitted["runId"], 'input': "finish"})
         second = self.claim(board, submitted["runId"], request_id="noop-claim", nonce="q" * 16)
@@ -433,34 +433,6 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         self.assertEqual(concluded["state"], "concluded")
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
-
-    def test_accept_refuses_a_detached_target_before_any_git_work(self):
-        flow = self.root_with_helper_worktree(request_id="accept-detach-early")
-        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
-        root_view, artifact = flow["rootView"], flow["artifact"]
-        target = self.target_with_artifact(artifact)
-        real_verify = workspace_module.integration_verify
-        called: list[int] = []
-
-        def counting_verify(*args, **kwargs):
-            called.append(1)
-            return real_verify(*args, **kwargs)
-
-        with board.store.db.write() as connection:
-            connection.execute("DELETE FROM workflow_children WHERE child_task_id=?", (helper_id,))
-        with mock.patch.object(workspace_module, "integration_verify", counting_verify):
-            with self.assertRaises(BoardError) as raised:
-                board.call("workflow_accept", {
-                    "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-                    "note": "a detached target is refused before any Git work",
-                    "target": {"path": str(target["path"]), "ref": "HEAD"},
-                    "beforeCommit": target["before"],
-                })
-        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
-        self.assertEqual(called, [], "Git verification must not run for an unauthorized target")
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM workflow_integrations WHERE run_id=?", (helper_id,)).fetchone()[0], 0)
 
     def test_accept_refuses_an_unrelated_commit_interval(self):
         board = self.board()

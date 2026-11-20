@@ -153,7 +153,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
 
     def test_each_physical_phase_retries_after_store_restart_with_real_git(self):
         stages = ('_delete_sessions', '_delete_workspaces', '_delete_private_roots',
-                  '_delete_session_group', '_delete_rows')
+                  '_delete_session_records', '_delete_rows')
         for index, stage in enumerate(stages):
             with self.subTest(stage=stage):
                 board = self.board()
@@ -172,13 +172,14 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                 (attempts / 'phase-proof').write_bytes(b'attempt evidence')
                 sessions = private_dirs.session_group_root(board.directory, run['macroTaskId'])
                 sessions.mkdir(parents=True, exist_ok=True)
-                (sessions / 'phase-proof').write_bytes(b'session evidence')
                 native = self.directory / f'native-session-{index}.jsonl'
                 foreign_native = self.directory / f'foreign-native-session-{index}.jsonl'
                 native.write_bytes(b'owned native session evidence')
                 foreign_native.write_bytes(b'foreign native session evidence')
                 attempt_id = f'native-phase-attempt-{index}'
                 session_id = f'native-phase-session-{index}'
+                session_record = private_dirs.session_record_path(board.directory, run['macroTaskId'], attempt_id)
+                session_record.write_bytes(b'session evidence')
                 receipt = {'result': {'nativeSession': {
                     'harness': 'codex', 'sessionId': session_id, 'captured': True,
                     'storageOwner': 'harness-user-store', 'resumeMode': 'initial'},
@@ -187,9 +188,9 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                 with board.store.db.write() as connection:
                     connection.execute(
                         "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
-                        "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at)"
-                        " VALUES(?,?,1,'fixture','finished','codex',1,?,'archived-report-v1',?,?)",
-                        (attempt_id, run['runId'], json.dumps(receipt), board.store.now(), board.store.now()))
+                        "adapter,shutdown_confirmed,result_json,result_form,session_group_id,created_at,updated_at)"
+                        " VALUES(?,?,1,'fixture','finished','codex',1,?,'archived-report-v1',?,?,?)",
+                        (attempt_id, run['runId'], json.dumps(receipt), run['macroTaskId'], board.store.now(), board.store.now()))
 
                 def delete_native(ids, *, state_dir):
                     # Substitute only the native app boundary; every selected
@@ -216,14 +217,14 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                     self.assertEqual(native.exists(), stage == '_delete_sessions')
                     self.assertEqual(foreign_native.read_bytes(), b'foreign native session evidence')
                     attempts_gone = stages.index(stage) > stages.index('_delete_private_roots')
-                    sessions_gone = stages.index(stage) > stages.index('_delete_session_group')
+                    sessions_gone = stages.index(stage) > stages.index('_delete_session_records')
                     self.assertEqual(native_exists(directory), not workspace_gone)
                     if not workspace_gone:
                         self.assertEqual(native_read_bytes(directory / 'manifest.json'), frozen)
                     self.assertEqual(bool(self.git('for-each-ref', '--format=%(refname)', own_prefix)),
                                      not workspace_gone)
                     self.assertEqual((attempts / 'phase-proof').exists(), not attempts_gone)
-                    self.assertEqual((sessions / 'phase-proof').exists(), not sessions_gone)
+                    self.assertEqual(session_record.exists(), not sessions_gone)
                     self.assertEqual(self.git('rev-parse', foreign).strip(), head)
                     with board.store.db.read() as connection:
                         self.assertIsNotNone(connection.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',

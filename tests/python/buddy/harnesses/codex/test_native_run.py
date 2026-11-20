@@ -812,7 +812,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_review_failed_turn_retains_native_error_in_public_evidence(self):
         result = self.review_run("schema-failure")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertIn("suggestedBuddyId", result.native_error.value["error"]["message"])
+        self.assertIn("required is missing request", result.native_error.value["error"]["message"])
         self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
     def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
         self.set_case("readonly-repair")
@@ -828,6 +828,99 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.activity.value["counts"], {"modelTurns": 2, "toolCalls": 0})
         self.assertEqual(observed_activity(endpoint), result.activity.value)
         self.assertEqual(publish.call_args.args[0], result.activity.value)
+
+    def test_correction_rounds_keep_the_attempt_activity_sequence_monotone(self):
+        self.set_case("readonly-repair")
+        prompt = "Select from the frozen packet"
+        request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        endpoint = activity_endpoint(request.identity)
+        rule = ReviewCorrection(REVIEW_SCHEMA, prompt)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=rule.observer, services=RunServices(live=endpoint),
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.correction_count, 1)
+        payloads = [call.args[0] for call in publish.call_args_list]
+        sequences = [payload["eventSeq"] for payload in payloads]
+        # Every published observation of the same attempt advances one
+        # sequence: the correction round continues it instead of restarting at
+        # its own per-turn count, so the first round's later events can never
+        # shadow the round that follows.
+        self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
+        first = [payload for payload in payloads if payload["counts"]["modelTurns"] == 1]
+        second = [payload for payload in payloads if payload["counts"]["modelTurns"] == 2]
+        self.assertTrue(first and second)
+        self.assertGreater(min(payload["eventSeq"] for payload in second),
+                           max(payload["eventSeq"] for payload in first))
+        self.assertEqual(sequences, sorted(sequences))
+        self.assertEqual(observed_activity(endpoint), result.activity.value)
+
+    def test_an_offset_endpoint_shifts_codex_live_publications_without_seeding(self):
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt="Select from the frozen packet")
+        endpoint = CTwoLiveEndpoint(request.identity, LiveCapabilities(inquiry_delivery="unsupported"),
+                                    event_seq_offset=31)
+        self.assertIsNone(endpoint.current_activity())
+        now = native_run.utc_now()
+        writer = native_run._ActivityWriter(endpoint)
+        evidence = TurnEvidence("thread", "turn")
+        evidence.observe({"method": "item/started", "params": {
+            "threadId": "thread", "turnId": "turn", "item": {"type": "agentMessage", "id": "item", "text": "answer"}}})
+        writer.write(evidence, "streaming-model")
+        # The fresh round's endpoint starts clean and shifts this round's local
+        # eventSeq strictly above the previous round's last reported sequence.
+        self.assertEqual(endpoint.current_activity()["eventSeq"], 32)
+        self.assertEqual(writer.last_payload["eventSeq"], 1)
+        self.assertTrue(is_newer(endpoint.current_activity(),
+                                 {"phase": "finishing", "observedAt": now, "eventSeq": 30,
+                                  "nativeSessionId": "previous-session", "lastNativeActivityAt": now,
+                                  "counts": {"modelTurns": 1, "toolCalls": 0}}))
+
+    def test_an_offset_fresh_session_continues_the_attempt_activity_sequence(self):
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        self.set_case("ok")
+        prompt = "Select from the frozen packet"
+        first_request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        first_endpoint = activity_endpoint(first_request.identity)
+        first_published = []
+        original_first = first_endpoint.publish_activity
+
+        def record_first(payload):
+            changed = original_first(payload)
+            if changed:
+                first_published.append(first_endpoint.current_activity()["eventSeq"])
+            return changed
+
+        with mock.patch.object(first_endpoint, "publish_activity", side_effect=record_first):
+            first = run(first_request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                        services=RunServices(live=first_endpoint), cancelled=lambda: False)
+        self.assertEqual(first.end.status, "ok", first.end.message)
+        offset = first.activity.value["eventSeq"] + 1
+        second_request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        second_endpoint = CTwoLiveEndpoint(second_request.identity,
+                                           LiveCapabilities(inquiry_delivery="unsupported"),
+                                           event_seq_offset=offset)
+        second_published = []
+        original_second = second_endpoint.publish_activity
+
+        def record_second(payload):
+            changed = original_second(payload)
+            if changed:
+                second_published.append(second_endpoint.current_activity()["eventSeq"])
+            return changed
+
+        with mock.patch.object(second_endpoint, "publish_activity", side_effect=record_second):
+            second = run(second_request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=RunServices(live=second_endpoint), cancelled=lambda: False)
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertTrue(first_published and second_published)
+        self.assertEqual(max(first_published), first.activity.value["eventSeq"])
+        self.assertGreater(min(second_published), max(first_published))
+        self.assertEqual(second_published, sorted(second_published))
+        self.assertTrue(is_newer(second_endpoint.current_activity(), first.activity.value))
 
     def test_a_completed_review_stream_stays_complete_without_a_confirmed_stop(self):
         # The Host probe's shape: the real halt executed, its recorded
@@ -1370,7 +1463,7 @@ class WorkerSeamTests(CodexSeamCase):
         failure = result.native_error.value
         self.assertEqual(failure["nativeThreadId"], result.native_identity.session_id)
         self.assertEqual(failure["nativeTurnId"], result.native_identity.turn_id)
-        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing suggestedBuddyId")
+        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing request")
         self.assertEqual(failure["error"]["codexErrorInfo"], {"httpConnectionFailed": {"httpStatusCode": 400}})
         self.assertNotIn("unrelated", failure["error"])
         self.assertEqual(_worker_facts(result)["nativeFailure"], failure)
@@ -1502,17 +1595,6 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIsNone(result.end.reason_code)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIs(result.continuation.resumable, False)
-
-    def test_codex_schema_accepts_a_nullable_buddy_suggestion(self):
-        from hey_my_buddy.buddy.roles.turn_io import validate_outcome
-        request = OUTCOME_SCHEMA["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertIn("suggestedBuddyId", request["properties"])
-        for suggestion in (None, "helper-buddy"):
-            outcome = {"disposition": "assistance", "summary": "Needs help", "decisions": [],
-                       "remaining": [], "artifacts": [], "request": {
-                           "summary": "Help", "attempted": "Inspected", "neededWork": "Verify",
-                           "acceptance": "Verified", "expectedArtifacts": [], "suggestedBuddyId": suggestion}}
-            self.assertIsNone(validate_outcome(outcome))
 
     def test_worker_native_usage_is_retained_without_quota_snapshot(self):
         result = self.worker_run("usage")

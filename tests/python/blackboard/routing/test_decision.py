@@ -194,8 +194,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(queued["requested"]["task"], "fix the failing parser test")
         self.assertEqual([p["buddyId"] for p in queued["input"]["buddies"]],
                          [BUDDY_ID, SECOND_BUDDY_ID])
-        # The queued recommendation is cancelled through the ordinary task operation.
-        board.call("task_cancel", {"runId": first["runId"], 'note': "not needed"})
+        board.store.task_cancel({"runId": first["runId"], 'note': "not needed"}, initiator="service")
         cancelled = self.decision(board, first["decisionId"])
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertEqual(cancelled["reason"], {"code": "decision-cancelled", "params": {}})
@@ -224,7 +223,7 @@ class SelectionRequestTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         selected = self.request(board)
-        board.call("task_cancel", {"runId": selected["runId"]})
+        board.store.task_cancel({"runId": selected["runId"]}, initiator="service")
         self.assertEqual(self.decision(board, selected["decisionId"])["reason"],
                          {"code": "decision-cancelled", "params": {}})
 
@@ -501,7 +500,7 @@ class DecisionGateTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         request = self.request(board)
-        board.call("task_cancel", {"runId": request["runId"], 'note': "user cancelled the pending selection"})
+        board.store.task_cancel({"runId": request["runId"]}, initiator="service")
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
         self.run_worker(board)
         self.assertEqual(board.call("task_get", {"runId": request["runId"]})["task"]["state"], "cancelled")
@@ -753,7 +752,7 @@ class DecisionFailureTests(DecisionTestCase):
         thread = threading.Thread(target=execution.run, daemon=True)
         thread.start()
         self.assertTrue(wait_for(lambda: self.readonly_start.called, timeout=20))
-        board.call("task_cancel", {"runId": request["runId"], 'note': "operator stopped it"})
+        board.store.task_cancel({"runId": request["runId"]}, initiator="service")
         execution.request_stop("unknown")
         thread.join(timeout=40)
         self.assertFalse(thread.is_alive(), "the worker did not observe the cancel")

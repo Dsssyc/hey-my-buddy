@@ -27,7 +27,7 @@ from hey_my_buddy.blackboard.service.execution_scheduler import (
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 from hey_my_buddy.protocol import execution as launch_protocol
-from hey_my_buddy.protocol import owned_process, process_identity
+from hey_my_buddy.protocol import owned_process, process_handle, process_identity, process_members
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
@@ -225,19 +225,43 @@ class ExecutionObservationTests(unittest.TestCase):
             read.assert_not_called()
             self.live_registry.bind.assert_not_called()
 
-    def test_finalizing_without_connection_records_unknown_shutdown_issue(self):
+    @unittest.skipIf(os.name == "nt", "POSIX session membership")
+    def test_finalizing_with_reused_root_pid_and_new_session_member_does_not_settle(self):
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))
             store.task_get.return_value = {"task": {"attemptState": "finalizing", "cancelRequested": False}}
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
-            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
-                observe=Mock(return_value=(0, "unknown")), budget_path=location.budget_path)
+            pid, started = POSIX_IDENTITY["pid"], POSIX_IDENTITY["startedAt"]
+            root_member = process_members.ProcessMember(pid, started, 0, pid, True)
+            reused_root = process_members.ProcessMember(pid, started + 1, 0, pid + 2, True)
+            late_member = process_members.ProcessMember(pid + 1, started + 2, 0, pid, True)
+            first_scan = {pid: root_member}
+            second_scan = {pid: reused_root, late_member.pid: late_member}
+            with patch.object(process_identity, "_creation_time", return_value=started):
+                handle = process_handle.ProcessHandle(Mock(pid=pid, returncode=None), log_paths={},
+                                                      stop_channel="signal")
+            handle.budget_path = location.budget_path
             scheduler._handles["attempt"] = (handle, POSIX_IDENTITY)
-            scheduler._condition.wait_for = lambda *_args, **_kw: scheduler._stopping.set()
-            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
+            clock = Mock(wraps=time)
+            clock.monotonic.return_value = 0.0
+
+            def wait_for(_predicate, timeout):
+                clock.monotonic.return_value += timeout
+                if snapshot.call_count == 2:
+                    scheduler._stopping.set()
+                return True
+
+            with patch.object(handle._members, "snapshot", side_effect=[first_scan, second_scan]) as snapshot, \
+                 patch.object(process_members, "process_start",
+                              side_effect=[started, started, started + 1, started + 1]), \
+                 patch.object(process_handle, "child_exit_code", side_effect=[None, 0]), \
+                 patch.object(scheduler._condition, "wait_for", side_effect=wait_for), \
+                 patch("hey_my_buddy.blackboard.service.execution_scheduler.time", clock), \
+                 patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
                 self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
-            handle.observe.assert_called_once_with()
+            self.assertEqual(snapshot.call_count, 2)
+            handle.process.wait.assert_not_called()
             store.record_execution_issue.assert_called_once()
             attempt_id, stage, error = store.record_execution_issue.call_args.args
             self.assertEqual((attempt_id, stage, error.code, error.message), (
@@ -1368,18 +1392,16 @@ class RootCreationTeardownTests(BoardTestCase):
 
 
 class SessionRecordGroupingTests(WorkflowTestCase):
-    def test_admission_has_no_record_path_for_command_or_ungrouped_execution(self):
+    def test_admission_has_no_session_record_for_a_command(self):
         board = self.board()
-        for adapter in ('command', 'dsh'):
-            claim = {'task': {'taskId': 'ungrouped', 'spec': {'adapter': adapter}},
-                     'attempt': {'attemptId': 'attempt'}}
-            with self.subTest(adapter=adapter), \
-                    patch.object(board.store, 'admit_execution', return_value={'claim': claim}), \
-                    patch.object(board.store.workflow, 'prepare_continuation_workspace'):
-                admitted = board.service.admit_execution('fixture-nonce-00000000000000000')['claim']
-            self.assertIsNone(admitted['sessionRecordPath'])
+        task = board.submit_execution(
+            requestId="ungrouped", task="Private command fixture",
+            cwd=str(self.workdir("ungrouped")), adapter="command", argv=["fixture-never-run"],
+        )["task"]
+        admitted = self.claim(board, run_id=task["runId"])["claim"]
+        self.assertIsNone(admitted["sessionRecordPath"])
 
-    def test_launch_path_uses_the_consoles_group_for_macro_standalone_and_helper(self):
+    def test_launch_path_uses_the_consoles_group_for_macro_and_standalone(self):
         from hey_my_buddy.blackboard.tasks.session_content import identity as console_identity
         from hey_my_buddy.private_dirs import session_record_path
 
@@ -1396,21 +1418,3 @@ class SessionRecordGroupingTests(WorkflowTestCase):
                 self.assertEqual(group, root.get("macroTaskId") or f"run:{root['runId']}")
                 self.assertEqual(claim["sessionRecordPath"], str(session_record_path(
                     board.store.directory, group, claim["attempt"]["attemptId"])))
-
-                self.finish_turn(board, {"claim": claim}, disposition="assistance")
-                view = board.call("workflow_get", {"runId": root["runId"]})
-                helper_dir = self.workdir(f"session-child-{named}")
-                # Each existing helper represents a separate checkout, even when
-                # the private test root is nested beneath the source repository.
-                (helper_dir / ".git").mkdir()
-                decision = self.decide(board, view, view["activeRequest"]["requestId"],
-                                        helpers=[{
-                                           "title": f"session-child-{named}", "task": "assist",
-                                           "cwd": str(helper_dir),
-                                           "workspace": {"kind": "existing", "access": "write"}}])
-                child_id = decision["children"][0]["taskId"]
-                helper = self.claim(board, run_id=child_id,
-                                    claim_request_id=f"session-child-claim-{named}")["claim"]
-                self.assertEqual(helper["sessionRecordPath"], str(session_record_path(
-                    board.store.directory, group, helper["attempt"]["attemptId"])))
-                self.finish_turn(board, {"claim": helper}, disposition="assistance")

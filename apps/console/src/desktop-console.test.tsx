@@ -38,9 +38,9 @@ function microTask(runId: string, projectId = "source-project"): Task {
 type Workflow = Record<string, unknown>;
 function workflow(task: Task): Workflow {
   return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: "awaiting-host", buddy: null, delegationAuthority: false,
-    routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
+    routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, ownedMicroTasks: [], workspaceConflicts: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
-    activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
+    activeRequest: { requestId: `request-${task.runId}`, state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, routing: false,
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
     task: { runId: task.runId, revision: task.revision, state: task.state, lineage: task.lineage } };
 }

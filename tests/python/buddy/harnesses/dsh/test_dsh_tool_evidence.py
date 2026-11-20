@@ -32,7 +32,7 @@ from hey_my_buddy.buddy.harnesses.dsh.protocol import (
 )
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
-from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.protocol.tool_evidence import (
     TOOL_EVIDENCE_UNVERIFIED, TOOLS_FORBIDDEN, judge_tool_evidence, read_tool_calls)
 

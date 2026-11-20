@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import NativeIdentity
 from hey_my_buddy.buddy.harnesses.session_receipts import verify_receipt
@@ -100,7 +101,7 @@ class CompleteOutcomeTests(unittest.TestCase):
                 record, _raw = self.record(self.result(harness, value, facts=facts))
                 self.assertEqual(record["outcome"], value)
                 self.assertNotIn("outcomeTruncated", record)
-                self.assertIsNone(turn_io.validate_outcome(record["outcome"]))
+                self.assertIsNone(validate_outcome(record["outcome"]))
                 policy = worker_format(harness)
                 self.assertEqual(record["provenance"],
                                  {**facts, "turnEnd": "completed", policy.validation_key: True})
@@ -109,7 +110,7 @@ class CompleteOutcomeTests(unittest.TestCase):
             with self.subTest(harness=harness):
                 value = outcome(decisions=["汉" * 1365 + "a"], remaining=["item"] * 32)
                 record, raw = self.record(self.result(harness, value))
-                expected = {"version": 1, **self.turn, "inputSha256": turn_io.input_hash(self.turn),
+                expected = {"version": 2, **self.turn, "inputSha256": turn_io.input_hash(self.turn),
                     "promptSha256": hashlib.sha256(b"prompt").hexdigest(), "sessionId": "native-session",
                     "outcome": value, "provenance": {**self.facts, "turnEnd": "completed",
                                                        worker_format(harness).validation_key: True}}
@@ -117,10 +118,13 @@ class CompleteOutcomeTests(unittest.TestCase):
                 self.assertNotIn("outcomeTruncated", record)
 
     def test_invalid_fields_in_long_outcomes_are_rejected(self):
+        attention_request = {"summary": "help", "attempted": "tried", "neededWork": "confirm",
+                             "expectedArtifacts": [], "acceptance": "confirmed"}
         invalid = [outcome(summary=" "), outcome(extra=True), outcome(disposition="unknown"),
                    outcome(request={}), outcome(artifacts=["artifact"] * 33 + [{}]),
                    outcome(artifacts=["a" * 4097 + "\0"]), outcome(remaining="not an array"),
-                   outcome(disposition="assistance", request={"summary": "help"}),
+                   outcome(disposition="assistance", request=attention_request),
+                   outcome(disposition="attention", request={**attention_request, "suggestedBuddyId": None}),
                    outcome(decisions=["d"] * 32 + [None]),
                    outcome(decisions=["d"] * 32 + [" "]),
                    outcome(decisions=["d" * 4097 + "\0"])]
@@ -154,14 +158,13 @@ class CompleteOutcomeTests(unittest.TestCase):
     def test_help_request_keeps_long_text_and_all_expected_artifacts(self):
         request = {"summary": "s" * 8001, "attempted": "t" * 8001, "neededWork": "n" * 8001,
                    "expectedArtifacts": ["a" * 4097] + ["artifact"] * 36,
-                   "acceptance": "a" * 8001, "suggestedBuddyId": None}
+                   "acceptance": "a" * 8001}
         for harness in ("codex", "claude"):
-            for disposition in ("assistance", "attention"):
-                with self.subTest(harness=harness, disposition=disposition):
-                    value = outcome(disposition=disposition, request=request, decisions=["d"] * 33)
-                    record, _raw = self.record(self.result(harness, value))
-                    self.assertEqual(record["outcome"]["request"], request)
-                    self.assertEqual(record["outcome"]["disposition"], disposition)
+            with self.subTest(harness=harness):
+                value = outcome(disposition="attention", request=request, decisions=["d"] * 33)
+                record, _raw = self.record(self.result(harness, value))
+                self.assertEqual(record["outcome"]["request"], request)
+                self.assertEqual(record["outcome"]["disposition"], "attention")
 
     def test_receipt_fields_do_not_reparse_the_final_message(self):
         for harness in ("codex", "claude"):
@@ -212,7 +215,7 @@ class CompleteOutcomeTests(unittest.TestCase):
                     self.assertEqual(canonical_json(value), raw)
                     corrected = outcome(**{field: ["汉" * 1366] + ["item"] * 36})
                     accepted = worker_services.call_session_tool("hey_my_buddy_finish_turn", corrected, configuration)
-                    receipt = verify_receipt(accepted["content"][0]["text"], configuration, turn_io.validate_outcome)
+                    receipt = verify_receipt(accepted["content"][0]["text"], configuration, validate_outcome)
                     self.assertEqual(receipt["outcome"], corrected)
                     self.assertNotIn("outcomeTruncated", receipt)
 

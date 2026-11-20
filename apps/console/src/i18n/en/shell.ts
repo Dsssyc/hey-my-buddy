@@ -97,7 +97,6 @@ export default {
     "state": {
       "queued": "Queued",
       "executing": "Executing",
-      "waiting-helpers": "Waiting for helpers",
       "waiting-owned": "Waiting for owned micro tasks",
       "awaiting-host": "Awaiting Host",
       "delivered": "Awaiting acceptance",
@@ -111,8 +110,8 @@ export default {
   actor: {
     unknownOrigin: "Unrecorded initiator", microTask: "Micro task {{id}}",
     events: {
-      dispatch: "{{time}} {{role}} submitted “{{title}}”", approved: "{{time}} {{role}} approved the request for “{{title}}”",
-      declined: "{{time}} {{role}} declined the request for “{{title}}”", decide: "{{time}} {{role}} decided the request for “{{title}}”",
+      dispatch: "{{time}} {{role}} submitted “{{title}}”",
+      decide: "{{time}} {{role}} resolved a workspace conflict for “{{title}}”",
       continue: "{{time}} {{role}} continued “{{title}}”", integrate: "{{time}} {{role}} integrated the output of “{{title}}”",
       accept: "{{time}} {{role}} accepted “{{title}}”", reject: "{{time}} {{role}} requested acceptance changes for “{{title}}”",
       stop: "{{time}} {{role}} stopped “{{title}}”", console: "{{time}} Console stopped “{{title}}”",

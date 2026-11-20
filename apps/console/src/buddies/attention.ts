@@ -1,10 +1,9 @@
 import { isDecisionCandidate, isFastRouterCandidate } from "../policy";
-import { healthSummary } from "./roles";
 import type { ConsoleView, Snapshot } from "../types";
 
-/** What on the Buddy page waits for the user: Router configuration and failures. */
+/** What on the Buddy page waits for the user: Router configuration. */
 export type BuddyAttention = {
-  roles: "upgrade" | "unset" | "unusable" | "failing" | null;
+  roles: "upgrade" | "unset" | "unusable" | null;
 };
 
 export function buddyAttention(data: ConsoleView, snapshot: Snapshot): BuddyAttention {
@@ -18,5 +17,5 @@ export function buddyAttention(data: ConsoleView, snapshot: Snapshot): BuddyAtte
   const buddy = data.buddies.find(candidate => candidate.buddyId === id);
   const usable = health?.available !== false
     && (configuration.defaultRoutingMode === "fast" ? isFastRouterCandidate(buddy) : isDecisionCandidate(buddy));
-  return { roles: !usable ? "unusable" : healthSummary(health).warning ? "failing" : null };
+  return { roles: usable ? null : "unusable" };
 }

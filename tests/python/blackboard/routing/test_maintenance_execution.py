@@ -27,6 +27,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import maintenance as files
+from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 from hey_my_buddy.protocol.reasons import REGISTERED_REASON_PARAMETERS
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -281,9 +282,17 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(claim["task"]["spec"]["modelResponseWaitSeconds"], 90)
         self.assertNotIn("modelResponseWaitSeconds", claim["task"]["spec"]["decision"])
         self.assertEqual(self.board_.call("task_get", {"runId": started["runId"]})["task"]["modelResponseWaitSeconds"], 90)
-        self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
-        self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
-        self.assertEqual(self.packet(claim)["kinds"][0]["unreadRunIds"], [self.evidence_id])
+        frozen = files.read(self.board_.directory, document["maintenanceRunId"], document["input"])
+        packet = frozen["packet"]
+        self.assertEqual(packet["classificationRunIds"], [self.evidence_id])
+        self.assertIsNone(packet["microTasks"][0]["classification"])
+        kind = packet["kinds"][0]
+        self.assertEqual(kind["unreadRunIds"], [self.evidence_id])
+        kind_id = f"{kind['harness']}:{kind['modelId']}:{kind['effort']}"
+        self.assertEqual(kind["kindId"], kind_id)
+        summaries = frozen["outputSchema"]["properties"]["summaries"]
+        self.assertEqual(list(summaries["properties"]), [kind_id])
+        self.assertEqual(summaries["required"], [kind_id])
         self.assertEqual(claim["task"]["spec"]["decision"]["kind"], "maintain")
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT task_id,state FROM maintenance_runs").fetchone()
@@ -495,6 +504,23 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                     self.assertIsNone(actual)
                 else:
                     self.assertEqual({key: actual[key] for key in reported}, reported)
+
+    def test_working_directory_rejection_keeps_its_reason_parameters(self):
+        self.configure()
+        attempt = self.claim_maintenance(self.start()["runId"])["attempt"]
+        cause = WorkingDirectoryRejected.reason_for(
+            str(self.board_.directory / "missing"), "WinError 267: The directory name is invalid")
+        self.board_.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
+            "terminationReason": "workspace-error",
+            "result": {"operation": "maintenance", "status": "error", "code": cause["code"],
+                       "reason": cause, "nativeRequestSent": False, "modelResponded": False,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}},
+        })
+        run = console_snapshot_projection(self.board_.service)[0]["maintenance"]["runs"][0]
+        self.assertEqual(run["state"], "failed")
+        self.assertEqual(run["reason"], cause)
 
     def test_stop_unconfirmed_keeps_its_reason_over_a_rejected_answer(self):
         self.configure()
@@ -906,7 +932,12 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def test_queued_cancellation_closes_maintenance_and_releases_single_flight(self):
         self.configure()
         started = self.start()
-        self.board_.call("task_cancel", {"runId": started["runId"]})
+        selector = {"runId": started["runId"]}
+        with self.assertRaises(BoardError) as denied:
+            self.board_.call("task_cancel", selector)
+        self.assertEqual(denied.exception.code, "FORBIDDEN")
+        self.assertEqual(self.board_.call("task_get", selector)["task"]["state"], "queued")
+        self.assertEqual(self.board_.console_call("task_cancel", selector)["task"]["state"], "cancelled")
         with self.board_.store.db.read() as db:
             first = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
             self.assertEqual(first["state"], "failed")

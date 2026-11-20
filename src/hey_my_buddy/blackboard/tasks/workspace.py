@@ -643,7 +643,7 @@ def _record(path):
         return None
     try:
         return json.loads(data)
-    except (ValueError, UnicodeError) as error:
+    except (ValueError, UnicodeError, RecursionError) as error:
         raise BoardError("WORKSPACE_CONFLICT", "A workspace recovery record is malformed", path=str(path)) from error
 
 
@@ -1134,7 +1134,7 @@ def _observation_inputs(manifest, repository=None):
 
 
 @contextmanager
-def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, shared_locks=None,
+def submission_preparation(state_dir: Path, request_id: str, intent: dict, *,
                            _preparation=None, before_prepare=None, handoff=None):
     """Hold the original allocation lock through preparation and admission.
 
@@ -1147,18 +1147,14 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
         intent = _intent(intent)
         workspace_id, directory = _workspace_directory(state_dir, request_id)
     prepared = {}
-    with ExitStack() as local_stack:
-        stack, held = shared_locks if shared_locks is not None else (local_stack, set())
-        if directory not in held:
-            stack.enter_context(_lock(directory))
-            held.add(directory)
+    with ExitStack() as stack:
+        stack.enter_context(_lock(directory))
         with _errors():
             borrowed = _borrowed_submission_allocation(state_dir, intent)
             if borrowed is not None:
                 allocation = borrowed[0]
-                if allocation not in held:
+                if allocation != directory:
                     stack.enter_context(_lock(allocation))
-                    held.add(allocation)
                 fresh = _borrowed_submission_allocation(state_dir, intent)
                 if fresh != borrowed:
                     raise BoardError("WORKSPACE_CHANGED", "The borrowed allocation changed while its lock was acquired")

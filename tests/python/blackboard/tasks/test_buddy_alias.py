@@ -64,24 +64,6 @@ class HostAliasTests(WorkflowTestCase):
             self.assertEqual(json.loads(connection.execute("SELECT buddy_json FROM workflow_runs").fetchone()[0]), BUDDY)
             self.assertEqual(json.loads(connection.execute("SELECT input_json FROM workflow_turns").fetchone()[0]), frozen)
 
-    def test_helper_decision_replay_and_record_use_resolved_complete_name(self):
-        board = self.board()
-        self.alias(board, BUDDY, "助手")
-        submitted = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": submitted["runId"]})
-        helper = {"title": "helper", "task": "Check the bounded case", "cwd": str(self.workdir("alias-helper")),
-                  "buddy": "助手", "checkout": "worktree", "access": "read", "inputs": [], "writeScope": [], "expectedSeconds": 60}
-        helper.pop("writeScope")
-        packet = {"runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
-                  "decision": "approve", "helpers": [helper], "autoContinue": True}
-        board.call("workflow_continue", packet)
-        replay = board.call("workflow_continue", {**packet, "helpers": [{**helper, "buddy": buddy_name(BUDDY)}]})
-        self.assertTrue(replay["alreadyResponded"])
-        with board.store.db.read() as connection:
-            recorded = json.loads(connection.execute("SELECT decision_json FROM workflow_requests WHERE request_id=?", (packet["requestId"],)).fetchone()[0])
-            self.assertEqual(recorded["helpers"][0]["buddy"], buddy_name(BUDDY))
-
     def test_continuation_replay_compares_resolved_buddy_and_stores_only_complete_name(self):
         board = self.board()
         self.alias(board, BUDDY, "助手")

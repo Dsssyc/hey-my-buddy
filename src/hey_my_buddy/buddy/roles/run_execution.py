@@ -23,9 +23,11 @@ from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
+from ...protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 from ...protocol.workspace_manifest import turn_manifest
 from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
+from ...protocol.turn_output import TURN_OUTPUT_VERSION, validate_outcome
 from ..harnesses.base import AdapterOutcome, ExecutionContext
 from ..harnesses.controller import (
     STRICT_RESULT_BYTES, collect_controller, launch_controller, read_strict_result, signal_name, stop_confirmed,
@@ -40,7 +42,7 @@ from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt,
 )
-from .turn_io import input_hash, private_json, validate_outcome, canonical_json
+from .turn_io import input_hash, private_json, canonical_json
 
 WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
@@ -99,6 +101,7 @@ class InlineRunHandle:
         self.live_endpoint = None
         self.model_responded = False
         self.model_response_wait = None
+        self.accepted_stop = None
 
     def observe(self, observer, facts):
         """Retain native model output before the role judges the same facts."""
@@ -347,7 +350,7 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str) -> dict
     outcome, provenance = worker_delivery(
         result, delegation_authority=turn_input.get("context", {}).get("delegationAuthority") is True)
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
-    record = {"version": 1, **identity, "inputSha256": input_hash(turn_input),
+    record = {"version": TURN_OUTPUT_VERSION, **identity, "inputSha256": input_hash(turn_input),
               "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
               "sessionId": result.native_identity.session_id if result.native_identity else None,
               "previousSessionId": turn_input.get("previousSessionId"),
@@ -552,6 +555,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
                    generation=identity.generation)
     handle = InlineRunHandle(control, identity)
     handle.model_response_wait = context.model_response_wait
+    handle.accepted_stop = context.accepted_stop
     def run() -> None:
         from .inline_run import execute
         try:
@@ -944,6 +948,20 @@ def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments
             payload = collection.payload
             if not isinstance(payload, dict) and not (wait_expired and specification["allowUnknown"]):
                 raise BoardError("HARNESS_UNAVAILABLE", "The native operation receipt must be an object", harness=name)
+            if isinstance(payload, dict) and payload.get("code") == WorkingDirectoryRejected.code:
+                rejection = payload.get("reason")
+                WorkingDirectoryRejected.reason_params(rejection)
+                native = payload["processState"]  # The stop check admitted this object.
+                message = payload.get("error")
+                if (payload.get("status") != "error"
+                        or native.keys() != {"created", "shutdownConfirmed", "nativeExitCode"}
+                        or native["created"] is not False or native["nativeExitCode"] is not None
+                        or not isinstance(message, str) or not message):
+                    raise BoardError("INVALID_PROTOCOL", "The working directory rejection receipt is invalid", harness=name)
+                error = BoardError(WorkingDirectoryRejected.code, message, harness=name,
+                                   reason=rejection, processState=native)
+                error.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+                raise error
             if specification["allowUnknown"] and (wait_expired or payload.get("status") == "unknown"):
                 return {"source": "native-discovery", "providers": [], "discoveries": [{
                     "harness": name, "status": "unknown", "accountStatus": "unknown",

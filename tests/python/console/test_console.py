@@ -822,7 +822,36 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertEqual(status, 403, body)
         self.assertEqual(json.loads(body)["error"]["code"], "FORBIDDEN")
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
-        self.assertEqual(board.call("task_cancel", {"runId": run_id})["task"]["state"], "cancelled")
+        with self.assertRaises(BoardError) as denied:
+            board.call("task_cancel", {"runId": run_id})
+        self.assertEqual(denied.exception.code, "FORBIDDEN")
+        cancelled = board.store.task_cancel({"runId": run_id}, initiator="service")
+        self.assertEqual(cancelled["task"]["state"], "cancelled")
+
+    def test_only_console_authority_can_cancel_the_profile_from_a_client(self):
+        from hey_my_buddy.blackboard.evaluation.models import current_model
+
+        board = self.board()
+        board.call("model_catalog_refresh", {})
+        board.console_call("user_policy_publish", {
+            "commandId": "configure-profile-cancellation",
+            "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True}],
+            "configuration": {"profileBuddyId": BUDDY_ID},
+        })
+        with board.store.db.read() as db:
+            model_id = current_model(db, "dsh", "deepseek-official", "deepseek-flash")
+        _, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        status, _, body = browser.command("profile_start", {"modelId": model_id}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        selector = {"runId": json.loads(body)["result"]["runId"]}
+        with self.assertRaises(BoardError) as denied:
+            board.call("task_cancel", selector)
+        self.assertEqual(denied.exception.code, "FORBIDDEN")
+        self.assertEqual(board.call("task_get", selector)["task"]["state"], "queued")
+        status, _, body = browser.command("task_cancel", selector, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["result"]["task"]["state"], "cancelled")
 
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()

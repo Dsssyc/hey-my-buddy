@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterator, Mapping
 from ....errors import BoardError
 from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
-from ....protocol.owned_process import WindowsCommandLineTooLong
+from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected
 from ....private_dirs import ensure_private_dir
 from ....paths import native_path
 from ....private_files import read_bytes, open_read
@@ -73,6 +73,7 @@ from ..run_contract import (
     ResultBuddy,
     RunBuddy,
     RunEnd,
+    WorkingDirectoryRejection,
     RunFeedback,
     RunRequest,
     RunResult,
@@ -499,6 +500,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    working_directory_rejection: WorkingDirectoryRejection | None = None
     model_responded: bool = False
     native_request_sent: bool | None = False
     native_admission_error: dict | None = None
@@ -991,11 +993,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.reason = "observer-interrupt"
             state.observer_stopped = True
             send_cancel(sessions[-1] if sessions else None)
-        except (NativeError, ReceiptError) as error:
+        except (NativeError, ReceiptError, WorkingDirectoryRejected) as error:
             state.spawn_failure = getattr(error, "spawn_evidence", None)
             state.status = "cancelled" if error.code in ("cancelled", "native-cancelled") else "error"
             state.reason = error.code
             state.error_text = str(error)[:512]
+            if isinstance(error, WorkingDirectoryRejected):
+                state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
             send_cancel(sessions[-1] if sessions else None)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             state.status = "error"
@@ -1114,6 +1118,12 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     the turn's end; the run loop owns every update, the cancel flag, the overall
     deadline and the role's feedback while it streams.
     """
+    if cancel.is_set() or _remaining(deadline) <= 0:
+        if _remaining(deadline) <= 0:
+            state.deadline_hit = True
+        raise NativeError("cancelled" if cancel.is_set() else "deadline",
+                          "the owned DSH execution was cancelled" if cancel.is_set()
+                          else "the run's overall deadline expired before the prompt")
     if session is not None:
         session.record.project(session.start_prompt, session_id, input_text,
                              f"{session_id}/{time.monotonic_ns()}")
@@ -1125,11 +1135,30 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     if initial:
         state.native_request_sent = None
 
+    prompt_lock = threading.Lock()
+    prompt_aborted = False
+    prompt_sent = False
+
+    def on_prompt_sent() -> None:
+        nonlocal prompt_sent
+        with prompt_lock:
+            prompt_sent = True
+        if initial:
+            state.native_request_sent = True
+
     def send() -> None:
+        nonlocal prompt_aborted
+        with prompt_lock:
+            if prompt_aborted or cancel.is_set() or _remaining(deadline) <= 0:
+                prompt_aborted = True
+                if _remaining(deadline) <= 0:
+                    state.deadline_hit = True
+                if initial:
+                    state.native_request_sent = False
+                return
         try:
             result["value"] = client.prompt(session_id, input_text, timeout=_remaining(deadline),
-                                             on_sent=(lambda: setattr(state, "native_request_sent", True))
-                                             if initial else None)
+                                             on_sent=on_prompt_sent)
         except BaseException as error:  # noqa: BLE001 - the loop maps every failure below
             result["error"] = error
 
@@ -1142,10 +1171,15 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
 
     while thread.is_alive() or not pump.empty():
         if not interrupted and (cancel.is_set() or _remaining(deadline) <= 0):
-            if _remaining(deadline) <= 0:
-                state.deadline_hit = True
-            send_cancel(session_id)
-            interrupted, interrupted_at = True, time.monotonic()
+            with prompt_lock:
+                if _remaining(deadline) <= 0:
+                    state.deadline_hit = True
+                can_cancel = prompt_sent
+                if not can_cancel:
+                    prompt_aborted = True
+            if can_cancel:
+                send_cancel(session_id)
+                interrupted, interrupted_at = True, time.monotonic()
         elif interrupted and thread.is_alive() and time.monotonic() - interrupted_at > _ABANDON_SECONDS:
             # The agent never answered the interrupt: abandon the prompt and let
             # the stop collection end the owned group; no result may come of it.
@@ -1159,6 +1193,10 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
             denied_seen = denied()
             notify()
     thread.join(timeout=5.0)
+    if prompt_aborted and not prompt_sent:
+        raise NativeError("cancelled" if cancel.is_set() else "deadline",
+                          "the owned DSH execution was cancelled" if cancel.is_set()
+                          else "the run's overall deadline expired before the prompt")
     if "error" in result:
         error = result["error"]
         if isinstance(error, AcpRequestError):
@@ -1569,6 +1607,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     return RunResult(
         identity=request.identity, harness="dsh",
         end=RunEnd(status=state.status, reason_code=state.reason,
+                   working_directory_rejection=state.working_directory_rejection,
                    native_exit_code=stop.get("exit_code"),
                    message=state.error_text),
         harness_version=state.harness_version,

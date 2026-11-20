@@ -126,7 +126,7 @@ class HostCutoverTests(WorkflowTestCase):
         board = self.board()
         submitted = self.submit(board)
         claimed = self.claim(board)
-        self.finish_turn(board, claimed, disposition='assistance')
+        self.finish_turn(board, claimed, disposition='attention')
         boundary = board.call('workflow_get', {'runId': submitted['runId']})
         self.assertEqual(boundary['state'], 'awaiting-host')
         stopped=self.submit(board,request_id="cutover-stopped",cwd=str(self.workdir("cutover-stopped")))

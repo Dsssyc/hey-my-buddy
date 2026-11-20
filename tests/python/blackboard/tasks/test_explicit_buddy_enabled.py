@@ -41,36 +41,6 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
 
 
 class ExplicitHelperTests(WorkflowTestCase):
-    def test_disabled_second_helper_is_rejected_before_any_preparation(self):
-        board = self.board()
-        parent = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        disabled = {**BUDDY, "effort": "high"}
-        enable_fixture_buddy(board.store, disabled)
-        with board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=0 WHERE effort='high'")
-        helpers = [{"title": f"helper-{index}", "task": "review", "cwd": str(self.workdir(f"helper-{index}")),
-                    "buddy": " / ".join(buddy.values()), "checkout": "worktree", "access": "read",
-                    "inputs": [], "expectedSeconds": 1800}
-                   for index, buddy in enumerate((BUDDY, disabled))]
-        before_calls = list(self.workspace.prepare_calls)
-        tables = ("tasks", "workflow_children", "workflow_requests", "events", "commands", "workflow_artifacts")
-        with board.store.db.read() as db:
-            before = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
-        with self.assertRaises(BoardError) as rejected:
-            board.call("workflow_continue", {
-                "runId": parent["runId"], "requestId": view["activeRequest"]["requestId"],
-                "decision": "approve", "helpers": helpers, "autoContinue": True,
-            })
-        self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
-        self.assertIs(rejected.exception.details["enabled"], False)
-        self.assertEqual(rejected.exception.details["reason"]["code"], "not-enabled")
-        self.assertEqual(self.workspace.prepare_calls, before_calls)
-        with board.store.db.read() as db:
-            after = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
-        self.assertEqual(after, before)
-
     def test_dispatch_revalidation_checks_enabled_choice(self):
         board = self.board()
         run = self.submit(board)

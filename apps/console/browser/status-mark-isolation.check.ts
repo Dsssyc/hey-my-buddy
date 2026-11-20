@@ -16,7 +16,7 @@ for (const theme of ["dark", "light"]) test.describe(`status separation ${theme}
       const source = timeline.spans.find(span => span.kind === "execution")!;
       const row = timeline.rows.find(row => row.runId === source.runId)!;
       timeline.rows = Array.from({ length: 12 }, (_, index) => ({ ...row, runId: `status-${index}`, parentRunId: null,
-        rootRunId: `status-${index}`, rootLeadRunId: null, depth: 0, title: `Buddy ${index + 1}`, titleSource: "title" }));
+        rootRunId: `status-${index}`, rootLeadRunId: null, title: `Buddy ${index + 1}`, titleSource: "title" }));
       timeline.spans = timeline.rows.flatMap((row, index) => outcomes.map((outcome, phase) => ({
         ...source, runId: row.runId, spanId: `status-${index}-${outcome}`,
         startAt: new Date(Date.parse(source.startAt!) + phase * 600000 + index * 1000).toISOString(),

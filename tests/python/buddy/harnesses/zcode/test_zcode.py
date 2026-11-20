@@ -412,10 +412,10 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
                 self.assertEqual(outcome.result.get("code"), code)
                 self.assertNotIn("turn", outcome.result)
 
-    def test_assistance_comes_from_structured_receipt(self):
-        _, outcome = self.execute(self.context("assistance"))
+    def test_attention_comes_from_structured_receipt(self):
+        _, outcome = self.execute(self.context("needs-help"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "attention")
 
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):

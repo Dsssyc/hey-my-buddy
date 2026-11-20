@@ -31,7 +31,6 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 self.assertEqual(facts["counts"]["macro_tasks"], 3)
                 self.assertEqual(facts["plainRecords"], 2)
                 self.assertEqual(facts["pendingRoots"], 4)
-                self.assertEqual(facts["counts"]["workflow_children"], 1)
                 self.assertEqual(facts["counts"]["workflow_routes"], 1)
                 self.assertEqual(facts["counts"]["decision_requests"], 1)
                 self.assertEqual(facts["counts"]["attempts"], 13)
@@ -45,7 +44,6 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 self.assertEqual(facts["subprocessLaunchAttempts"], 0)
                 self.assertEqual(facts["runtimeEntries"], [])
                 self.assertEqual(facts["workflowStates"].get("accepted"), 1)
-                self.assertIn("workflow.request_approved", facts["eventKinds"])
                 self.assertIn("workflow.turn_returned", facts["eventKinds"])
                 with fixture.board.store.db.read() as connection:
                     returned_states = connection.execute(
@@ -60,11 +58,6 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                         " WHERE a.task_id=t.run_id AND task.selected_attempt_id=a.attempt_id"
                         " AND a.shutdown_confirmed=1 AND a.execution_state='finished'").fetchone()[0]
                     self.assertEqual(bound, 12)
-                    child = connection.execute(
-                        "SELECT parent.macro_task_id,child.macro_task_id FROM workflow_children link"
-                        " JOIN workflow_runs parent ON parent.run_id=link.parent_run_id"
-                        " JOIN workflow_runs child ON child.run_id=link.child_task_id").fetchone()
-                    self.assertEqual(child[0], child[1])
                     linked = connection.execute(
                         "SELECT COUNT(*) FROM workflow_routes r JOIN decision_requests d USING(decision_id)"
                         " JOIN tasks task ON task.task_id=d.task_id JOIN attempts a ON a.task_id=task.task_id"

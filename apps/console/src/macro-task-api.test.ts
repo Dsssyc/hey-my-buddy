@@ -9,8 +9,9 @@ describe("work macro task reads", () => {
     timeline.macroTask.title = null;
     timeline.macroTask.titleSource = "none";
     timeline.rows[0] = { ...timeline.rows[0]!, title: null, titleSource: "none", fixes: "original", fixesTitle: null, fixesTitleSource: "none" };
-    timeline.events[0] = { ...timeline.events[0]!, decision: "approve", verdict: null, state: null, strategy: null, note: "Host 原文" };
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(timeline)));
+    timeline.events[0] = { ...timeline.events[0]!, verdict: null, state: null, strategy: null, note: "Host 原文" };
+    const legacy = { ...timeline.events[0], kind: "decide", eventKind: "workflow.request_approved" };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ...timeline, events: [...timeline.events, legacy] })));
     const result = await createApi("/private", fetcher).macroTaskTimeline(timeline.macroTask.macroTaskId, {});
     expect(result.timeline).toEqual(timeline);
     expect(result.timeline.events[0]).not.toHaveProperty("label");
@@ -94,7 +95,7 @@ describe("work macro task reads", () => {
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, accepted: "2" } } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: undefined } } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: -1 } } },
-      { ...good, macroTask: { ...good.macroTask, counts: { roots: 1, helpers: 0, active: 0, host: 0, review: 0, ended: 0 } } },
+      { ...good, macroTask: { ...good.macroTask, counts: { roots: 1, active: 0, host: 0, review: 0, ended: 0 } } },
       { ...good, rows: good.rows.map(row => ({ ...row, taskSummary: 5 })) },
     ]) {
       const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);

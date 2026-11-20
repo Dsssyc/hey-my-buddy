@@ -209,11 +209,6 @@ class RouterPublicationTests(WorkflowTestCase):
         continued = self.continue_run(board, submitted, buddy='route', input=continuation_text)
         self.assertEqual(continued['routing']['status'], 'queued')
         self.assertIsNone(continued['routing']['source'])
-        helper_text = 'H' * 12000
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_continuations SET helper_outcomes_json=?"
-                               " WHERE run_id=? AND state='queued'",
-                               (json.dumps([{"result": helper_text}]), submitted['runId']))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 1)
             pending = connection.execute('SELECT workspace_id,workspace_manifest_sha256,workspace_facts_role FROM workflow_continuations').fetchone()
@@ -233,7 +228,6 @@ class RouterPublicationTests(WorkflowTestCase):
                 'manifestSha256': continuation['workspace_manifest_sha256'],
             })
             self.assertIn(continuation_text, frozen['task'])
-            self.assertIn(helper_text, frozen['task'])
             self.assertGreater(len(frozen['task'].encode()), 128 * 1024)
         routed = board.call('workflow_get', {'runId': submitted['runId']})
         claimed = self.claim(board, 'router', run_id=routed['routing']['taskId'])['claim']
@@ -410,8 +404,6 @@ class RouterInputTests(unittest.TestCase):
         attempt.mkdir()
         with self.assertRaises(BoardError):
             router_input.prepare(manifest, attempt, state_dir=self.state)
-
-
 
 
 class RouterSchemaAgreementTests(unittest.TestCase):

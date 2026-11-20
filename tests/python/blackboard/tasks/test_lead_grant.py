@@ -4,7 +4,6 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from support import enable_fixture_buddy
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.requests import parse_request
 from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 
 
@@ -49,16 +48,6 @@ class LeadGrantTests(WorkflowTestCase):
             with self.subTest(access=access), self.assertRaises(BoardError):
                 board.call("workflow_submit", params)
         self.catalog_validation.assert_not_called()
-
-    def test_helpers_cannot_carry_grants_even_when_false(self):
-        packet = self.params()
-        del packet["macroTaskId"]
-        for value in (True, False):
-            packet["delegationAuthority"] = value
-            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
-                parse_request("continue", {"runId": "parent", "requestId": "request", "decision": "approve",
-                    "helpers": [packet], "autoContinue": True})
-            self.assertIn("delegationAuthority", caught.exception.message)
 
     def test_grant_requires_an_enabled_available_buddy(self):
         board = self.board()

@@ -47,7 +47,7 @@ export function fastRouterCandidates(buddies: Buddy[]): Buddy[] {
 
 /**
  * The published directory capability for a harness that can actually execute a
- * delegated helper in a workspace. `catalog.proposed_buddies` records exactly
+ * micro task in a workspace. `catalog.proposed_buddies` records exactly
  * `execution:<harness>` for every executable harness, so a newly registered
  * harness (such as Codex) is admitted without a console-side harness list, and
  * a decision-only or mismatched row is never offered as an executor.
@@ -60,7 +60,7 @@ export function hasExecutionCapability(buddy: Buddy | undefined): boolean {
   );
 }
 
-/** Enabled, currently available and able to execute a delegated helper task. */
+/** Enabled, currently available and able to execute a micro task. */
 function isExecutionCandidate(buddy: Buddy | undefined): boolean {
   return !!buddy && buddy.enabled && buddy.available && hasExecutionCapability(buddy);
 }

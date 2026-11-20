@@ -7,7 +7,7 @@ import sqlite3
 def autonomous_tasks(connection: sqlite3.Connection) -> list[dict[str, str]]:
     """A queued Host boundary is passive only without a pending continuation.
 
-    Routing and helper tasks remain in the complete task inventory. Unresolved
+    Routing tasks remain in the complete task inventory. Unresolved
     attempts are checked separately, including attempts of passive tasks.
     """
     rows = connection.execute(

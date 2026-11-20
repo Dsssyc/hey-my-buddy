@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from c_two.error import ContractMismatch, CoreError
+from c_two.error import ClientCallResource, ContractMismatch, CoreError
 
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import transport
@@ -91,6 +91,83 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'cold start reached'):
                         transport._ensure_service(directory)
                     preflight.assert_called_once_with(directory)
+
+    def test_client_call_keeps_its_wrapped_core_failure(self):
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        for kind, phase, code in (
+                (None, 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('not_found', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('not_found', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('connection_refused', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('connection_refused', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('permission_denied', 'pre_dispatch', 'LAUNCH_ACCESS_DENIED'),
+                ('other', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE')):
+            with self.subTest(kind=kind):
+                cause = core_failure(kind)
+                cause.transport_phase = phase
+                cause.details.update({'route': 'control', 'stage': 'inner'})
+                error = ClientCallResource(str(cause), details={'stage': 'outer'})
+                error.__cause__ = cause
+                error.io_operation = 'bind'
+                service = Mock()
+                service.ping.side_effect = error
+                with self.assertRaises(transport.ServiceError) as caught:
+                    transport._invoke(service, endpoint, 'ping', {})
+                self.assertEqual(caught.exception.code, code)
+                expected = {'category': 'transport', 'transport_kind': 'ipc', 'transport_phase': phase,
+                            'raw_os_error': cause.raw_os_error, 'io_operation': 'bind',
+                            'route': 'control', 'stage': 'outer'}
+                if kind is not None:
+                    expected['io_kind'] = kind
+                self.assertEqual(caught.exception.details, expected)
+
+    def test_read_only_ping_disconnect_becomes_unavailable_without_uncertain_phase(self):
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'state'
+            directory.mkdir(mode=0o700)
+            cause = core_failure(None)
+            cause.transport_phase = 'dispatch_uncertain'
+            cause.raw_os_error = None
+            cause.io_operation = None
+            torn = ClientCallResource(str(cause))
+            torn.__cause__ = cause
+            calls = []
+
+            def request(_endpoint, operation, _params, resource='control', *, state_dir):
+                calls.append((operation, resource, state_dir))
+                raise transport.local_rpc_error(torn)
+
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=request), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
+            self.assertEqual(calls, [('ping', 'control', directory)])
+            self.assertEqual(caught.exception.code, 'SERVICE_UNAVAILABLE')
+            self.assertNotIn('transport_phase', caught.exception.details)
+
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=request), \
+                 patch.object(transport, '_cold_start_preflight',
+                              side_effect=AssertionError('autostart must not enter cold-start preflight')) as preflight, \
+                 self.assertRaises(transport.ServiceError) as autostart_caught:
+                transport._ensure_service(directory)
+            self.assertEqual(autostart_caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            preflight.assert_not_called()
+
+            other = core_failure('other')
+            other.transport_phase = 'dispatch_uncertain'
+            unclassified = ClientCallResource(str(other))
+            unclassified.__cause__ = other
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=transport.local_rpc_error(unclassified)), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
+            self.assertEqual(caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            self.assertEqual(caught.exception.details['io_kind'], 'other')
 
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
         # C-Two rejects a Windows peer's identity before sending bytes.

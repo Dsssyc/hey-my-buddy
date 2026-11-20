@@ -81,7 +81,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         const timeline = await response.json() as MacroTaskTimeline;
         const seed = timeline.events.find(event => event.kind === "accept")!;
         const marker = (seq: number, runId: string, kind: string, at: string): TimelineEvent => ({
-          seq, runId, kind, at, actor: seed.actor, decision: null, verdict: null, state: null, strategy: null,
+          seq, runId, kind, at, actor: seed.actor, verdict: null, state: null, strategy: null,
           note: null, attemptId: null, requestId: null, artifactId: null,
         });
         timeline.events.push(marker(9001, "preview-run-a1", "takeover", new Date(Date.parse(seed.at) + 25 * 60_000).toISOString()));

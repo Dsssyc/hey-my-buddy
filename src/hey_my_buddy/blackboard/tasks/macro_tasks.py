@@ -46,27 +46,23 @@ LIST_PARAMETERS = frozenset({"limit", "before", "group", "query", "filter", "sor
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 GOAL_HISTORY_PARAMETERS = frozenset({"macroTaskId"})
 
-#: Group ownership follows helpers and Lead-owned runs to their outermost owner.
+#: Group ownership follows Lead-owned runs to their outermost owner.
 RUN_GROUPS_SQL = """
-WITH RECURSIVE parents(run_id, parent_run_id) AS (
-    SELECT child_task_id, parent_run_id FROM workflow_children
-    UNION SELECT owned_run_id, lead_run_id FROM workflow_lead_tasks
-),
-lineage(run_id, ancestor_id) AS (
+WITH RECURSIVE lineage(run_id, ancestor_id) AS (
     SELECT run_id, run_id FROM workflow_runs
     UNION
-    SELECT lineage.run_id, parents.parent_run_id
-      FROM lineage JOIN parents ON parents.run_id = lineage.ancestor_id
+    SELECT lineage.run_id, lead.lead_run_id
+      FROM lineage JOIN workflow_lead_tasks lead ON lead.owned_run_id = lineage.ancestor_id
 )
 SELECT lineage.run_id,
        COALESCE(ancestor.macro_task_id, 'run:' || ancestor.run_id) AS group_id
   FROM lineage
   JOIN workflow_runs ancestor ON ancestor.run_id = lineage.ancestor_id
- WHERE NOT EXISTS (SELECT 1 FROM parents WHERE parents.run_id = lineage.ancestor_id)
+ WHERE NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead WHERE lead.owned_run_id = lineage.ancestor_id)
 """
 
-#: Every grouped execution, including helper and Router tasks. Plain execution
-#: records without a micro task root belong to no group. Materialize history as
+#: Every grouped execution, including Router tasks. Plain execution records
+#: without a micro task root belong to no group. Materialize history as
 #: well as ownership: across history's many LEFT JOINs SQLite otherwise estimates
 #: too few outer rows to build a lookup index for the computed root_run_id join.
 MEMBERS_SQL = f"""
@@ -75,6 +71,22 @@ ownership AS MATERIALIZED ({RUN_GROUPS_SQL})
 SELECT h.*, ownership.group_id
   FROM history h JOIN ownership ON ownership.run_id = h.root_run_id
 """
+
+def group_for_task(connection, task_id: str) -> str | None:
+    """Resolve the current group through the execution's owning run."""
+    row = connection.execute(
+        "WITH RECURSIVE owners(run_id) AS ("
+        " SELECT run_id FROM workflow_runs WHERE run_id=?"
+        " UNION SELECT route.run_id FROM router_dispatches dispatch"
+        " JOIN workflow_routes route USING(decision_id) WHERE dispatch.task_id=?"
+        " UNION SELECT lead.lead_run_id FROM workflow_lead_tasks lead"
+        " JOIN owners ON owners.run_id=lead.owned_run_id)"
+        " SELECT COALESCE(run.macro_task_id,'run:' || run.run_id) AS group_id"
+        " FROM owners JOIN workflow_runs run USING(run_id)"
+        " WHERE NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead WHERE lead.owned_run_id=run.run_id)",
+        (task_id, task_id),
+    ).fetchone()
+    return row["group_id"] if row is not None else None
 
 # Build at import so source drift cannot silently remove the page restriction.
 PAGE_HISTORY_SQL = micro_task.replace_sql_once(
@@ -94,6 +106,7 @@ HOST_MARKERS = {
     "task.submitted": "dispatch",
     "workflow.request_approved": "decide",
     "workflow.request_declined": "decide",
+    "workflow.workspace_resolved": "decide",
     "workflow.continued": "continue",
     "workflow.review_rejected": "reject",
     "workflow.integration_recorded": "integrate",
@@ -106,33 +119,13 @@ HOST_MARKERS = {
 # -- admission and activity ----------------------------------------------------
 
 
-#: The console top bar's pending count: distinct micro-task-tree roots with an
-#: awaiting-host run or a stopped failed/cancelled root, except Lead-owned trees.
-#: It reuses the same Host predicate and lineage
-#: walk as the history relation (``micro_task.RELATION_SQL``) and stays a bounded
-#: aggregate over the whole board instead of decorating the latest task page.
+#: The console top bar's pending count uses the same Host predicate as history.
 PENDING_ROOTS_SQL = f"""
-WITH RECURSIVE lineage(task_id, root_run_id) AS (
-    SELECT child_task_id, child_task_id FROM workflow_children
-    UNION ALL
-    SELECT lineage.task_id, parent.parent_run_id
-      FROM lineage JOIN workflow_children parent ON parent.child_task_id = lineage.root_run_id
-),
-roots AS (
-    SELECT lineage.task_id AS task_id, lineage.root_run_id AS root_run_id
-      FROM lineage
-     WHERE NOT EXISTS (
-         SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = lineage.root_run_id
-     )
-)
-SELECT COUNT(DISTINCT COALESCE(roots.root_run_id, tasks.task_id)) AS pending
+SELECT COUNT(*) AS pending
   FROM tasks
   JOIN workflow_runs awaiting ON awaiting.run_id = tasks.task_id
-  LEFT JOIN roots ON roots.task_id = tasks.task_id
-  LEFT JOIN workflow_children child ON child.child_task_id=tasks.task_id
  WHERE {micro_task.host_filter_sql(run_state='awaiting.state', task_state='tasks.state',
-                                  parent_run_id='child.parent_run_id',
-                                  root_run_id='COALESCE(roots.root_run_id, tasks.task_id)')}
+                                  root_run_id='tasks.task_id')}
 """
 
 
@@ -383,19 +376,18 @@ WITH items AS (
 def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
     """Maintain only the indexed read projection, in the original event transaction.
 
-    Existing child/route links determine propagation. The UNION also terminates on
-    duplicate lineage rows without turning a read index into a new lifecycle.
+    Frozen Router dispatches and Lead ownership determine propagation.
     """
     if task_id is None:
         return
     connection.execute(
         "WITH RECURSIVE owners(run_id) AS ("
         " SELECT run_id FROM workflow_runs WHERE run_id=?"
+        " UNION SELECT r.run_id FROM workflow_routes r JOIN router_dispatches d USING(decision_id) WHERE d.task_id=?"
         " UNION SELECT r.run_id FROM workflow_routes r JOIN decision_requests d USING(decision_id) WHERE d.task_id=?"
-        " UNION SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id"
         " UNION SELECT l.lead_run_id FROM workflow_lead_tasks l JOIN owners o ON l.owned_run_id=o.run_id)"
         " UPDATE workflow_runs SET activity_seq=?,activity_at=? WHERE run_id IN (SELECT run_id FROM owners)",
-        (task_id, task_id, seq, at),
+        (task_id, task_id, task_id, seq, at),
     )
     connection.execute(
         "UPDATE macro_tasks SET activity_seq=?,activity_at=? WHERE macro_task_id IN"
@@ -496,10 +488,10 @@ def _state(row) -> str:
     if run_state == "awaiting-host" and row["root_lead_run_id"] is None:
         return "host"
     if state in micro_task.ACTIVE_TASK_STATES or run_state in (
-        "executing", "waiting-helpers", "waiting-owned", "awaiting-host"
+        "executing", "waiting-owned", "awaiting-host"
     ):
         return "active"
-    if run_state in micro_task.UNCONCLUDED_RESULT_STATES and row["child_parent_run_id"] is None:
+    if run_state in micro_task.UNCONCLUDED_RESULT_STATES:
         return "host" if row["root_lead_run_id"] is None else "active"
     if (
         row["accepted_at"] is None
@@ -767,15 +759,14 @@ SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status
 
 def _summary(connection, group_id: str, inputs: dict) -> dict:
     members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
-    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
+    counts = {"roots": len(members), "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
               "failed": 0, "unfinished": 0, "delivered": 0}
     for row in members:
         counts["unfinished"] += int(row["run_state"] not in ("accepted", "concluded", "delivered"))
         counts["delivered"] += int(row["run_state"] == "delivered")
         counts[_state(row)] += 1
-        counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
-        counts["failed"] += int(row["child_parent_run_id"] is None and row["task_id"] in failed_conclusions)
-        counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
+        counts["accepted"] += int(row["run_state"] == "accepted")
+        counts["failed"] += int(row["task_id"] in failed_conclusions)
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("macro-"):
         macro_task = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (group_id,)).fetchone()
@@ -783,7 +774,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         group_project = project(connection, group_id)
         created_at = macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
-        roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
+        roots = [row["task_id"] for row in members]
         kind = "macro-task"
     else:
         root_id = group_id[len("run:"):]
@@ -844,13 +835,11 @@ def macro_task_timeline(store, params: dict) -> dict:
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
         summary = {**_summary(connection, group_id, inputs), "goal": current_goal(connection, group_id)}
         runs = inputs["members"]
-        matching_ids = {row["task_id"] for row in runs if row["summary_matching"]}
-        ordered = _tree_order(runs)
-        selected = [(row, depth) for row, depth in ordered if row["task_id"] in matching_ids]
+        selected = sorted((row for row in runs if row["summary_matching"]),
+                          key=lambda row: (row["created_at"], row["task_id"]))
         shown = selected[:limit]
-        shown_ids = [row["task_id"] for row, _depth in shown]
-        rows = [_timeline_row(connection, row, depth) for row, depth in shown]
-        shown = [row for row, _depth in shown]
+        shown_ids = [row["task_id"] for row in shown]
+        rows = [_timeline_row(connection, row) for row in shown]
         spans = []
         for row in shown:
             spans.extend(_run_spans(store, connection, row))
@@ -884,28 +873,8 @@ def macro_task_timeline(store, params: dict) -> dict:
     }
 
 
-def _tree_order(runs: list) -> list:
-    """(row, depth) pairs: roots by creation, each followed depth-first by its helpers."""
-    children: dict[str | None, list] = {}
-    known = {row["task_id"] for row in runs}
-    for row in runs:
-        parent = row["child_parent_run_id"] if row["child_parent_run_id"] in known else None
-        children.setdefault(parent, []).append(row)
-    for items in children.values():
-        items.sort(key=lambda row: (row["created_at"], row["task_id"]))
-    ordered: list = []
-
-    def visit(row, depth: int) -> None:
-        ordered.append((row, depth))
-        for child in children.get(row["task_id"], []):
-            visit(child, depth + 1)
-
-    for root in children.get(None, []):
-        visit(root, 0)
-    return ordered
-
-
-def _timeline_row(connection, row, depth: int) -> dict:
+def _timeline_row(connection, row) -> dict:
+    from ..store.store import task_queue_reason
     metadata = micro_task.metadata_from_row(connection, row)
     title, title_source = _run_title(connection, row["task_id"])
     fix_relation = fixes.view(connection, row["task_id"])
@@ -927,7 +896,6 @@ def _timeline_row(connection, row, depth: int) -> dict:
     return {
         **fix_relation,
         "runId": row["task_id"],
-        "parentRunId": row["child_parent_run_id"],
         "rootRunId": row["root_run_id"],
         "title": title,
         "titleSource": title_source,
@@ -935,11 +903,10 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],
-        "queueReason": row["queue_reason"],
+        "queueReason": task_queue_reason(connection, row),
         "conclusionStatus": row["conclusion_status"],
         "category": _state(row),
         "shutdownConfirmed": attempts == confirmed and not unproven,
-        "depth": depth,
         "kind": metadata["kind"],
         "actor": metadata["actor"],
         "delegationAuthority": metadata["delegationAuthority"],
@@ -1091,7 +1058,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
-        "SELECT w.request_id,w.kind,w.state,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
+        "SELECT w.request_id,w.state,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
         " w.reason_code,w.reason_params_json FROM workflow_requests w"
         " WHERE w.run_id=? ORDER BY w.created_at,w.request_id", (run_id,)
     ).fetchall():
@@ -1104,7 +1071,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         spans.append(_span(
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],
-            request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
+            request_id=request["request_id"], decisionId=request["decision_id"],
             reason=request_reason(connection, request),
         ))
     return spans
@@ -1194,7 +1161,7 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
             "runId": row["task_id"],
             "kind": kind,
             "at": row["created_at"],
-            **{key: payload.get(key) for key in ("decision", "verdict", "state", "strategy", "note")},
+            **{key: payload.get(key) for key in ("verdict", "state", "strategy", "note")},
             "actor": actor,
             "attemptId": row["attempt_id"],
             "requestId": payload.get("requestId"),

@@ -49,9 +49,8 @@ class HelpTests(unittest.TestCase):
         submit = help_text("submit")
         for field in ("cwd", "macroTaskId", "title", "task", "buddy", "checkout", "access", "expectedSeconds", "inputs", "writeScope"):
             self.assertIn(field, submit)
-        for label, detail, count in (("submit", submit, 1),
-                                     ("continue and its helper packets", help_text("continue"), 2)):
-            self.assertEqual(detail.count("'harness / provider / model / effort'"), count,
+        for label, detail in (("submit", submit), ("continue", help_text("continue"))):
+            self.assertEqual(detail.count("'harness / provider / model / effort'"), 1,
                              f"{label} help must state the buddy name writing")
         self.assertIn("alias (case-insensitive)", submit)
         self.assertIn("both parts must identify the same buddy", submit)
@@ -61,7 +60,7 @@ class HelpTests(unittest.TestCase):
         self.assertNotIn("requestId", submit)
         self.assertIn("waitSeconds", help_text("await"))
         self.assertIn("question and inquiryId cannot be combined", help_text("inquire"))
-        self.assertIn("Nested HelperRequest fields:", help_text("continue"))
+        self.assertIn("requestId requires input, resolution, or both", help_text("continue"))
         self.assertIn("Nested IntegrationTarget fields:", help_text("accept"))
         self.assertIn("Nested RoutingHistoryRequest fields:", help_text("get"))
         get_help = help_text("get")
@@ -152,10 +151,29 @@ class RequestTests(unittest.TestCase):
     def test_continue_and_accept_bind_exact_response_facts(self):
         self.assert_invalid("continue", {"runId": "run-1", "input": "again"}, "requestId")
         self.assert_invalid("continue", {"runId": "run-1", "artifactId": "art-1"}, "input")
-        self.assert_invalid("continue", {"runId": "run-1", "requestId": "req-1", "decision": "decline", "helpers": []}, "helpers")
         self.assert_invalid("accept", {"runId": "run-1", "artifactId": "art-1", "note": "checked"}, "target")
         self.assert_invalid("accept", {"runId": "run-1", "artifactId": "art-1", "note": "checked",
                                       "notRequired": "no files", "target": {"path": self.cwd, "ref": "main"}}, "target")
+
+    def test_host_and_service_reject_retired_boundary_fields(self):
+        continuation = {"runId": "run-1", "requestId": "req-1", "input": "continue"}
+        for method, packet in (
+            ("continue", continuation),
+            ("accept", {"runId": "run-1", "artifactId": "art-1", "note": "checked",
+                        "notRequired": "no files"}),
+            ("conclude", {"runId": "run-1", "note": "checked"}),
+            ("cancel", {"runId": "run-1"}),
+        ):
+            for audience, entry in (("host", method), ("service", "workflow_" + method)):
+                with self.subTest(method=method, audience=audience):
+                    self.assert_invalid(entry, {**packet, "targetRunId": "run-2"}, "targetRunId",
+                                        audience=audience)
+        for field, value in (("decision", "decline"), ("helpers", []),
+                             ("autoContinue", True), ("helperPolicy", "keep")):
+            with self.subTest(field=field):
+                self.assert_invalid("continue", {**continuation, field: value}, field)
+                self.assert_invalid("workflow_continue", {**continuation, field: value}, field,
+                                    audience="service")
 
     def test_service_and_lead_requests_refuse_public_creation_key(self):
         packet = self.packet()

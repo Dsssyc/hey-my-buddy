@@ -18,7 +18,7 @@ export function eventName(event: TimelineEvent): string {
 
 /** An event carries its own decision facts and authored note, without service prose. */
 export function eventDetails(event: TimelineEvent): string {
-  return [...(["decision", "verdict", "state", "strategy"] as const).flatMap(key =>
+  return [...(["verdict", "state", "strategy"] as const).flatMap(key =>
     event[key] ? [i18n.t(`taskDetail:event.value.${event[key]}`, { defaultValue: event[key] })] : []), event.note].filter(Boolean).join(" · ");
 }
 
@@ -57,7 +57,7 @@ const OUTCOME_LABEL: Record<SpanOutcome, string> = {
 
 /** Host-request decision labels use the recorded request state, not a guess. */
 const HOST_STATE_LABEL: Record<string, string> = {
-  get approved() { return i18n.t("console:approved"); }, get declined() { return i18n.t("console:declined"); }, get superseded() { return i18n.t("console:superseded"); }, get cancelled() { return i18n.t("console:cancelled"); },
+  get resolved() { return i18n.t("console:resolved"); }, get superseded() { return i18n.t("console:superseded"); }, get cancelled() { return i18n.t("console:cancelled"); },
 };
 
 export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
@@ -79,7 +79,6 @@ const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutr
   running: { tone: "green", glyph: "▸", glyphClass: "running" },
   "awaiting-host": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-owned": { tone: "amber", glyph: "◆", glyphClass: "warn" },
-  "waiting-helpers": { tone: "green", glyph: "▸", glyphClass: "running" },
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
   cancelled: { tone: "amber", glyph: "◆", glyphClass: "warn" },
@@ -91,7 +90,7 @@ const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutr
 const STATE_LABELS: Record<string, string> = {
   get queued() { return i18n.t("console:queued"); }, get running() { return i18n.t("console:executing"); }, get cancelling() { return i18n.t("console:cancelling"); }, get completed() { return i18n.t("console:executionCompleted"); },
   get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
-  get executing() { return i18n.t("console:executing"); }, get "awaiting-host"() { return i18n.t("console:waitingForHost"); }, get "waiting-helpers"() { return i18n.t("console:helpersRunning"); },
+  get executing() { return i18n.t("console:executing"); }, get "awaiting-host"() { return i18n.t("console:waitingForHost"); },
   get "waiting-owned"() { return i18n.t("console:waitingForOwnedMicroTasks"); },
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
@@ -108,11 +107,6 @@ export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []
     : (row.state === "failed" || row.state === "cancelled") && ["queued", "running", "reconciliation-needed"].includes(row.status)
       ? row.status : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
-  if (row.kind === "helper" && (key === "failed" || key === "cancelled")) {
-    return key === "failed"
-      ? { label: i18n.t("console:executionFailed"), tone: "red", glyph: "✕", glyphClass: "bad", settled: false }
-      : { label: i18n.t("console:cancelled"), tone: "neutral", glyph: "⊘", glyphClass: "muted", settled: true };
-  }
   return {
     label: key === "cancelling" ? i18n.t("tasks:stopping")
       : key === "failed" || key === "cancelled" ? i18n.t(`taskDetail:state.${key}${row.rootLeadRunId ? "Lead" : "Host"}`)

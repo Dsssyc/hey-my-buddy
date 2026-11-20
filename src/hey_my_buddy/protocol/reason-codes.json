@@ -131,7 +131,10 @@
   "harness.version-unknown": [
     "operation"
   ],
-  "helpers-settled": [],
+  "harness.working-directory-rejected": [
+    "cwd",
+    "systemReason"
+  ],
   "history.reason-unavailable": [
     "recordId"
   ],

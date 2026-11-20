@@ -517,7 +517,7 @@ test.describe("four harness preview records", () => {
   });
 
   test("review-mode Router abstention keeps its own task heading and structured decision", async ({ page }) => {
-    await openSession(page, session("preview-run-a2", 5));
+    await openSession(page, session("preview-run-a2", 4));
     await expect(row(page, "task").locator("h3")).toHaveText("Choose a buddy for this micro task (review mode)");
     await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expect(row(page, "answer")).toContainText("null");

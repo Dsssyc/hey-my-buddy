@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 
+from ...protocol.owned_process import WorkingDirectoryRejected
 from . import discovery
 
 
@@ -21,15 +22,18 @@ def version_text(value: object) -> str | None:
 
 def probe_version(command: list[str], environment: dict, *, cwd: str,
                   deadline: float, owned: list | None) -> str | None:
-    """Continue after any diagnostic failure whose child is confirmed stopped.
+    """Continue after optional diagnostic failures with confirmed shutdown.
 
     The public probe owns creation, bounded reading and stop observation. Its
     unconfirmed stop is retained even when no main process has been registered.
+    A rejected working directory also stops the run before its main spawn.
     """
     receipt = owned if owned is not None else []
     try:
         reason, output = discovery.probe([*command, "--version"], environment,
                                          cwd=cwd, deadline=min(deadline, time.monotonic() + 5), owned=receipt)
+    except WorkingDirectoryRejected:
+        raise
     except Exception as error:
         if not receipt[0]["shutdown"]:
             raise VersionShutdownError("the native version probe shutdown is unconfirmed") from error

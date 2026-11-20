@@ -60,21 +60,6 @@ describe("recorded row state", () => {
       }
     } finally { await i18n.changeLanguage("zh"); }
   });
-  it("keeps failed and cancelled helpers terminal regardless of their root's owner", async () => {
-    try {
-      for (const language of ["zh", "en"] as const) {
-        await i18n.changeLanguage(language);
-        for (const rootLeadRunId of [null, "lead"]) {
-          expect(rowStateInfo({ kind: "helper", state: "failed", rootLeadRunId } as TimelineRow)).toMatchObject({
-            label: language === "zh" ? "执行失败" : "Execution failed", tone: "red", glyph: "✕", settled: false,
-          });
-          expect(rowStateInfo({ kind: "helper", state: "cancelled", rootLeadRunId } as TimelineRow)).toMatchObject({
-            label: language === "zh" ? "已取消" : "Cancelled", tone: "neutral", settled: true,
-          });
-        }
-      }
-    } finally { await i18n.changeLanguage("zh"); }
-  });
   it("uses the execution's active state before a root's failed or cancelled result", () => {
     for (const state of ["failed", "cancelled"]) {
       for (const status of ["queued", "running", "cancelling", "reconciliation-needed"]) {
@@ -88,10 +73,10 @@ describe("recorded row state", () => {
 
 describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, delegationAuthority: false, title: "修复标题错位", titleSource: "title", taskSummary: null,
+    runId: "r1", rootRunId: "r1", rootLeadRunId: null, delegationAuthority: false, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
     conclusionStatus: null,
-    shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
+    shutdownConfirmed: true, kind: "micro-task", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({

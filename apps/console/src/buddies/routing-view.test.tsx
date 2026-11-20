@@ -172,10 +172,12 @@ describe("what the list says needs the user", () => {
     expect(note()!.textContent).toBe("列表第一项 gone:p:m:e：已不在目录中。");
   });
 
-  it("says that routing keeps failing, without calling it unavailable", async () => {
+  it("repeats no note under the list while the window records failures, which the records below still count", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, available: true, failureCount: 4, consecutiveFailures: 4 }) }));
     await openRoles(f);
-    expect(note()!.textContent).toBe("路由连续失败 4 次。");
+    expect(note()).toBeNull();
+    const reading = within(section("记录")).getByText("连续失败");
+    expect(reading.parentElement?.textContent).toBe("连续失败4");
   });
 
   it("renders the recorded Router reason", async () => {
