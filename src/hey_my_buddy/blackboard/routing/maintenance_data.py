@@ -418,6 +418,8 @@ class _Batch:
         node_id, parent = item["id"], item["parentId"]
         if node_id in self.nodes:
             raise ValueError("existing node cannot be changed")
+        if any("\x00" in value for value in (node_id, item["name"], item["definition"])):
+            raise ValueError("domain node fields must not contain NUL characters")
         name = item["name"].strip()
         if not name or not item["definition"].strip():
             raise ValueError("name and definition must be nonblank")
@@ -522,11 +524,16 @@ def _missing(field, key, identifiers):
     return [f"{field}[{identifier}]: missing {key}" for identifier in sorted(identifiers)]
 
 
-def commit_staged(connection, *, packet, staged, verified_events, maintenance_run_id):
+def commit_staged(connection, *, packet, staged, verified_events, maintenance_run_id, prior_errors=()):
     """Recheck staging against live state and publish covered entries atomically."""
     batch = _Batch(connection, packet)
     covered_runs, covered_kinds = maintenance_coverage(packet, verified_events, surviving_run_ids=batch.surviving)
-    errors = _missing("classifications", "runId", batch.unclassified - staged["classifications"].keys())
+    exempt_prefixes = (
+        *(f"classifications[{run_id}]: " for run_id in batch.classifications - batch.surviving),
+        *(f"summaries[{kind_id}]: " for kind_id, unread in batch.unread.items() if not unread),
+    )
+    errors = [entry for entry in prior_errors if not entry.startswith(exempt_prefixes)]
+    errors.extend(_missing("classifications", "runId", batch.unclassified - staged["classifications"].keys()))
     errors.extend(_missing("summaries", "kindId",
                            {key for key, unread in batch.unread.items() if unread} - staged["summaries"].keys()))
     counts = {"nodes": 0, "merges": 0, "classifications": 0, "summaries": 0}

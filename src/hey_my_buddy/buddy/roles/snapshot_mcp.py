@@ -78,8 +78,19 @@ class SnapshotService:
         if native_identity is not None or call_id is not None:
             key = _call_key(native_identity, call_id)
         args_digest = snapshot_digest(args)
+        direct = key is not None
+        byte_limit = MAX_SNAPSHOT_RESULT_BYTES - (0 if direct else _RPC_HEADER_BYTES)
+
+        def fits(data: dict, coverage: dict) -> bool:
+            effective = {} if data.get("items") == [] or data.get("text") == "" else coverage
+            preview_row = {"receiptSeq": 9_999_999_999, "toolName": tool_name, "argsDigest": args_digest,
+                           "ok": True, "coverage": effective,
+                           "directCall": list(key) if key is not None else None}
+            preview = sign_snapshot_reply(self.configuration, preview_row, {"data": data})
+            return len(canonical_json(_result(preview, ok=True, direct=direct)).encode("utf-8")) <= byte_limit
+
         try:
-            data, coverage = self.query.call(tool_name, args)
+            data, coverage = self.query.call(tool_name, args, fits=fits)
             response, ok = {"data": data}, True
         except QueryError as error:
             response, ok, coverage = {"error": str(error)[:256]}, False, {}
@@ -95,8 +106,6 @@ class SnapshotService:
                 if payload.get("items") == [] or payload.get("text") == "":
                     row["coverage"] = {}
             envelope = sign_snapshot_reply(self.configuration, row, response)
-            direct = key is not None
-            byte_limit = MAX_SNAPSHOT_RESULT_BYTES - (0 if direct else _RPC_HEADER_BYTES)
             if len(canonical_json(_result(envelope, ok=ok, direct=direct)).encode()) > byte_limit:
                 row.update(ok=False, coverage={})
                 ok = False

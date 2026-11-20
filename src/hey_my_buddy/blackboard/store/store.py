@@ -912,11 +912,12 @@ class BoardStore:
         if claim is None:
             return None
         run_id = claim["task_id"]
+        from ..tasks.macro_tasks import group_for_task
         run = connection.execute(
-            "SELECT title, macro_task_id FROM workflow_runs WHERE run_id=?", (run_id,)
+            "SELECT title FROM workflow_runs WHERE run_id=?", (run_id,)
         ).fetchone()
         return {"runId": run_id, "title": run["title"] if run else None,
-                "macroTaskId": run["macro_task_id"] if run else None}
+                "macroTaskId": group_for_task(connection, run_id)}
 
     def _admission_blocker(self, connection: sqlite3.Connection, spec: dict, *, exclude_task: str | None = None) -> str | None:
         """Why this specification cannot start right now, or ``None`` when it can.

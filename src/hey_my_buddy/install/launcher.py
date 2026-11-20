@@ -49,7 +49,7 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     # This program's private roots, interpreter selection and launch settings.
     'HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
     'HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY', 'HMB_CONSOLE_PORT',
-    'HMB_MODEL_CATALOG_FILE',
+    'HMB_MODEL_CATALOG_FILE', 'HMB_DISABLE_PYPI_CHECK',
     'HMB_AGENT_SKILLS_DIR', 'HMB_CLAUDE_SKILLS_DIR', 'UV_BIN',
 })
 
@@ -246,6 +246,8 @@ def service_environment(overrides: dict[str, str] | None = None) -> dict[str, st
     if os.environ.get('HMB_DEV_SOURCE') == '1':
         allowed = allowed | DEVELOPMENT_ENVIRONMENT_KEYS
     environment = {key: value for key, value in os.environ.items() if key in allowed}
+    if 'HMB_CHECKS_TMPDIR' in os.environ or 'PYTEST_CURRENT_TEST' in os.environ:
+        environment.setdefault('HMB_DISABLE_PYPI_CHECK', '1')
     if 'PATH' in environment and sys.prefix != sys.base_prefix:
         executable_directory = os.path.join(sys.prefix, 'Scripts' if os.name == 'nt' else 'bin')
         environment['PATH'] = os.pathsep.join(

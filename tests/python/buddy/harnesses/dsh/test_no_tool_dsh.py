@@ -215,6 +215,40 @@ class RouterStartWaitTests(DshNoToolTests):
         self.assertFalse((execution.directory / BUDGET).exists(),
                          "a declared harness never publishes the start-wait budget")
 
+    def test_zero_final_message_chunks_returns_none_instead_of_empty_string(self):
+        from hey_my_buddy.buddy.harnesses.dsh import native_run
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+
+        captured = []
+
+        def fake_prompt(*, fold, **_kwargs):
+            # Tool call clears any earlier narration; no message chunks follow.
+            fold({"params": {"sessionId": "s1", "update": {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "thinking"}}}})
+            fold({"params": {"sessionId": "s1", "update": {
+                "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "query_task"}}})
+            return {"stopReason": "end_turn"}
+
+        def fake_notify(*, settled=False, raw=None, **_kwargs):
+            captured.append((settled, raw))
+            return FEEDBACK_CONTINUE
+
+        request = mock.Mock(input_text="prompt", snapshot_query=None, buddy=SPEC)
+        state = mock.Mock(status="running", prompt_stop_reason=None)
+        tools = mock.Mock()
+        with mock.patch.object(native_run, "_open_session", return_value=("s1", {})), \
+                mock.patch.object(native_run, "_configure", return_value=None), \
+                mock.patch.object(native_run, "_prompt_and_observe", side_effect=fake_prompt), \
+                mock.patch.object(native_run, "_settle_stop_reason", return_value=None), \
+                mock.patch.object(native_run, "_close_session"):
+            result = native_run._final_message_rounds(
+                client=mock.Mock(), pump=mock.Mock(), request=request,
+                deadline=time.monotonic() + 5, cancel=mock.Mock(), state=state, facts=mock.Mock(),
+                tools=tools, activity=mock.Mock(), sessions=[], fold=lambda _u: False,
+                notify=fake_notify, denied=mock.Mock(), send_cancel=mock.Mock(), session=None)
+        self.assertIsNone(result)
+        self.assertEqual(captured, [(True, None)])
+
 
 if __name__ == "__main__":
     unittest.main()

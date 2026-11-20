@@ -1136,3 +1136,78 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(tuple(db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()),
                              ("completed", None))
+
+    def test_coverage_rejects_symlinked_intermediate_directory(self):
+        import hashlib
+        import os
+        from hey_my_buddy.blackboard.routing.maintenance import _read_coverage
+
+        if os.name == "nt":
+            self.skipTest("POSIX symlink test for intermediate coverage directory")
+        outside = self.workdir("outside-coverage")
+        payload = b"[]"
+        state_dir = self.board_.directory
+        harnesses_dir = state_dir / "harnesses"
+        harnesses_dir.mkdir(parents=True, exist_ok=True)
+        link_parent = harnesses_dir / "codex"
+        target_parent = outside / "codex-real"
+        invocation_name = "no-tool-" + ("a" * 32)
+        attempt_dir = target_parent / "micro-tasks" / "task-1" / "attempts" / "attempt-1" / invocation_name
+        attempt_dir.mkdir(parents=True)
+        (attempt_dir / "snapshot-coverage.json").write_bytes(payload)
+        os.symlink(target_parent, link_parent)
+        location = state_dir / "harnesses" / "codex" / "micro-tasks" / "task-1" / "attempts" / "attempt-1" / invocation_name / "snapshot-coverage.json"
+        reference = {"location": str(location), "sizeBytes": len(payload),
+                     "sha256": hashlib.sha256(payload).hexdigest()}
+        with self.assertRaises(ValueError):
+            _read_coverage(state_dir, {"task_id": "task-1"}, {"attempt_id": "attempt-1"},
+                           {"buddy": {"harness": "codex"}}, {"snapshotCoverage": reference})
+
+    def test_transient_recovery_oserror_records_issue_retries_and_keeps_scheduler_alive(self):
+        from hey_my_buddy.blackboard.routing import snapshot_files
+        from hey_my_buddy.blackboard.routing.maintenance import Scheduler
+
+        calls = []
+
+        def flaky_recover(_store):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("temporary sharing violation")
+
+        scheduler = Scheduler(self.board_.store)
+        with patch.object(snapshot_files, "recover_files", side_effect=flaky_recover):
+            self.assertFalse(scheduler._recover_startup_files())
+            stages = [issue["stage"] for issue in self.board_.store.service_issues()]
+            self.assertIn("routing-snapshot-cleanup", stages)
+            self.assertTrue(scheduler._recover_startup_files())
+            stages = [issue["stage"] for issue in self.board_.store.service_issues()]
+            self.assertNotIn("routing-snapshot-cleanup", stages)
+        self.assertIsNone(self.board_.store.persistence_error)
+
+    def test_deleted_target_does_not_fail_completion_from_stale_correction_error(self):
+        second_id = self.add_settled_evidence("second-deleted")
+        self.configure()
+        claim = self.claim_maintenance(self.start()["runId"])
+        packet = self.packet(claim)
+        answer = self.valid_answer(packet)
+        # Keep the summary citing only the surviving run; introduce an error only on second_id.
+        for summary in answer["summaries"]:
+            summary["citations"] = [self.evidence_id]
+        for entry in answer["classifications"]:
+            if entry["runId"] == second_id:
+                entry["domainNodeId"] = "nonexistent-domain"
+        feedback = self.submit_answer(claim, 0, answer)
+        self.assertTrue(any(second_id in err for err in feedback["errors"]), feedback)
+        # MockWorkspace has no real git worktree metadata; bypass physical workspace check
+        # so macro_task_delete executes its real SQLite deletion transaction.
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion
+        with patch.object(macro_task_deletion, "_delete_workspaces", return_value=[]):
+            deleted = self.board_.console_call("macro_task_delete", {
+                "macroTaskId": f"run:{second_id}", "microTaskCount": 1, "confirm": True})
+        self.assertEqual(deleted["state"], "deleted", deleted)
+        self.settle_success(claim)
+        with self.board_.store.db.read() as db:
+            run = db.execute("SELECT state,reason_code,reason_params_json FROM maintenance_runs").fetchone()
+            self.assertEqual((run["state"], run["reason_code"]), ("completed", None), dict(run))
+            classified = [row[0] for row in db.execute("SELECT run_id FROM micro_task_classifications")]
+            self.assertEqual(classified, [self.evidence_id])

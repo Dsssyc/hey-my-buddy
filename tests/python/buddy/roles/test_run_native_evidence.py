@@ -222,6 +222,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             rejected = self.router_collect(payload, mode, nodes)
             self.assertEqual(rejected.status, "failed")
             self.assertEqual(rejected.result["code"], "router-out-of-bounds")
+            self.assertEqual(rejected.result["bound"], "not-an-active-domain")
 
     def test_router_results_keep_the_harness_reported_token_usage_in_both_modes(self):
         for mode, payload in zip(("fast", "review"), self.project(self.result())):

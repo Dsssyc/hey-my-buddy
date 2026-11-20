@@ -114,8 +114,12 @@ class CorrectionPolicyTests(unittest.TestCase):
                 self.assertEqual("Role and frozen request" in feedback.input_text, not preserved)
                 self.assertEqual(facts["rawAnswer"] in feedback.input_text, not preserved)
                 self.assertEqual(observer.observer(facts).action, "continue")
+                hard_observer = ReviewObserver(schema, "Role and frozen request", can_correct=True,
+                                               validator=validator, session_preserved=preserved)
                 hard = {**facts, "rawAnswer": '{"buddyId":"unknown","extra":1}'}
-                self.assertEqual(observer.observer(hard).action, "stop")
+                self.assertEqual(hard_observer.observer(hard).action, "continue")
+                self.assertEqual(hard_observer.correction.correction_count, 0)
+                self.assertIsNone(hard_observer.stop_reason)
         observer = ReviewObserver(schema, "base", can_correct=False, validator=validator)
         for key in ("deniedInteractions", "toolMarkerFrames", "readToolViolations"):
             self.assertEqual(observer.observer({**facts, key: 1}).action, "stop")

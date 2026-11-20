@@ -136,20 +136,20 @@ def _validate(args, schema):
             raise QueryError(f"Invalid value for {key}.")
 
 
-def _fits(result):
+def _fits(result, _coverage=None):
     # Native text content wraps the canonical JSON once more in JSON. Account
     # for escaping there and leave room for the transport envelope and receipt.
     return len(canonical_json(canonical_json(result)).encode("utf-8")) <= _PAGE_BUDGET
 
 
-def _prefix(start, end, render):
+def _prefix(start, end, fits):
     """Find the longest code point interval whose complete result fits."""
-    if _fits(render(end)):
+    if fits(end):
         return end
     low, high = start, end
     while high - low > 1:
         middle = (low + high) // 2
-        if _fits(render(middle)):
+        if fits(middle):
             low = middle
         else:
             high = middle
@@ -182,7 +182,7 @@ def _cursor_position(plane, tool, args):
     return signature, int(match[2]), int(match[3])
 
 
-def _page(plane, tool, args, records: Iterable[_Record]):
+def _page(plane, tool, args, records: Iterable[_Record], *, fits=_fits):
     signature, index, offset = _cursor_position(plane, tool, args)
     limit = args.get("limit", _MAX_PAGE_ITEMS)
     window = list(islice(records, index, index + limit + 1))
@@ -211,7 +211,7 @@ def _page(plane, tool, args, records: Iterable[_Record]):
             raise QueryError("Cursor offset is outside this item.")
         candidate, covered = render(item, record, position=position, start=0, end=total,
                                     total=total, next_index=position + 1)
-        if not offset and _fits(candidate):
+        if not offset and fits(candidate, {"tool": tool, "ranges": [*ranges, covered]}):
             items.append(item)
             ranges.append(covered)
             result = candidate
@@ -228,7 +228,11 @@ def _page(plane, tool, args, records: Iterable[_Record]):
                           next_index=position + 1 if end == total else position,
                           next_offset=0 if end == total else end)
 
-        end = _prefix(offset, min(total, offset + _TEXT_LIMIT), lambda end: fragment(end)[0])
+        def fragment_fits(end):
+            page, covered = fragment(end)
+            return fits(page, {"tool": tool, "ranges": [*ranges, covered]})
+
+        end = _prefix(offset, min(total, offset + _TEXT_LIMIT), fragment_fits)
         result, covered = fragment(end)
         ranges.append(covered)
         break
@@ -305,16 +309,17 @@ class SnapshotQuery:
     def tools(self):
         return deepcopy(list(self._tools.values()))
 
-    def call(self, tool, args):
+    def call(self, tool, args, *, fits=None):
         if not isinstance(tool, str) or tool not in self._tools:
             raise QueryError("Unknown tool for this snapshot.")
         _validate(args, self._tools[tool]["inputSchema"])
+        check = _fits if fits is None else fits
         if tool == "query_task":
-            return self._task(args)
+            return self._task(args, fits=check)
         records = getattr(self, "_" + tool)(args)
-        return _page(self._plane, tool, args, records)
+        return _page(self._plane, tool, args, records, fits=check)
 
-    def _task(self, args):
+    def _task(self, args, *, fits=_fits):
         text = self._snapshot["task"]
         total = len(text)
         total_bytes = len(text.encode("utf-8"))
@@ -327,7 +332,11 @@ class SnapshotQuery:
             return {"text": text[start:end], "offset": start, "nextOffset": end if remaining else None,
                     "totalCharacters": total, "totalBytes": total_bytes, "remaining": remaining}
 
-        end = _prefix(start, min(total, start + args.get("limit", _TEXT_LIMIT)), render)
+        def task_fits(end):
+            ranges = [{"start": start, "end": end, "total": total}] if start < end else []
+            return fits(render(end), {"tool": "query_task", "ranges": ranges})
+
+        end = _prefix(start, min(total, start + args.get("limit", _TEXT_LIMIT)), task_fits)
         ranges = [{"start": start, "end": end, "total": total}] if start < end else []
         return render(end), {"tool": "query_task", "ranges": ranges}
 

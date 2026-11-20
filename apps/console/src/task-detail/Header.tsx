@@ -111,11 +111,13 @@ export function Header({ view, workflow, endMs, error, busy, onRefresh, onBack, 
           <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
             <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("inline-flex items-center gap-1.5 text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.key === "confirmingStop" || word.mark === "hand" || word.mark === "review" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}><StateMark kind={word.mark} breathing={word.mark === "live" || word.mark === "paused" && !view.task.shutdownConfirmed}/>{t(`state.${word.key}`)}</span>
           </Hint>
-          {queueReason && <span data-slot="detail-queue-reason" className="max-w-64 text-xs leading-snug text-ink3">{t(`queueReason.${queueReason}`)}{queueReason === "model-capacity" && modelService && <> · {modelService.harness} / {modelService.provider} / {modelService.model}</>}{blocker && <> · <button type="button" data-slot="detail-blocking-task"
+          {queueReason && <span data-slot="detail-queue-reason" className="max-w-64 text-xs leading-snug text-ink3">{t(`queueReason.${queueReason}`)}{queueReason === "model-capacity" && modelService && <> · {modelService.harness} / {modelService.provider} / {modelService.model}</>}{blocker && <> · {blocker.macroTaskId ? <button type="button" data-slot="detail-blocking-task"
             className="max-w-full truncate align-bottom text-ink underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={blocker.title || blocker.runId} onClick={() => onOpenRun(blocker.runId, blocker.macroTaskId ?? undefined)}>
+            aria-label={blocker.title || blocker.runId} onClick={() => onOpenRun(blocker.runId, blocker.macroTaskId!)}>
             {blocker.title || (blocker.runId.length > 20 ? `${blocker.runId.slice(0, 16)}…` : blocker.runId)}
-          </button></>}</span>}
+          </button> : <span data-slot="detail-blocking-task" className="max-w-full truncate align-bottom text-ink">
+            {blocker.title || (blocker.runId.length > 20 ? `${blocker.runId.slice(0, 16)}…` : blocker.runId)}
+          </span>}</>}</span>}
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
           <Button variant="ghost" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>

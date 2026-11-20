@@ -306,15 +306,14 @@ class Maintenance:
                         staged = files.read(self.store.directory, run_id, checked["staged"])
                         packet = files.read(self.store.directory, run_id, document["snapshot"]["reference"])
                         try:
+                            correction_errors = feedback["errors"][:len(feedback["errors"]) - len(feedback["missing"])]
                             counts, errors = maintenance_data.commit_staged(
                                 connection, packet=packet, staged=staged, verified_events=verified,
-                                maintenance_run_id=run_id)
+                                maintenance_run_id=run_id, prior_errors=correction_errors)
                         except QueryError:
                             code = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
                         else:
                             progress = counts["classifications"] + counts["summaries"]
-                            correction_errors = feedback["errors"][:len(feedback["errors"]) - len(feedback["missing"])]
-                            errors = correction_errors + errors
                             if errors:
                                 code, params = "maintenance-answer-invalid", {"errors": errors}
         if code == "router-not-responding":
@@ -336,9 +335,13 @@ def _read_coverage(state_dir, task, attempt, document, output):
     root = attempt_root(state_dir, document["buddy"]["harness"], task["task_id"], attempt["attempt_id"])
     path = Path(reference["location"])
     if (path.parent.parent != root or path.name != "snapshot-coverage.json"
-            or re.fullmatch(r"no-tool-[0-9a-f]{32}", path.parent.name) is None
-            or linked(root) or linked(path.parent)):
+            or re.fullmatch(r"no-tool-[0-9a-f]{32}", path.parent.name) is None):
         raise ValueError("Snapshot coverage does not belong to the maintenance attempt")
+    current = Path(state_dir)
+    for part in path.parent.relative_to(current).parts:
+        current = current / part
+        if linked(current):
+            raise ValueError("Snapshot coverage does not belong to the maintenance attempt")
     raw = read_bytes(path)
     if len(raw) != reference["sizeBytes"] or hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise ValueError("Snapshot coverage digest differs")
@@ -354,18 +357,36 @@ class Scheduler:
         self.store = store
         self.thread = threading.Thread(target=self.run, name="hey-my-buddy-maintenance", daemon=True)
 
+    def _recover_startup_files(self) -> bool:
+        from . import snapshot_files
+
+        ok = True
+        for stage, action in (
+            ("maintenance-file-cleanup", self.store.maintenance.recover_files),
+            ("routing-snapshot-cleanup", lambda: snapshot_files.recover_files(self.store)),
+        ):
+            try:
+                action()
+            except OSError as error:
+                self.store.record_service_issue(stage, error)
+                ok = False
+            else:
+                self.store.clear_service_issue(stage)
+        return ok
+
     def run(self):
         try:
-            from . import snapshot_files
-
-            self.store.maintenance.recover_files()
-            snapshot_files.recover_files(self.store)
+            recovered = self._recover_startup_files()
             while True:
                 with self.store._condition:
                     if self.store._wait_stopped:
                         return
                     head = self.store._head
+                if not recovered:
+                    recovered = self._recover_startup_files()
                 delay = self.store.maintenance.collect()
+                if not recovered:
+                    delay = 5.0 if delay is None else min(delay, 5.0)
                 with self.store._condition:
                     self.store._condition.wait_for(
                         lambda: self.store._wait_stopped or self.store._head != head, timeout=delay)

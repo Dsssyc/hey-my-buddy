@@ -54,6 +54,20 @@ class BlockingTaskTests(WorkflowTestCase):
             connection.execute("UPDATE tasks SET queue_reason='capacity' WHERE task_id=?", (queued["runId"],))
         self.assert_projection(board, queued, None, reason="capacity")
 
+    def test_standalone_workflow_holder_projects_its_synthetic_group_id(self):
+        board = self.board(max_concurrent=4)
+        parent = self.workdir("standalone-holder")
+        holder = self.submit(board, cwd=str(parent), title="Standalone work", access="read")
+        self.assertIsNone(holder["macroTaskId"])
+        self.assertIsNotNone(self.claim(board, run_id=holder["runId"])["claim"])
+        queued = self.submit(board, cwd=str(parent), request_id="waiting-standalone", access="read",
+                             create_macro={"title": "Other macro", "goal": "Wait on standalone"})
+        self.assertEqual(self.claim(board, run_id=queued["runId"])["reason"], "cwd-overlap")
+        self.assert_projection(board, queued, {
+            "runId": holder["runId"], "title": "Standalone work",
+            "macroTaskId": f"run:{holder['runId']}",
+        })
+
     def test_owned_task_read_keeps_the_other_runs_details_out_of_agent_scope(self):
         board = self.board(max_concurrent=4)
         _, claim = self.lead(board)

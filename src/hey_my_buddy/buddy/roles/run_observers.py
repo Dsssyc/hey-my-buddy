@@ -109,7 +109,7 @@ class FastCorrection:
             if problem is not None:
                 kind, detail = problem
                 if kind == "hard":
-                    return self._stop(detail.code if isinstance(detail, BoardError) else "answer-hard-bound")
+                    return FEEDBACK_CONTINUE
                 if self.correction_count:
                     return FEEDBACK_CONTINUE
                 self.correction_count = 1

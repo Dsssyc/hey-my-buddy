@@ -349,6 +349,17 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
                              "Renamed")
 
+    def test_nul_bytes_in_new_domain_nodes_are_rejected_at_staging(self):
+        packet = self.packet()
+        for field, value in (("id", "bad\x00id"), ("name", "\x00Visible"), ("definition", "\x00Defined")):
+            node = {"id": "clean-id", "name": "Clean", "definition": "Clean def", "parentId": None}
+            node[field] = value
+            answer = {"newNodes": [node], "merges": [], "classifications": [], "summaries": []}
+            with self.subTest(field=field), self.board_.store.db.read() as db:
+                staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+            self.assertEqual(staged["tree"], [])
+            self.assertTrue(any("NUL" in error for error in feedback["errors"]), feedback["errors"])
+
     def test_packet_reads_kind_counts_and_real_provider_failure_columns(self):
         with self.board_.store.db.write() as db:
             ensure_model_service(db, BUDDY["harness"], "other-provider", BUDDY["model"], self.board_.store.now())

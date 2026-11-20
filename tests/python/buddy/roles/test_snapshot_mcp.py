@@ -99,3 +99,66 @@ class SnapshotServiceTests(unittest.TestCase):
         self.assertEqual(sequences, set(range(1, 9)))
         keys, coverage = self.service.verify_calls(calls, [self.native])
         self.assertEqual((len(keys), len(coverage)), (8, 8))
+
+    def test_stdio_maintenance_pages_long_items_and_32_item_batches_within_signed_limit(self):
+        long_run_id = "11111111-2222-3333-4444-555555555555"
+        long_task = ("冻结维护证据A1\n\"quoted\"\\slash " * 1400)[:25000]
+        small_runs = [f"{index:08x}-aaaa-bbbb-cccc-{index:012x}" for index in range(1, 33)]
+        def make_run(run_id, task_text):
+            return {
+                "runId": run_id, "title": "Task", "project": None, "classification": None,
+                "task": task_text,
+                "result": {"state": "accepted", "continuationRounds": 0, "turns": [],
+                           "continuations": [], "hostBoundaryFacts": []},
+            }
+
+        snapshot = {
+            "domainNodes": [],
+            "classificationRunIds": [long_run_id, *small_runs],
+            "kinds": [],
+            "comparisonStatistics": [],
+            "microTasks": [make_run(long_run_id, long_task),
+                           *(make_run(run_id, "ok") for run_id in small_runs)],
+        }
+        config = {"identity": {"harness": "codex", "taskId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                               "attemptId": "99999999-8888-7777-6666-555555555555", "generation": 1},
+                  "inputSha256": "c" * 64, "key": "d" * 64}
+        service = SnapshotService(SnapshotQuery(snapshot, plane="maintenance"),
+                                  self.root / "maint-invocation", config)
+        # 1. Page a 25,000-char ASCII+CJK maintenance task section to completion.
+        fragments, cursor = [], None
+        while True:
+            args = {"runIds": [long_run_id], "sections": ["task"]}
+            if cursor is not None:
+                args["cursor"] = cursor
+            reply = service.mcp_call("query_micro_tasks", args)
+            self.assertFalse(reply["isError"], reply)
+            self.assertLessEqual(len(canonical_json(reply).encode("utf-8")), 16 * 1024 - 256)
+            data = decode_strict_json(reply["content"][0]["text"])["response"]["data"]
+            self.assertEqual(len(data["items"]), 1)
+            fragments.append(data["items"][0]["fragment"]["text"])
+            cursor = data["nextCursor"]
+            if cursor is None:
+                break
+        self.assertGreater(len(fragments), 1)
+        reassembled = decode_strict_json("".join(fragments))
+        self.assertEqual(reassembled["value"]["task"], long_task)
+
+        # 2. Page 32 micro-task sections (16 runs x 2 sections) with production UUIDs.
+        seen, cursor, pages = [], None, 0
+        while True:
+            args = {"runIds": small_runs[:16], "sections": ["task", "turns"], "limit": 32}
+            if cursor is not None:
+                args["cursor"] = cursor
+            reply = service.mcp_call("query_micro_tasks", args)
+            self.assertFalse(reply["isError"], reply)
+            self.assertLessEqual(len(canonical_json(reply).encode("utf-8")), 16 * 1024 - 256)
+            data = decode_strict_json(reply["content"][0]["text"])["response"]["data"]
+            pages += 1
+            seen.extend((item["runId"], item["section"]) for item in data["items"])
+            cursor = data["nextCursor"]
+            if cursor is None:
+                break
+        self.assertEqual(len(seen), 32)
+        self.assertEqual(len(set(seen)), 32)
+        self.assertGreaterEqual(pages, 1)

@@ -1339,7 +1339,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
             return None
         if failure is not None:
             raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
-        raw = "".join(raw_parts)
+        raw = "".join(raw_parts) if raw_parts else None
         tools.close_root(session_id)
         _close_session(client, session_id, deadline=deadline)
         feedback = notify(settled=True, raw=raw)

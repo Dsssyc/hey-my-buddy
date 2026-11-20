@@ -294,6 +294,8 @@ class DecisionAdapter(Adapter):
                 result["decision"] = router_selection.validate_answer(native_result.get("rawAnswer"), frozen)
             except BoardError as failure:
                 code = failure.code
+                if "bound" in failure.details:
+                    result["bound"] = failure.details["bound"]
         if code:
             result.update(status="error", code=code)
             if outcome.status != "cancelled":

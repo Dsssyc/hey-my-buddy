@@ -185,6 +185,30 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         self.assertEqual(view["routerBuddyIds"], [A, B, C])
         self.assertEqual(view["routingMode"], "fast")
 
+    def test_reroute_preflight_failure_clears_previous_round_dispatch_pointer(self):
+        request, first = self.start(three=True, micro_task=True)
+        # Invalidate B so publication triggers a reroute with 2 remaining candidates (A, C),
+        # while removing all Routers from the configured list so round 2 preflight yields no buddy.
+        self.invalidate(B, "disabled")
+        self.set_settings(ids=[], mode="fast", wait=60)
+        response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertIsNone(view["runId"])
+        self.assertEqual(view["routerTrials"], [])
+        self.assertEqual(view["routerBuddyIds"], [])
+
+    def test_router_out_of_bounds_preserves_not_an_active_domain_reason(self):
+        self.set_settings(ids=[A], mode="fast", wait=60)
+        request, first = self.start(three=False, micro_task=True)
+        failed = {**self.answer(first, buddy_id=B), "status": "error",
+                  "code": "router-out-of-bounds", "bound": "not-an-active-domain"}
+        failed.pop("decision", None)
+        response = self.report(first, failed)
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(view["reason"], {"code": "router-out-of-bounds", "params": {"bound": "not-an-active-domain"}})
+
 
 class CatalogAndPreferencePublicationTests(DecisionTestCase):
     def begin(self, board):

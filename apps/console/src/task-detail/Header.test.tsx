@@ -91,18 +91,31 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
 
 it.each([
   { title: "Prepare shared checkout", macroTaskId: "macro-2", text: "Prepare shared checkout" },
-  { title: null, macroTaskId: null, text: "run:123456789012…" },
-])("links a queued blocker with its recorded macro task", ({ title, macroTaskId, text }) => {
+  { title: "Standalone checkout", macroTaskId: "run:holder-1", text: "Standalone checkout" },
+])("links a queued blocker with its recorded macro or standalone group", ({ title, macroTaskId, text }) => {
   const runId = "run:123456789012345678901234";
   const view = parseTask(task({ state: "queued", queueReason: "cwd-overlap", blockingTask: { runId, title, macroTaskId } }), "m1");
   const onOpenRun = vi.fn();
   render(<TooltipProvider><Header view={view} workflow={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
     onRefresh={vi.fn()} onBack={vi.fn()} onOpenRun={onOpenRun}/></TooltipProvider>);
-  const button = screen.getByRole("button", { name: title ?? runId });
+  const button = screen.getByRole("button", { name: title });
   expect(button.textContent?.trim()).toBe(text);
   fireEvent.click(button);
-  expect(onOpenRun).toHaveBeenCalledExactlyOnceWith(runId, macroTaskId ?? undefined);
+  expect(onOpenRun).toHaveBeenCalledExactlyOnceWith(runId, macroTaskId);
   expect(screen.queryByText("归属")).toBeNull();
   expect(screen.queryByText("回合")).toBeNull();
   expect(screen.getByText("历时")).toBeTruthy();
+});
+
+it("renders a plain execution blocker without a link when it has no workflow group", () => {
+  const runId = "run:123456789012345678901234";
+  const view = parseTask(task({ state: "queued", queueReason: "cwd-overlap", blockingTask: { runId, title: null, macroTaskId: null } }), "m1");
+  const onOpenRun = vi.fn();
+  const rendered = render(<TooltipProvider><Header view={view} workflow={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+    onRefresh={vi.fn()} onBack={vi.fn()} onOpenRun={onOpenRun}/></TooltipProvider>);
+  expect(screen.queryByRole("button", { name: runId })).toBeNull();
+  const blocker = rendered.container.querySelector('[data-slot="detail-blocking-task"]');
+  expect(blocker?.tagName).toBe("SPAN");
+  expect(blocker?.textContent?.trim()).toBe("run:123456789012…");
+  expect(onOpenRun).not.toHaveBeenCalled();
 });

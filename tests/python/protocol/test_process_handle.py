@@ -118,16 +118,22 @@ class StopSequenceTests(unittest.TestCase):
         self.assertEqual(events, [("job.terminate", 0)])
 
     def test_terminate_is_not_starved_by_continuous_wait_loop(self):
-        process = Mock(pid=123, returncode=None)
+        process = Mock(pid=123, returncode=None, stdin=Mock())
         process.poll.return_value = None
-        with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         entered_first = threading.Event()
         release_first = threading.Event()
         exited = False
         wait_polls = 0
-        polls_at_signal = None
+        polls_at_stop = None
         done = threading.Event()
+
+        def fake_close():
+            nonlocal exited, polls_at_stop
+            polls_at_stop = wait_polls
+            exited = True
+
+        with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
+            handle = ProcessHandle(process, log_paths={}, stop_channel="stdin", close_input=fake_close)
 
         def fake_observe():
             nonlocal wait_polls
@@ -138,16 +144,9 @@ class StopSequenceTests(unittest.TestCase):
                     release_first.wait(timeout=2)
                     # Simulate a slow OS scan that exceeds wait(timeout=0.02).
                     time.sleep(0.03)
-                return (-signal.SIGTERM, "gone") if exited else (None, "alive")
-
-        def fake_signal(sig):
-            nonlocal exited, polls_at_signal
-            if sig == signal.SIGTERM:
-                polls_at_signal = wait_polls
-                exited = True
+                return (0, "gone") if exited else (None, "alive")
 
         handle.observe = fake_observe
-        handle._signal_session = fake_signal
 
         def loop():
             while not done.is_set():
@@ -175,7 +174,7 @@ class StopSequenceTests(unittest.TestCase):
             stopper.join(timeout=3)
             self.assertFalse(stopper.is_alive())
             self.assertEqual(result_holder, [(True, False)])
-            self.assertEqual(polls_at_signal, polls_before)
+            self.assertEqual(polls_at_stop, polls_before)
         finally:
             release_first.set()
             done.set()

@@ -1004,8 +1004,11 @@ class DecisionCoordinator:
                                        snapshot={"facts": resolution.facts, "baseInput": document,
                                                  "inspections": [dict(entry) for entry in resolution.inspections]},
                                        now=now, round=next_round)
-        connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
-                           (canonical_json(request), row["decision_id"]))
+        connection.execute(
+            "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
+            " requested_json=? WHERE decision_id=?",
+            (canonical_json(request), row["decision_id"]),
+        )
         self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
         if resolution.buddy is None:
             problem = resolution.problem
@@ -1094,8 +1097,10 @@ class DecisionCoordinator:
             if code == WorkingDirectoryRejected.code:
                 params = WorkingDirectoryRejected.reason_params(output.get("reason"))
                 return refuse(code, changed=True, **params)
+            bound = output.get("bound")
             params = ({"seconds": document["modelResponseWaitSeconds"]} if code == "router-not-responding"
-                      else {"bound": "not-a-candidate"} if code == "router-out-of-bounds"
+                      else {"bound": bound if bound in ("not-a-candidate", "not-an-active-domain") else "not-a-candidate"}
+                      if code == "router-out-of-bounds"
                       else {"bound": "not-less-sampled"} if code == "router-exploration-out-of-bounds" else {})
             return refuse(code, **params)
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
