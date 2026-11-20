@@ -100,6 +100,7 @@ class CodexToolEventProjector:
         self._session_starts: set[tuple[str, str]] = set()
         self._snapshot_requests: dict[tuple[str, str], tuple[str, object]] = {}
         self._dynamic_phases: dict[tuple[str, str], dict] = {}
+        self._dynamic_tools: dict[tuple[str, str], str] = {}
         self._started: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     @property
@@ -128,8 +129,9 @@ class CodexToolEventProjector:
         """
         key = (canonical_json(identity), call_id)
         self._snapshot_requests[key] = (tool_name, arguments)
-        self.snapshot_calls.observe(identity, call_id, tool_name, arguments=arguments,
-                                    **self._dynamic_phases.get(key, {}))
+        typed_tool = self._dynamic_tools.get(key)
+        phases = self._dynamic_phases.get(key, {}) if (typed_tool is None or typed_tool == tool_name) else {}
+        self.snapshot_calls.observe(identity, call_id, tool_name, arguments=arguments, **phases)
 
     def snapshot_frame(self, message: dict) -> bool:
         if not self.session_tools:
@@ -213,7 +215,7 @@ class CodexToolEventProjector:
             return
         name = item.get("tool") if kind == "dynamicToolCall" else None
         self._observe(params, phase="start" if method == "item/started" else "end",
-                      tool_name=name if isinstance(name, str) and name else kind,
+                      tool_name=name if isinstance(name, str) and name in self.session_tools else kind,
                       call_id=item.get("id") or item.get("call_id"),
                       outcome=_native_outcome(item, kind) if method == "item/completed" else "unknown")
 
@@ -222,10 +224,16 @@ class CodexToolEventProjector:
         call_id = item.get("id") or item.get("call_id")
         if identity is None or not isinstance(call_id, str) or not call_id:
             return
-        if item.get("tool") is not None and (not isinstance(item["tool"], str)
-                                             or item["tool"] not in self.session_tools):
-            return
         key = (canonical_json(identity), call_id)
+        tool = item.get("tool")
+        if tool is not None:
+            if not isinstance(tool, str) or tool not in self.session_tools:
+                return
+            prior = self._dynamic_tools.get(key)
+            if prior is not None and prior != tool:
+                self._dynamic_tools[key] = ""
+                return
+            self._dynamic_tools[key] = tool
         phases = self._dynamic_phases.setdefault(key, {})
         if method == "item/started":
             phases["started"] = True
@@ -238,7 +246,8 @@ class CodexToolEventProjector:
                                                   "contentItems": item.get("contentItems")},
                           ok=success)
         request = self._snapshot_requests.get(key)
-        if request is not None:
+        typed_tool = self._dynamic_tools.get(key)
+        if request is not None and (typed_tool is None or typed_tool == request[0]):
             self.snapshot_calls.observe(identity, call_id, request[0], **phases)
 
     def _raw(self, params) -> None:

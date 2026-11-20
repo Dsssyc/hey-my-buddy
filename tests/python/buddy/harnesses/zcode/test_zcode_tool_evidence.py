@@ -399,6 +399,30 @@ class ProjectionTests(unittest.TestCase):
                 ):
                     self.assertIs(facts.explains_tool_frame(terminal, read=read), expected)
 
+    def test_subagent_source_and_post_close_streaming_fragments_are_not_explained(self):
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import _carries_tool_marker
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        relayed = frame({"kind": "tool_input_start", "toolCallId": "sub", "toolName": name, "source": "subagent"},
+                        kind="model.streaming")
+        facts.observe(relayed)
+        self.assertFalse(facts.explains_tool_frame(relayed, read=False))
+        self.assertFalse(facts.explains_tool_frame(relayed, read=True))
+        start = frame({"kind": "tool_input_start", "toolCallId": "root", "toolName": name}, kind="model.streaming")
+        facts.observe(start)
+        self.assertTrue(facts.explains_tool_frame(start, read=False))
+        facts.observe(frame({"resultType": "success"}, kind="turn.completed"))
+        late = frame({"kind": "tool_input_delta", "toolCallId": "root"}, kind="model.streaming")
+        self.assertFalse(facts.explains_tool_frame(late, read=False))
+        self.assertFalse(facts.explains_tool_frame(late, read=True))
+        self.assertFalse(_carries_tool_marker({"toolCallCount": 0}))
+        self.assertFalse(_carries_tool_marker({"toolCalls": None}))
+        for bad in (-1, True, False, "1"):
+            with self.subTest(bad=bad):
+                self.assertTrue(_carries_tool_marker({"toolCallCount": bad}))
+                self.assertTrue(_carries_tool_marker({"toolCalls": bad}))
+
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
         for payload in ({'kind': 'started', 'toolCallId': 'foreign'},
                         {'kind': 'progress', 'toolCallId': 'read', 'toolName': 'Bash'}):

@@ -227,10 +227,19 @@ def _validate_root_acl(api, handle):
     present = bool(control & security.SE_DACL_PRESENT)
     aces = None
     if present and dacl is not None:
-        # Preserve extended ACE shapes. The three-field form stores its SID in slot 2.
-        entries = (dacl.GetAce(index) for index in range(dacl.GetAceCount()))
+        # Check owner before decoding ACEs so a foreign owner is never repaired even
+        # when the DACL holds an ACE type pywin32 cannot decode (such as callback ACEs).
+        _validate_root_owner(owner, user)
         sid = security.ConvertSidToStringSid
-        aces = ((ace[0], ace[1], sid(ace[2])) if len(ace) == 3 else ace for ace in entries)
+        aces = []
+        for index in range(dacl.GetAceCount()):
+            try:
+                ace = dacl.GetAce(index)
+            except NotImplementedError as error:
+                raise _UnsafeDacl('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE',
+                                  aceShape='unsupported') from error
+            # Preserve extended ACE shapes. The three-field form stores its SID in slot 2.
+            aces.append((ace[0], ace[1], sid(ace[2])) if len(ace) == 3 else ace)
     validate_acl(owner, user, present, aces)
 
 

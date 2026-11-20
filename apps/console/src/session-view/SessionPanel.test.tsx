@@ -98,4 +98,21 @@ describe("reaching the top of the transcript", () => {
     expect(session).toHaveBeenCalledTimes(2);
     expect(session.mock.calls[1][2]).toEqual({ after: 2, limit: SESSION_PAGE_SIZE });
   });
+
+  it("qualifies the tab summary while earlier pages remain unloaded", async () => {
+    const tabsSide = document.createElement("span");
+    document.body.append(tabsSide);
+    try {
+      const session = vi.fn().mockResolvedValueOnce(page(SESSION_PAGE_SIZE, 2, true))
+        .mockResolvedValueOnce(page(0, 2, false));
+      render(<TooltipProvider><I18nextProvider i18n={i18n}><SessionPanel client={{ session }} taskId="task" attemptId="attempt" harness="zcode" taskText="任务" checkoutRoot="/project" tabsSide={tabsSide} active/></I18nextProvider></TooltipProvider>);
+      expect(await screen.findByText("第 257 条记录")).toBeTruthy();
+      expect(tabsSide.querySelector('[data-slot="session-summary"]')?.textContent).toBe("已加载 2 条消息");
+      await reachTop();
+      expect(await screen.findByText("第 0 条记录")).toBeTruthy();
+      expect(tabsSide.querySelector('[data-slot="session-summary"]')?.textContent).toBe("4 条消息");
+    } finally {
+      tabsSide.remove();
+    }
+  });
 });

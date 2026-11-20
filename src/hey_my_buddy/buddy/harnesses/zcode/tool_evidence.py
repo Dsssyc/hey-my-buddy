@@ -54,7 +54,7 @@ def _identity_of(params: dict) -> dict | None:
 def _child_tool_frame(params: dict) -> bool:
     return any(record.get(field) not in (None, False, "")
                for record in (params, params.get("payload")) if isinstance(record, dict)
-               for field in ("parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background"))
+               for field in ("source", "parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background"))
 
 
 def _tool_call_id(frame: dict) -> str | None:
@@ -420,6 +420,8 @@ class ZcodeToolFacts:
         if method != "session/event" or not isinstance(payload, dict):
             return False
         if kind == "model.streaming" and payload.get("kind") in _STREAMED_TOOL_KINDS:
+            if root in self._closed:
+                return False
             call_id = _tool_call_id(payload)
             if call_id is None:
                 return False

@@ -100,17 +100,43 @@ class CodexToolEventProjectionTests(unittest.TestCase):
 
     def test_unmounted_dynamic_tool_name_is_a_read_violation(self):
         state_dir = Path(os.environ["HMB_STATE_DIR"])
-        projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=("query_task",))
-        self.observe_root(projector)
-        item = {"type": "dynamicToolCall", "id": "call-1", "tool": "rogue_tool"}
-        projector.observe_notification(frame("item/started", item))
-        projector.observe_notification(frame("item/completed", {**item, "status": "completed"}))
-        self.assertEqual(projector.evidence.read_tool_violations, 1)
-        package = projector.finish(True)
-        self.assertEqual(package["toolSummary"][0]["toolName"], "rogue_tool")
-        self.assertFalse(calls(package, state_dir=state_dir)[0]["sessionServiceVerified"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
-                         "router-tools-forbidden")
+        for tool_name in ("rogue_tool", "exec_command", "read_file"):
+            with self.subTest(tool_name=tool_name):
+                projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=("query_task",))
+                self.observe_root(projector)
+                item = {"type": "dynamicToolCall", "id": "call-1", "tool": tool_name}
+                self.assertFalse(projector.snapshot_frame(frame("item/started", item)))
+                projector.observe_notification(frame("item/started", item))
+                projector.observe_notification(frame("item/completed", {**item, "status": "completed"}))
+                package = projector.finish(True)
+                self.assertEqual(package["toolSummary"][0]["toolName"], "dynamicToolCall")
+                self.assertFalse(calls(package, state_dir=state_dir)[0]["sessionServiceVerified"])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
+                                 "router-tools-forbidden")
+
+    def test_typed_dynamic_tool_name_mismatch_with_rpc_fails_verification(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        reference, _ = publish_snapshot(state_dir, "routing", "codex-mismatch", {
+            "task": "Frozen fixture input", "domainNodes": [], "buddies": [], "preferences": [],
+        }, round=1)
+        with tempfile.TemporaryDirectory() as directory:
+            mount = prepare_snapshot_mount(
+                invocation_root=Path(directory), state_dir=state_dir, identity=BINDING, input_sha256="a" * 64,
+                snapshot={"namespace": "routing", "owner": "codex-mismatch", "round": 1, "reference": reference})
+            service = mounted_snapshot(mount)
+            projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=mount.tool_names)
+            self.observe_root(projector)
+            item = {"type": "dynamicToolCall", "id": "call-1", "tool": "query_buddies"}
+            projector.observe_notification(frame("item/started", item))
+            projector.observe_snapshot_request(ROOT, "call-1", "query_task", {"limit": 5})
+            reply = service.direct_call("query_task", {"limit": 5}, native_identity=ROOT, call_id="call-1")
+            projector.observe_notification(frame("item/completed", {**item, **reply, "status": "completed"}))
+            verified, coverage = verify_mounted_calls(mount, projector.snapshot_calls, projector.roots)
+            self.assertEqual(verified, frozenset())
+            self.assertIsNone(coverage)
+            package = projector.finish(True, verified_session_calls=verified)
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
+                             "router-tools-forbidden")
 
     def test_protocol_variants_and_future_items_in_both_router_modes(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence

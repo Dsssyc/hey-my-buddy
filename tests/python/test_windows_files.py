@@ -266,6 +266,39 @@ class StateRootACLTests(unittest.TestCase):
         self.security.SetSecurityInfo.assert_not_called()
         self.assertTrue(self.reader.closed)
 
+    def test_undecodable_callback_ace_is_reported_read_only_and_repaired_for_owned_root(self):
+        self.root.mkdir()
+        undecodable = self.descriptor(owner=USER, aces=[])
+        undecodable.GetSecurityDescriptorDacl.return_value.GetAceCount.return_value = 1
+        undecodable.GetSecurityDescriptorDacl.return_value.GetAce.side_effect = NotImplementedError('callback ACE')
+        self.security.GetSecurityInfo.return_value = undecodable
+        with self.assertRaisesRegex(BoardError, 'unsupported or foreign ACE') as raised:
+            files.check_state_root(self.root, create=False)
+        self.assertEqual(raised.exception.code, 'PRIVATE_PATH_UNSAFE')
+        self.assertEqual(raised.exception.details, {'path': str(self.root), 'aceShape': 'unsupported'})
+        self.security.SetSecurityInfo.assert_not_called()
+
+        self.reader, self.writer = FakeHandle(1), FakeHandle(2)
+        self.api._open.side_effect = [self.reader, self.writer]
+        repaired = self.descriptor(owner=USER, aces=[((0, 3), 0x1F01FF, USER)])
+        self.security.GetSecurityInfo.side_effect = [undecodable, self.descriptor(owner=USER), repaired]
+        files.check_state_root(self.root, create=True)
+        self.security.SetSecurityInfo.assert_called_once()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_undecodable_callback_ace_with_foreign_owner_is_refused_without_repair(self):
+        self.root.mkdir()
+        undecodable = self.descriptor(owner=FOREIGN, aces=[])
+        undecodable.GetSecurityDescriptorDacl.return_value.GetAceCount.return_value = 1
+        undecodable.GetSecurityDescriptorDacl.return_value.GetAce.side_effect = NotImplementedError('callback ACE')
+        self.security.GetSecurityInfo.return_value = undecodable
+        with self.assertRaisesRegex(BoardError, 'foreign owner') as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertEqual(raised.exception.details, {'path': str(self.root)})
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+
 
 class HandleBoundaryTests(unittest.TestCase):
     def setUp(self):

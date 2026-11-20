@@ -508,7 +508,9 @@ def _carries_tool_marker(value) -> bool:
         if (any(isinstance(kind, str) and kind.startswith(
                 ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
                 or value.get('toolCallId') is not None or value.get('role') == 'tool'
-                or any(type(value.get(key)) is int and value[key] > 0 for key in ('toolCalls', 'toolCallCount'))):
+                or any(key in value and value[key] is not None
+                       and not (type(value[key]) is int and value[key] == 0)
+                       for key in ('toolCalls', 'toolCallCount'))):
             return True
         return any(_carries_tool_marker(item) for item in value.values())
     if isinstance(value, list):

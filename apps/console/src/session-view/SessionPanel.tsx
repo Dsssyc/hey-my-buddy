@@ -93,9 +93,10 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
     calls > 0 && t("sessionView.summary.calls", { count: calls }),
     messages > 0 && t("sessionView.summary.messages", { count: messages }),
   ].filter(Boolean).join(t("sessionView.groupSeparator"));
+  const summaryText = summary && data?.hasEarlier ? t("sessionView.summary.loaded", { summary }) : summary;
   return <section data-slot="session-view" aria-label={t("sessionView.title")} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {tabsSide && !error && data && createPortal(<>
-        {summary && <span data-slot="session-summary" className="truncate text-xs tabular-nums text-ink3">{summary}</span>}
+        {summaryText && <span data-slot="session-summary" className="truncate text-xs tabular-nums text-ink3">{summaryText}</span>}
         <SessionCoverage harness={harness} coverage={data.coverage}/>
       </>, tabsSide)}
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
