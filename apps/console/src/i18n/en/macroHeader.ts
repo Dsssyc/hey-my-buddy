@@ -98,7 +98,7 @@ export default {
     deleted: "Deleted “{{title}}”.",
     dismiss: "Dismiss deletion result",
     refreshFailed: "Could not refresh the list or the detail. Read again; deletion is complete.",
-    objects: { "native-session": "Native sessions", workspace: "Managed checkouts", "private-root": "Private directories", "session-records": "Session records", "cli-file": "Control files" },
+    objects: { "native-session": "Native sessions", workspace: "Managed checkouts", "private-root": "Private directories", "session-records": "Session records", "cli-file": "Control files", "routing-snapshots": "Routing snapshots" },
     blockers: {
       queued: { state: "Queued", resolution: "Wait for it to finish, or stop the macro task from More" },
       routing: { state: "Routing", resolution: "Wait for routing to finish, or stop the macro task from More" },

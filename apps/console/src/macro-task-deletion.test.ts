@@ -73,6 +73,7 @@ describe("macro task deletion boundary", () => {
         error: { message: "Permission denied", errno: 13, winerror: null } },
       { objectKind: "workspace", path: "/synthetic/workspace", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
       { objectKind: "session-records", path: null, reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
+      { objectKind: "routing-snapshots", path: "/synthetic/routing", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
     ] };
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
   });
