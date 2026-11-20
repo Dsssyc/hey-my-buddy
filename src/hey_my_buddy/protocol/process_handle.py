@@ -1,6 +1,7 @@
 """Owned child process handles and private log descriptors shared by service and buddy."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import signal
 import subprocess
@@ -31,6 +32,11 @@ class ProcessHandle:
         self.cancel_requested = False
         self.signalled_at: float | None = None
         self.stop_lock = threading.RLock()
+        # Give stop and confirmation callers priority over continuous wait()
+        # polling so a slow OS process scan cannot starve cancellation.
+        self._gate = threading.Condition()
+        self._stop_waiters = 0
+        self._stop_owner: int | None = None
         self.stop_initiator: str | None = None
         self.grace_deadline: float | None = None
         self.grace_expired = False
@@ -99,6 +105,35 @@ class ProcessHandle:
     def finished(self) -> bool:
         return self.poll() is not None
 
+    @contextmanager
+    def _stop_section(self):
+        ident = threading.get_ident()
+        waiting = False
+        with self._gate:
+            reentrant = self._stop_owner == ident
+            if not reentrant:
+                self._stop_waiters += 1
+                waiting = True
+        try:
+            with self.stop_lock:
+                if waiting:
+                    with self._gate:
+                        self._stop_waiters -= 1
+                        waiting = False
+                        self._stop_owner = ident
+                try:
+                    yield
+                finally:
+                    if not reentrant:
+                        with self._gate:
+                            self._stop_owner = None
+                            self._gate.notify_all()
+        finally:
+            if waiting:
+                with self._gate:
+                    self._stop_waiters -= 1
+                    self._gate.notify_all()
+
     def observe(self) -> tuple[int | None, str]:
         """Read the root exit and observe its member boundary under one lock."""
         with self.stop_lock:
@@ -112,6 +147,16 @@ class ProcessHandle:
                                        else child_exit_code(self.pid))
                 code = self._exit_code
             observation = self._session_observation()
+            if code is None and observation == "gone":
+                # The root can finish exiting while the two consecutive empty
+                # scans run; re-check under the same lock so those confirmed
+                # empty scans are not discarded.
+                if self.job is not None or os.name == "nt":
+                    code = self.process.poll()
+                else:
+                    self._exit_code = (self.process.returncode if self.process.returncode is not None
+                                       else child_exit_code(self.pid))
+                    code = self._exit_code
             if code is not None and observation == "gone" and not self._confirmed:
                 if self.job is None and os.name != "nt":
                     self.process.wait()
@@ -171,7 +216,7 @@ class ProcessHandle:
     def terminate(self, *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS,
                   settle_seconds: float = 2.0) -> tuple[bool, bool]:
         """Request, wait, POSIX TERM, force and observe the ownership boundary."""
-        with self.stop_lock:
+        with self._stop_section():
             self.cancel_requested = True
             self.signalled_at = time.monotonic()
             windows = self.job is not None or os.name == "nt"
@@ -211,13 +256,26 @@ class ProcessHandle:
 
     def wait(self, timeout: float | None) -> int | None:
         deadline = None if timeout is None else time.monotonic() + timeout
+        ident = threading.get_ident()
+        delay = 0.025
         while True:
+            with self._gate:
+                if self._stop_owner != ident and (self._stop_waiters > 0 or self._stop_owner is not None):
+                    remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                    self._gate.wait_for(
+                        lambda: self._stop_waiters == 0 and self._stop_owner is None,
+                        timeout=remaining,
+                    )
+                    if deadline is not None and time.monotonic() >= deadline and (
+                            self._stop_waiters > 0 or self._stop_owner is not None):
+                        return None
             code = self.poll()
             if code is not None:
                 return code
             if deadline is not None and time.monotonic() >= deadline:
                 return None
-            time.sleep(0.025 if deadline is None else min(0.025, max(0, deadline - time.monotonic())))
+            time.sleep(delay if deadline is None else min(delay, max(0, deadline - time.monotonic())))
+            delay = min(0.25, delay * 2)
 
     def _close_confirmed_job(self) -> bool:
         if self.job is not None:
@@ -229,7 +287,7 @@ class ProcessHandle:
 
     def shutdown_confirmed(self, settle_seconds: float = 2.0) -> bool:
         """An exited root and complete consecutive empty member scans are required."""
-        with self.stop_lock:
+        with self._stop_section():
             if self._wait_for_session(settle_seconds):
                 return self._close_confirmed_job()
             return False

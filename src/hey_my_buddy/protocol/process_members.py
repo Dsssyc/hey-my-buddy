@@ -26,18 +26,20 @@ class ProcessMember:
 def process_snapshot() -> dict[int, ProcessMember]:
     """One same-account PID scan; an incomplete observation raises OSError."""
     try:
+        euid = os.geteuid()
         rows = {}
         for pid in psutil.pids():
             try:
                 process = psutil.Process(pid)
-                if process.uids().effective != os.geteuid():
+                if process.uids().effective != euid:
                     continue
                 started = process_start(pid, include_exited=True)
                 if started is None:
                     continue
-                parent = process.ppid()
-                session = os.getsid(pid)
-                live = process.status() != psutil.STATUS_ZOMBIE
+                with process.oneshot():
+                    parent = process.ppid()
+                    session = os.getsid(pid)
+                    live = process.status() != psutil.STATUS_ZOMBIE
                 after = process_start(pid, include_exited=True)
                 if after is None:
                     continue

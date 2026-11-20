@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -115,6 +116,84 @@ class StopSequenceTests(unittest.TestCase):
         result, events = self.stop("signal", windows=True, unknown=True)
         self.assertEqual(result, (False, True))
         self.assertEqual(events, [("job.terminate", 0)])
+
+    def test_terminate_is_not_starved_by_continuous_wait_loop(self):
+        process = Mock(pid=123, returncode=None)
+        process.poll.return_value = None
+        with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+        entered_first = threading.Event()
+        release_first = threading.Event()
+        exited = False
+        wait_polls = 0
+        polls_at_signal = None
+        done = threading.Event()
+
+        def fake_observe():
+            nonlocal wait_polls
+            with handle.stop_lock:
+                if handle._stop_owner != threading.get_ident():
+                    wait_polls += 1
+                    entered_first.set()
+                    release_first.wait(timeout=2)
+                    # Simulate a slow OS scan that exceeds wait(timeout=0.02).
+                    time.sleep(0.03)
+                return (-signal.SIGTERM, "gone") if exited else (None, "alive")
+
+        def fake_signal(sig):
+            nonlocal exited, polls_at_signal
+            if sig == signal.SIGTERM:
+                polls_at_signal = wait_polls
+                exited = True
+
+        handle.observe = fake_observe
+        handle._signal_session = fake_signal
+
+        def loop():
+            while not done.is_set():
+                if handle.wait(timeout=0.02) is not None:
+                    break
+
+        waiter = threading.Thread(target=loop)
+        waiter.start()
+        try:
+            self.assertTrue(entered_first.wait(timeout=2))
+            polls_before = wait_polls
+            result_holder = []
+
+            def stop_it():
+                result_holder.append(handle.terminate(grace_seconds=0.5, settle_seconds=0.1))
+
+            stopper = threading.Thread(target=stop_it)
+            stopper.start()
+            # Give stopper a moment to register as a stop waiter before releasing first poll.
+            deadline = time.monotonic() + 2
+            while handle._stop_waiters == 0 and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertEqual(handle._stop_waiters, 1)
+            release_first.set()
+            stopper.join(timeout=3)
+            self.assertFalse(stopper.is_alive())
+            self.assertEqual(result_holder, [(True, False)])
+            self.assertEqual(polls_at_signal, polls_before)
+        finally:
+            release_first.set()
+            done.set()
+            waiter.join(timeout=2)
+
+    @unittest.skipIf(os.name == "nt", "POSIX exit re-check after confirmed empty scans")
+    def test_observe_rechecks_root_exit_after_confirmed_empty_session(self):
+        process = Mock(pid=123, returncode=None)
+        with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+        exit_reads = iter([None, -signal.SIGTERM])
+        with patch("hey_my_buddy.protocol.process_handle.child_exit_code", side_effect=lambda _pid: next(exit_reads)), \
+             patch.object(handle, "_session_observation", return_value="gone") as session_obs:
+            code, state = handle.observe()
+        self.assertEqual((code, state), (-signal.SIGTERM, "gone"))
+        self.assertTrue(handle._confirmed)
+        process.wait.assert_called_once_with()
+        session_obs.assert_called_once_with()
 
 
 class RealStdioStopTests(unittest.TestCase):
