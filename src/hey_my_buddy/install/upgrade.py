@@ -264,6 +264,30 @@ def _restore_guard(path: Path, *, regular: bool = False) -> None:
             raise BoardError('UPGRADE_UNSAFE', 'Restore path is not an ordinary file', path=str(path))
 
 
+def _checkpoint_stopped_wal(state: Path) -> None:
+    """Fold leftover committed WAL frames before copying the stopped board verbatim.
+
+    An older runtime's close-time checkpoint is skipped by SQLite whenever a
+    transient read-only connection overlaps shutdown. Call only under both
+    exclusive owner locks after idle_snapshot() has verified the board.
+    """
+    board = state / 'board.sqlite3'
+    wal = state / 'board.sqlite3-wal'
+    _restore_guard(board, regular=True)
+    _restore_guard(wal, regular=True)
+    if not wal.exists() or not wal.stat().st_size:
+        return
+    deadline = time.monotonic() + 2.0
+    while True:
+        with closing(sqlite3.connect(board, isolation_level=None, timeout=10)) as connection:
+            busy = connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]
+        if busy == 0 and (not wal.exists() or wal.stat().st_size == 0):
+            return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.05)
+
+
 def restore(state: Path, current: Path) -> None:
     # Keep lexical paths until the state and backup entries have been checked.
     state, current = Path(state), Path(current)
@@ -548,6 +572,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         before = idle_snapshot(state)
                         before['runtimeSettings'] = runtime_settings
                         journal['before'] = before
+                        _checkpoint_stopped_wal(state)
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)

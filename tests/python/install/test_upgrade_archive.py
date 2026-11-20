@@ -316,3 +316,23 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertFalse(native_path(self.state / "upgrade.json").exists())
         self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()
+
+    def test_cutover_checkpoints_leftover_wal_from_overlapped_readonly_close(self):
+        # Reproduce SQLite skipping close-time checkpoint when a read-only reader
+        # overlaps the last RW close, leaving a non-empty WAL on a stopped board.
+        board_path = self.state / "board.sqlite3"
+        wal_path = self.state / "board.sqlite3-wal"
+        writer = sqlite3.connect(board_path, isolation_level=None)
+        writer.execute("PRAGMA journal_mode=WAL")
+        reader = sqlite3.connect(board_path.as_uri() + "?mode=ro", uri=True)
+        reader.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        writer.execute("INSERT INTO meta(key,value) VALUES('wal-test','1')")
+        writer.execute("DELETE FROM meta WHERE key='wal-test'")
+        writer.close()
+        reader.close()
+        self.assertTrue(wal_path.exists() and wal_path.stat().st_size > 0)
+        target = self.runtime_root / ("b" * 32)
+        result = self.cutover(self.previous, target)
+        self.assertTrue(result["upgraded"], result)
+        self.assertTrue(result["backup"]["verified"])
+        self.assertFalse(wal_path.exists() and wal_path.stat().st_size > 0)

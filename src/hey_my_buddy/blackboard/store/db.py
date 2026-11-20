@@ -1510,8 +1510,17 @@ class Database:
             # listener/scheduler. Only connect()'s exit proves SQLite is idle.
             while self._connection_depths:
                 self._connection_lock.wait()
-            for connection in self._connections.values():
+            connections = list(self._connections.values())
+            for connection in connections[:-1]:
                 connection.close()
+            if connections:
+                last = connections[-1]
+                try:
+                    wal = self.path.with_name(self.path.name + "-wal")
+                    if self.path.exists() and wal.exists():
+                        last.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+                finally:
+                    last.close()
             self._connections.clear()
             self._connection_files.clear()
             self._connection_depths.clear()
