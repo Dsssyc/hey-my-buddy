@@ -2,8 +2,8 @@
 
 The routing plane records ``router.answered``/``router.no_answer`` receipts.
 
-Skip windows come from the last recorded no-answer plus the current retry interval;
-a later valid answered (including a valid abstention) removes it. Reads project
+One non-format failure or format failures on two distinct requests open a skip
+window. A valid answer, including an abstention, resets it. Reads project
 windows without writing and never extend them, and an expired window can retry
 again. The single in-flight retry is derived from relational Router claims and
 active or shutdown-unconfirmed attempts — there is no half-open state or new
@@ -18,9 +18,13 @@ from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 
 OUTCOMES = ("answered", "no_answer")
+FORMAT_FAILURES = frozenset({"answer-shape", "answer-invalid-json", "answer-empty",
+                             "answer-not-json", "answer-unexpected-field"})
 #: Attempt states that still own capacity: active execution or unconfirmed stop.
 #: Missing PIDs and expired leases never prove a stop, so ``uncertain`` stays here.
 ACTIVE_ATTEMPT_STATES = ("starting", "executing", "finalizing", "uncertain")
+
+
 def _parse(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
@@ -135,26 +139,34 @@ def summarize(timeline: list[dict], *, interval_seconds: int, now: str | None = 
 
     The consecutive count covers every recorded no-answer since the last valid
     answered, independently of any display window, and each buddy's counts stay
-    separate. ``skipUntil`` is the last no-answer time plus the current interval; a
-    later valid answered removes it. Reads never write, so repeated summaries never
-    extend a window, and an expired window simply ends.
+    separate. Once triggered, each failure refreshes the window until an answer
+    resets it. Expiration alone leaves the next request eligible for a retry.
     """
     answered_count = no_answer_count = consecutive = 0
     last_answered = last_no_answer = None
+    window_triggered = False
+    format_request_ids: set[str] = set()
+    skip_until = None
     for entry in timeline:
         outcome = entry["outcome"]
         if outcome == "answered":
             answered_count += 1
             consecutive = 0
+            window_triggered = False
+            format_request_ids.clear()
+            skip_until = None
             last_answered = _later(last_answered, entry["at"])
         elif outcome == "no_answer":
             no_answer_count += 1
             consecutive += 1
             last_no_answer = _later(last_no_answer, entry["at"])
-    skip_until = None
-    if consecutive > 0 and last_no_answer is not None:
-        skip_until = (_parse(last_no_answer) + timedelta(seconds=interval_seconds)).astimezone(timezone.utc)\
-            .isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            if not window_triggered and entry["code"] in FORMAT_FAILURES:
+                format_request_ids.add(entry["requestId"])
+                if len(format_request_ids) < 2:
+                    continue
+            window_triggered = True
+            deadline = _parse(entry["at"]) + timedelta(seconds=interval_seconds)
+            skip_until = deadline.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     present = _parse(now if now is not None else utc_now())
     in_window = skip_until is not None and present < _parse(skip_until)
     return {"answeredCount": answered_count, "noAnswerCount": no_answer_count,
@@ -166,15 +178,14 @@ def summarize(timeline: list[dict], *, interval_seconds: int, now: str | None = 
 def router_state(connection, *, buddy_id: str, interval_seconds: int, now: str | None = None) -> dict:
     """The read-only retry facts of one buddy for the resolution entry.
 
-    ``retryInProgress`` is true only while the buddy still owes an answer and one of
-    its executions is active or shutdown-unconfirmed; after a valid answered, the
-    same active execution is ordinary capacity, not a retry.
+    ``retryInProgress`` describes a claim after an expired skip window while an
+    execution is active or its stop is unconfirmed.
     """
     timeline = buddy_timeline(connection, buddy_id=buddy_id)
     summary = summarize(timeline, interval_seconds=interval_seconds, now=now)
     attempts = active_executions(connection, buddy_id=buddy_id)
     return {**summary, "buddyId": buddy_id,
-            "retryInProgress": bool(attempts) and summary["consecutiveNoAnswers"] > 0,
+            "retryInProgress": bool(attempts) and summary["skipUntil"] is not None and not summary["inSkipWindow"],
             "activeAttempts": attempts}
 
 

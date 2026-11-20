@@ -402,6 +402,16 @@ def _delete_private_roots(store, scope):
                 root = private_dirs.micro_task_root(store.directory, harness, task_id)
                 skipped.extend(_remove_owned_tree(root))
             skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
+        if scope.decisions:
+            with store.db.write():
+                routing = private_dirs.snapshot_root(store.directory, 'routing')
+                if private_dirs.linked(routing):
+                    skipped.append({'objectKind': 'routing-snapshots', 'path': str(routing),
+                                    'reason': reason('macro-task-deletion.owner-unproven')})
+                else:
+                    for decision_id in sorted(scope.decisions):
+                        root = private_dirs.snapshot_root(store.directory, 'routing', decision_id)
+                        skipped.extend(_remove_owned_tree(root, object_kind='routing-snapshots'))
         return skipped
 
 

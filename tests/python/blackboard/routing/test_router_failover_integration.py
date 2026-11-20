@@ -662,8 +662,29 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
         with self.board_.store.db.read() as db:
+            current = db.execute("SELECT task_id,attempt_id,generation,output_json,selected_json"
+                                 " FROM decision_requests WHERE decision_id=?", (request["decisionId"],)).fetchone()
+            self.assertEqual(tuple(current), (None, None, None, '{"code":"all-candidates-cooling"}', None))
             self.assertIsNotNone(quota_routing.cooling(db, {"harness": "dsh", "provider": "fixture"}, now=T0))
 
+
+    def test_reroute_with_no_available_router_records_its_preflight_walk(self):
+        request, first = self.start(three=True)
+        disabled_router = "dsh:fixture:router-disabled:max"
+        self.add_buddy(disabled_router, model="router-disabled", enabled=0)
+        self.set_settings(ids=[disabled_router])
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (B,))
+
+        result = self.report(first, self.answer(first, buddy_id=B))
+
+        self.assertEqual(result["decision"]["outcome"], "rerouted")
+        self.assertEqual(self.decision_row(request["decisionId"])["reason"]["code"], "router-all-unavailable")
+        self.assertEqual([item for _, item in self.outcomes()], [{
+            "requestId": "pick-1", "routerIndex": 0, "buddyId": disabled_router,
+            "phase": "preflight", "taskId": None, "attemptId": None, "outcome": "no_answer",
+            "code": "router-disabled", "selectionRetry": True,
+        }])
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
@@ -698,6 +719,7 @@ class FailoverTests(RouterDispatchTestCase):
             router_history.record_outcome(db, buddy_id=B, request_id="elsewhere",
                 task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             self.busy_attempt(db, 1, provider="fixture", model="bravo", buddy_id=B)
+        self.clock.advance(601)
         response = self.claim("retry", task_id=self.current_task(request["decisionId"]))
         self.assertIsNone(response["claim"])
         self.assertEqual(response["reason"], "router-retry-in-progress")
@@ -755,6 +777,12 @@ install_no_answer_case("missing_evidence", lambda self, claim, o: {**o, "toolEvi
 install_no_answer_case("incomplete", lambda self, claim, o: self.answer(claim, stream_complete=False), "router-tool-evidence-unverified")
 install_no_answer_case("forbidden_fast", lambda self, claim, o: self.answer(claim, tools=1), "router-tools-forbidden")
 install_no_answer_case("forbidden_review", lambda self, claim, o: self.answer(claim, tools=1, tool_name="write"), "router-tools-forbidden", review=True)
+install_no_answer_case("forbidden_before_shape", lambda self, claim, o: {
+    **self.answer(claim, tools=1), "status": "error", "code": "answer-shape", "decision": None,
+}, "router-tools-forbidden", outer="failed")
+install_no_answer_case("unverified_before_shape", lambda self, claim, o: {
+    **self.answer(claim, stream_complete=False), "status": "error", "code": "answer-invalid-json", "decision": None,
+}, "router-tool-evidence-unverified", outer="failed")
 install_no_answer_case("wrong_operation", lambda self, claim, o: {**o, "operation": "maintain"}, "answer-shape")
 install_no_answer_case("outer_failed_native_stopped", lambda self, claim, o: o, "router-no-answer", outer="failed")
 

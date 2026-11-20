@@ -284,6 +284,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
 
 def inspect(store) -> dict:
     from . import workspace
+    from ..routing import snapshot_files
     from .macro_tasks import RUN_GROUPS_SQL
     from .micro_task import ROUTING_TASKS_SQL
     from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest
@@ -312,6 +313,9 @@ def inspect(store) -> dict:
     workspace_inputs = []
     unproven_workspaces = []
     with store.db.read() as connection:
+        snapshot_root = private_dirs.snapshot_root(state, "routing")
+        retained_rounds = (snapshot_files.retained_rounds(connection, state)
+                           if native_path(snapshot_root).is_dir() and not private_dirs.linked(snapshot_root) else set())
         session_records = {
             private_dirs.session_record_path(state, row['session_group_id'], row['attempt_id']): row
             for row in connection.execute(
@@ -519,9 +523,11 @@ def inspect(store) -> dict:
                 reasons.extend(runtime_usage(path, commands, known, reported=reported))
                 reasons.extend(_runtime_lock_reasons(path))
             add('runtimes', path, reasons)
+    for path, reasons in snapshot_files.inventory(state):
+        add('routing', path, [*reasons, 'routing-snapshot-in-use'] if path in retained_rounds else reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
-        if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtimes:
+        if path.name in {'workspaces','harnesses','sessions','backups','archives','routing'} or path == runtimes:
             continue
         add('durable', path, ['durable-record'])
     if harnesses.exists():
@@ -530,7 +536,7 @@ def inspect(store) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key in ('harnesses', 'session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
+    for key in ('harnesses', 'session-records', 'workspaces', 'runtimes', 'routing', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,
@@ -579,7 +585,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal is absent from its original plan')
     candidate = matches[0]
     category = candidate.get('category')
-    if (candidate.get('eligible') is not True or category != 'runtimes' or
+    if (candidate.get('eligible') is not True or category not in {'runtimes', 'routing'} or
             any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
             not isinstance(pending.get('path'), str) or not is_absolute_path(pending['path']) or
             pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
@@ -587,7 +593,12 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     original = Path(pending['path'])
     if '..' in original.parts:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
-    allowed = original.parent == runtime_root().absolute()
+    if category == 'routing':
+        root = private_dirs.snapshot_root(state.resolve(), 'routing')
+        allowed = (original.parent.parent == root and re.fullmatch(r'[0-9a-f]{64}', original.parent.name)
+                   and re.fullmatch(r'[1-9][0-9]*', original.name))
+    else:
+        allowed = original.parent == runtime_root().absolute()
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
     if (not allowed or pending.get('tomb') != str(tomb) or
             type(pending.get('device')) is not int or type(pending.get('inode')) is not int):
@@ -624,6 +635,27 @@ def plan(store, params: dict) -> dict:
         return result
 
 
+
+@contextmanager
+def _routing_removal(store, original):
+    from ..routing import snapshot_files
+
+    with store.db.write() as connection:
+        if (private_dirs.linked(original.parent.parent) or private_dirs.linked(original.parent)
+                or original in snapshot_files.retained_rounds(connection, store.directory.resolve())):
+            raise BoardError('STORAGE_CHANGED', 'Routing snapshot ownership changed')
+        yield
+
+
+def _journal_removal(result, receipt, original, candidate):
+    tomb = original.with_name('.reclaim-' + result['planId'] + '-' + original.name)
+    identity = native_path(original).lstat()
+    result['pending'] = {'id': candidate['id'], 'path': str(original), 'tomb': str(tomb),
+                         'bytes': candidate['bytes'], 'fingerprint': candidate['fingerprint'],
+                         'device': identity.st_dev, 'inode': identity.st_ino}
+    _save_receipt(receipt, result)
+    _finish_pending(result, receipt)
+
 def apply(store, params: dict) -> dict:
     plan_id = params['planId']
     command = params['commandId']
@@ -651,15 +683,19 @@ def apply(store, params: dict) -> dict:
             result = saved
         if result.get('pending'):
             pending = result['pending']
-            with ExitStack() as removal:
-                original, tomb = Path(pending['path']), Path(pending['tomb'])
-                removal.enter_context(_runtime_removal_locks(original, create=True))
-                remaining = original if original.exists() else tomb
-                if remaining.is_dir():
-                    _, commands, known = process_inventory(store.directory.resolve())
-                    if runtime_usage(remaining, commands, known):
-                        raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
-                _finish_pending(result, receipt)
+            original, tomb = Path(pending['path']), Path(pending['tomb'])
+            category = next(row['category'] for row in planned['candidates'] if row['id'] == pending['id'])
+            if category == 'routing':
+                with _routing_removal(store, original):
+                    _finish_pending(result, receipt)
+            else:
+                with _runtime_removal_locks(original, create=True):
+                    remaining = original if original.exists() else tomb
+                    if remaining.is_dir():
+                        _, commands, known = process_inventory(store.directory.resolve())
+                        if runtime_usage(remaining, commands, known):
+                            raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                    _finish_pending(result, receipt)
         # The plan proved Git state before confirmation. The removal paths prove
         # it again under their own deletion fences, after this board inventory.
         current = {row['id']: row for row in inspect(store)['candidates']}
@@ -691,13 +727,14 @@ def apply(store, params: dict) -> dict:
                                 raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                         if tree_info(original)[1:] != (fresh['fingerprint'], True, True):
                             raise BoardError('STORAGE_CHANGED', 'Candidate changed')
-                        tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
-                        identity = native_path(original).lstat()
-                        result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb),
-                                             'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint'],
-                                             'device':identity.st_dev, 'inode':identity.st_ino}
-                        _save_receipt(receipt, result)
-                        _finish_pending(result, receipt)
+                        _journal_removal(result, receipt, original, fresh)
+                    continue
+                elif candidate['category'] == 'routing':
+                    original = Path(fresh['path'])
+                    with _routing_removal(store, original):
+                        if tree_info(original)[1:] != (fresh['fingerprint'], True, True):
+                            raise BoardError('STORAGE_CHANGED', 'Routing snapshot changed')
+                        _journal_removal(result, receipt, original, fresh)
                     continue
                 else:
                     raise BoardError('STORAGE_PROTECTED', 'Durable storage cannot be reclaimed')

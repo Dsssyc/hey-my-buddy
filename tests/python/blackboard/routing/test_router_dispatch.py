@@ -303,6 +303,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                                                    ("harness", "provider", "model", "effort")}},
                                              now=T0)
             router_sequence.record_claim(db, task_id="retry-1", attempt_id="att-retry", generation=1, now=T0)
+        self.clock.advance(601)
         blocked = self.claim("retry")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "router-retry-in-progress")
@@ -318,6 +319,17 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         facts = [payload for kind, payload in self.router_events("router.no_answer", "router.claimed")
                  if payload.get("requestId") == "pick-1"]
         self.assertEqual(facts, [])
+
+
+        with self.board_.store.db.write() as db:
+            router_history.record_outcome(
+                db, buddy_id=A, request_id="route-other", task_id=None, attempt_id=None,
+                outcome="no_answer", code="answer-shape", phase="runtime",
+                facts={"routerIndex": 0}, now=self.clock.value)
+        advanced = self.claim("after-window-refresh", task_id=result["runId"])
+        self.assertIsNone(advanced["claim"])
+        self.assertEqual(advanced["reason"], "decision-dispatch-advanced")
+        self.assertCountEqual([row["state"] for row in self.tasks()], ["cancelled", "queued"])
 
     def test_late_superseded_task_never_claims(self):
         result = self.request()

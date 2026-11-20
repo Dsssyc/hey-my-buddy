@@ -285,7 +285,10 @@ class Scheduler:
 
     def run(self):
         try:
+            from . import snapshot_files
+
             self.store.maintenance.recover_files()
+            snapshot_files.recover_files(self.store)
             while True:
                 with self.store._condition:
                     if self.store._wait_stopped:

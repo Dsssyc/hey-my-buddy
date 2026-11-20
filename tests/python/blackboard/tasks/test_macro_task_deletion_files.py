@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from hey_my_buddy import private_dirs
+from hey_my_buddy import private_dirs, private_files
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -18,7 +18,7 @@ from blackboard.tasks import test_workflow as workflow_fixtures
 
 class DeletionFileTests(BoardTestCase):
     def scope(self):
-        return SimpleNamespace(tasks={"owned"}, runs={"owned"}, run_rows=[], attempt_rows=[], manifests=[],
+        return SimpleNamespace(tasks={"owned"}, runs={"owned"}, decisions={"dec-owned"}, run_rows=[], attempt_rows=[], manifests=[],
                                task_rows=[{"task_id": "owned", "adapter": "codex"}])
 
     def file(self, path, document):
@@ -39,12 +39,17 @@ class DeletionFileTests(BoardTestCase):
             legacy.append(self.file(old_root / "native" / "payload", {"private": True}))
         attempts = self.file(board.directory / "attempts" / "owned" / "attempt-1" / "payload", {})
         untouched = self.file(private_dirs.micro_task_root(board.directory, "codex", "other") / "payload", {})
+        for decision in ("dec-owned", "dec-other"):
+            for round in (1, 2):
+                private_files.publish_snapshot(board.directory, "routing", decision, {"task": decision}, round=round)
         with patch.object(deletion, "_rows", return_value=[]):
             self.assertEqual(deletion._delete_private_roots(board.store, scope), [])
         self.assertTrue(all(not path.exists() for path in paths))
         self.assertTrue(all(path.exists() for path in legacy))
         self.assertFalse(attempts.exists())
         self.assertTrue(untouched.exists())
+        self.assertFalse(private_dirs.snapshot_root(board.directory, "routing", "dec-owned").exists())
+        self.assertTrue(private_dirs.snapshot_root(board.directory, "routing", "dec-other", 2).is_dir())
         user = self.file(board.directory / "user" / "payload", {"user": True})
         root = private_dirs.micro_task_root(board.directory, "codex", "owned")
         root.symlink_to(user.parent, target_is_directory=True)

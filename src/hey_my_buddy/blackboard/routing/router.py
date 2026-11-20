@@ -4,18 +4,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
-from collections.abc import Sequence
-from pathlib import PurePosixPath
 from statistics import NormalDist
 
 from ..store.db import canonical_json
-from ...protocol.structured_schema import schema_errors
-from ...protocol.task_types import TASK_TYPES
+from ...protocol.router_selection import MAX_NOTE, MAX_REFERENCES
+from ...protocol.router_selection import legacy_answer_schema as answer_schema
+from ...protocol.router_selection import validate_legacy_answer as validate_answer
 from ...protocol.reasons import reason, reason_from_json
-from ...errors import BoardError
 
-MAX_NOTE = 2000
-MAX_REFERENCES = 32
 CONFIG_COLUMNS = {
     "routerRetryIntervalSeconds": "retry_interval_seconds",
     "defaultRoutingMode": "default_mode",
@@ -125,76 +121,6 @@ task and costs no more than your preferred buddy. If one fits, select it
 instead with reselected true and explain in the note why its cost is not higher
 than the preferred buddy's. Otherwise keep the preferred buddy as the selection
 with reselected false and say why no such candidate fits."""
-
-
-def answer_schema(buddy_ids: list[str], routing_mode: str = "review", *, domain_node_ids: Sequence[str] = (),
-                  exploration: bool = False) -> dict:
-    schema = {
-        "type": "object", "additionalProperties": False,
-        "required": ["buddyId", "domainNodeId", "taskType", "note", "evidence"],
-        "properties": {
-            "buddyId": {"type": ["string", "null"], "enum": [*buddy_ids, None]},
-            "domainNodeId": {"type": ["string", "null"], "enum": [*domain_node_ids, None]},
-            "taskType": {"type": "string", "enum": list(TASK_TYPES)},
-            "note": {"type": "string", "minLength": 1, "maxLength": MAX_NOTE},
-            "evidence": {"type": "array", "maxItems": MAX_REFERENCES, "items": {
-                "type": "object", "additionalProperties": False, "required": ["kind", "ref"],
-                "properties": {
-                    "kind": {"enum": ["preference", "statistics", "summary"] + (["file"] if routing_mode == "review" else [])},
-                    "ref": {"type": "string", "minLength": 1, "maxLength": 1024},
-                },
-            }},
-        },
-    }
-    if exploration:
-        # A quota-carrying routing names its usual-rules preferred buddy and
-        # states whether the selection moved to a least-sampled candidate.
-        schema["required"] = [*schema["required"], "preferredBuddyId", "reselected"]
-        schema["properties"] = {**schema["properties"],
-                                "preferredBuddyId": {"type": "string", "enum": list(buddy_ids)},
-                                "reselected": {"type": "boolean"}}
-    return schema
-
-
-def validate_answer(answer: object, buddy_ids: list[str], routing_mode: str = "review", *, domain_node_ids: Sequence[str] = (),
-                    exploration: bool = False) -> dict:
-    """Use the model's Schema; only file paths need an additional rule."""
-    if isinstance(answer, str):
-        try:
-            answer = json.loads(answer)
-        except (ValueError, RecursionError):
-            raise BoardError("answer-invalid-json", "Router answer is not valid JSON") from None
-    schema = answer_schema(buddy_ids, routing_mode, domain_node_ids=domain_node_ids, exploration=exploration)
-    errors = schema_errors(answer, schema)
-    if errors:
-        if isinstance(answer, dict) and set(answer) == set(schema["properties"]):
-            if schema_errors(answer["buddyId"], schema["properties"]["buddyId"]):
-                raise BoardError("router-out-of-bounds", "Router selected a buddy outside its frozen candidates",
-                                 bound="not-a-candidate")
-            if exploration and schema_errors(answer["preferredBuddyId"], schema["properties"]["preferredBuddyId"]):
-                raise BoardError("router-out-of-bounds", "Router preferred a buddy outside its frozen candidates",
-                                 bound="not-a-candidate")
-            if routing_mode == "fast" and isinstance(answer["evidence"], list) and any(
-                    isinstance(entry, dict) and entry.get("kind") == "file" for entry in answer["evidence"]):
-                raise BoardError("router-evidence-out-of-bounds", "Fast routing cannot cite repository files")
-        raise BoardError("answer-shape", "Router answer violates its JSON Schema: " + ", ".join(errors))
-    for entry in answer["evidence"]:
-        ref = entry["ref"]
-        if entry["kind"] == "file" and (
-                PurePosixPath(ref).is_absolute() or ".." in ref.split("/")
-                or "\\" in ref or ":" in ref or ref == "."
-                or any(ord(char) < 32 or ord(char) == 127 for char in ref)):
-            raise BoardError("answer-shape", "File evidence must be a checkout-relative path")
-    if exploration:
-        if answer["reselected"]:
-            # A reselection is a selection: it names a candidate and moves off
-            # the preferred buddy.
-            if answer["buddyId"] is None or answer["buddyId"] == answer["preferredBuddyId"]:
-                raise BoardError("answer-shape",
-                                 "A reselected answer must select a legal buddy other than the preferred one")
-        elif answer["buddyId"] is not None and answer["buddyId"] != answer["preferredBuddyId"]:
-            raise BoardError("answer-shape", "Without a reselection the selected buddy is the preferred buddy")
-    return {key: answer[key] for key in schema["properties"]}
 
 
 def _rate_interval(count: int, samples: int) -> dict | None:

@@ -72,9 +72,9 @@ class RouterDomainTests(WorkflowTestCase):
         self.seed_domains()
         request = self.request()
         packet = self.packet(request)
-        self.assertEqual(packet["domainNodes"], [{"nodeId": "ipc", "name": "IPC", "parentId": "systems"},
-                                                {"nodeId": "systems", "name": "Systems", "parentId": None},
-                                                {"nodeId": "writing", "name": "Writing", "parentId": None}])
+        self.assertEqual(packet["domainNodes"], [{"nodeId": "ipc", "name": "IPC", "definition": "IPC expertise", "parentId": "systems"},
+                                                {"nodeId": "systems", "name": "Systems", "definition": "Systems expertise", "parentId": None},
+                                                {"nodeId": "writing", "name": "Writing", "definition": "Writing expertise", "parentId": None}])
         self.assertEqual(packet["taskTypes"], [{"id": key, "definition": value} for key, value in TASK_TYPES.items()])
         first = next(buddy for buddy in packet["buddies"] if buddy["buddyId"] == BUDDY_ID)
         stats = first["statistics"]

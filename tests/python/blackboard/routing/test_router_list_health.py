@@ -300,8 +300,12 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.record(A, code="router-not-responding", index=0, now=T0, task="task-live", attempt="attempt-live")
         summary = self.state()
         entry = self.entry(summary, A)
-        self.assertTrue(entry["retryInProgress"])
+        self.assertFalse(entry["retryInProgress"])
         self.assertEqual(entry["code"], "router-skip-window")
+        self.clock.advance(601)
+        entry = self.entry(self.state(), A)
+        self.assertTrue(entry["retryInProgress"])
+        self.assertFalse(entry["inSkipWindow"])
 
     def test_ineligible_items_carry_their_resolution_code(self):
         self.add_buddy(A, enabled=0)

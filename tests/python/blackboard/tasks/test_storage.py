@@ -1062,3 +1062,38 @@ class ProcessInventoryServiceTests(BoardTestCase):
                  mock.patch.object(observation.shutil, 'which', return_value='lsof'), \
                  mock.patch.object(observation.subprocess, 'run', return_value=native):
                 self.assertEqual(storage.runtime_usage(self.directory, [], True), expected)
+
+class RoutingSnapshotStorageTests(BoardTestCase):
+    def test_snapshot_namespaces_rounds_and_digest_are_isolated(self):
+        from hey_my_buddy import private_files
+
+        board = self.board()
+        owner = "decision-fixture"
+        value = {"task": "冻结输入"}
+        for namespace, round in (("maintenance", None), ("profile", None), ("routing", 1), ("routing", 2)):
+            with self.subTest(namespace=namespace, round=round):
+                reference, created = private_files.publish_snapshot(board.directory, namespace, owner, value, round=round)
+                self.assertTrue(created)
+                self.assertEqual(private_files.publish_snapshot(board.directory, namespace, owner, value, round=round),
+                                 (reference, False))
+                self.assertEqual(private_files.read_snapshot(board.directory, namespace, owner, reference, round=round), value)
+        root = private_dirs.snapshot_root(board.directory, "routing", owner, 1)
+        publish_bytes(root / (reference["sha256"] + ".json"), b"{}")
+        with self.assertRaises(BoardError) as caught:
+            private_files.read_snapshot(board.directory, "routing", owner, reference, round=1)
+        self.assertEqual(caught.exception.code, "ARTIFACT_MISMATCH")
+        self.assertEqual(private_files.read_snapshot(board.directory, "routing", owner, reference, round=2), value)
+
+    def test_routing_is_a_reclaimable_managed_runtime_directory(self):
+        from hey_my_buddy import private_files
+
+        board = self.board()
+        _, created = private_files.publish_snapshot(board.directory, "routing", "orphan", {}, round=1)
+        self.assertTrue(created)
+        path = private_dirs.snapshot_root(board.directory, "routing", "orphan", 1)
+        plan = board.call("storage_plan", {})
+        candidate = next(item for item in plan["candidates"] if item["path"] == str(path))
+        self.assertEqual((candidate["category"], candidate["eligible"]), ("routing", True))
+        result = board.call("storage_apply", {"planId": plan["planId"], "commandId": "apply-routing", "confirm": True})
+        self.assertIn(candidate["id"], {item["id"] for item in result["removed"]})
+        self.assertFalse(path.exists())

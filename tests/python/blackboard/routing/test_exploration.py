@@ -180,9 +180,9 @@ class ExplorationRoutingTests(WorkflowTestCase):
         claim = self.router_claim(board, second)
         self.assertEqual(claim["claim"]["decisionInput"]["exploration"], {"quota": True})
         self.assertEqual(claim["claim"]["decisionInput"]["domainNodes"], [
-            {"nodeId": "concurrency", "name": "Concurrency", "parentId": "systems"},
-            {"nodeId": "ipc", "name": "IPC", "parentId": "systems"},
-            {"nodeId": "systems", "name": "Systems", "parentId": None}])
+            {"nodeId": "concurrency", "name": "Concurrency", "definition": "Concurrency expertise", "parentId": "systems"},
+            {"nodeId": "ipc", "name": "IPC", "definition": "IPC expertise", "parentId": "systems"},
+            {"nodeId": "systems", "name": "Systems", "definition": "Systems expertise", "parentId": None}])
         self.select(board, claim, quota_decision(
             preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True, domain_node_id="ipc"))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]

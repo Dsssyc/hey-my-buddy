@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from support import private_state_dir
+from support import BoardTestCase, private_state_dir
 from hey_my_buddy.blackboard.tasks import storage, workflow, workspace
 from hey_my_buddy.errors import BoardError
 
@@ -494,3 +494,64 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(observed, [True])
         self.assertFalse(checkout.exists())
         self.assertEqual(self.board_instance.store.service_issues(), [])
+
+
+class RoutingSnapshotOrphanTests(BoardTestCase):
+    def test_writer_recovery_preserves_active_requests_and_only_unstopped_old_rounds(self):
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.routing import router_sequence, snapshot_files
+
+        board = self.board()
+        now = board.store.now()
+        actor = {"buddyId": "dsh:fixture:m:off", "harness": "dsh", "provider": "fixture",
+                 "model": "m", "effort": "off"}
+        first = {"baseInput": {"task": "frozen"}}
+        with board.store.db.write() as db:
+            for identity, status in (("dec-active", "queued"), ("dec-terminal", "failed")):
+                db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,?,?)",
+                           (identity, status, now))
+                db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at)"
+                           " VALUES(?,?,'fixture','{}',?)", (identity, identity, now))
+                for round in (1, 2):
+                    router_sequence.freeze_request(db, identity, snapshot=first, now=now, round=round)
+                    snapshot_files.publish_round(board.store, db, identity, round)
+            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,"
+                       "adapter,cwd,state,revision,created_at,updated_at)"
+                       " VALUES('task-old','request-old','{}','fixture',1,'decision','/work','failed',1,?,?)", (now, now))
+            router_sequence.reserve_dispatch(db, decision_id="dec-terminal", task_id="task-old",
+                                             router_index=0, buddy=actor, now=now)
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,"
+                       "connection_reason,created_at,updated_at)"
+                       " VALUES('attempt-old','task-old',1,'fixture','decision','uncertain','execution-connection-unknown',?,?)",
+                       (now, now))
+        snapshot_files.recover_files(board.store)
+        for identity, round, retained in (("dec-active", 1, True), ("dec-active", 2, True),
+                                           ("dec-terminal", 1, True), ("dec-terminal", 2, False)):
+            with self.subTest(identity=identity, round=round):
+                self.assertEqual(private_dirs.snapshot_root(board.directory, "routing", identity, round).exists(),
+                                 retained)
+
+    def test_rollback_deletes_only_the_snapshot_it_created(self):
+        from hey_my_buddy import private_files
+        from hey_my_buddy.blackboard.routing import router_sequence, snapshot_files
+
+        board = self.board()
+        now = board.store.now()
+        document = {"task": "same"}
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES('dec','queued',?)", (now,))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at)"
+                       " VALUES('dec','request','fixture','{}',?)", (now,))
+            router_sequence.freeze_request(db, "dec", snapshot={"baseInput": document}, now=now, round=1)
+            sibling = snapshot_files.publish_round(board.store, db, "dec", 1)
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            with board.store.db.write() as db:
+                router_sequence.freeze_request(db, "dec", snapshot={"baseInput": document}, now=now, round=2)
+                again = snapshot_files.publish_round(board.store, db, "dec", 1)
+                created = snapshot_files.publish_round(board.store, db, "dec", 2)
+                self.assertEqual((again, created), (sibling, sibling))
+                raise RuntimeError("rollback")
+        self.assertEqual(private_files.read_snapshot(board.directory, "routing", "dec", sibling, round=1),
+                         document)
+        with self.assertRaises(FileNotFoundError):
+            private_files.read_snapshot(board.directory, "routing", "dec", created, round=2)

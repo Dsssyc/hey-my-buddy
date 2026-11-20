@@ -5,11 +5,15 @@ directory; Windows does not claim power-loss durability for directory entries.
 """
 from __future__ import annotations
 
-import os
+import hashlib
 import io
+import os
+import re
 import uuid
 from pathlib import Path
 
+from .errors import BoardError
+from .json_codec import canonical_json, decode_strict_json
 from .paths import native_path
 
 
@@ -40,11 +44,12 @@ def read_text(path: Path) -> str:
         return stream.read()
 
 
-def publish_bytes(path: Path, content: bytes, *, immutable: bool = False) -> None:
+def publish_bytes(path: Path, content: bytes, *, immutable: bool = False) -> bool:
     """Flush the complete writer, then replace or compare-and-create its name.
 
     Immutable publication never replaces an existing object. Identical bytes
-    may be reused; different bytes raise FileExistsError.
+    may be reused; different bytes raise FileExistsError. Return whether this
+    call installed the bytes.
     """
     from .private_dirs import _absolute, open_regular_fd
     path = _absolute(path)
@@ -56,6 +61,7 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False) -> Non
         descriptor = windows_files.open_regular_fd(temporary, flags, delete=True, api=api)
     else:
         descriptor = open_regular_fd(temporary, flags)
+    installed = True
     try:
         with os.fdopen(descriptor, "wb") as stream:
             if hasattr(os, "fchmod"):
@@ -71,8 +77,71 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False) -> Non
             except FileExistsError:
                 if read_bytes(path) != content:
                     raise
+                installed = False
         elif os.name != 'nt':
             os.replace(temporary, path)
     finally:
         native_path(temporary).unlink(missing_ok=True)
     sync_directory(path.parent)
+    return installed
+
+
+def _snapshot_content_root(state: Path, namespace: str, owner: str, round: int | None) -> Path:
+    from .private_dirs import linked, snapshot_root
+
+    if namespace == "routing" and round is None:
+        raise BoardError("INVALID_ARGUMENT", "Routing snapshot requires a frozen round")
+    root = snapshot_root(state, namespace, owner, round)
+    roots = (root.parent.parent, root.parent, root) if round is not None else (root.parent, root)
+    if any(linked(path) for path in roots):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Snapshot root must be an ordinary private directory")
+    return root
+
+
+def _snapshot_digest(reference: object) -> str:
+    if (not isinstance(reference, dict) or set(reference) != {"sha256"}
+            or not isinstance(reference["sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", reference["sha256"]) is None):
+        raise BoardError("INVALID_ARGUMENT", "Invalid private snapshot reference")
+    return reference["sha256"]
+
+
+def publish_snapshot(state: Path, namespace: str, owner: str, value: object, *,
+                     round: int | None = None, before_write=None) -> tuple[dict, bool]:
+    """Publish immutable content and identify whether this call created the file."""
+    from .private_dirs import ensure_private_dir
+
+    raw = canonical_json({"version": 1, "value": value}).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    reference = {"sha256": digest}
+    if before_write is not None:
+        before_write(reference)
+    root = ensure_private_dir(_snapshot_content_root(state, namespace, owner, round))
+    return reference, publish_bytes(root / (digest + ".json"), raw, immutable=True)
+
+
+def read_snapshot(state: Path, namespace: str, owner: str, reference: object, *,
+                  round: int | None = None):
+    digest = _snapshot_digest(reference)
+    root = _snapshot_content_root(state, namespace, owner, round)
+    raw = read_bytes(root / (digest + ".json"))
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise BoardError("ARTIFACT_MISMATCH", "Private snapshot digest differs")
+    envelope = decode_strict_json(raw)
+    if (not isinstance(envelope, dict) or set(envelope) != {"version", "value"}
+            or type(envelope["version"]) is not int or envelope["version"] != 1):
+        raise BoardError("INVALID_ARGUMENT", "Invalid private snapshot form")
+    return envelope["value"]
+
+
+def discard_snapshot_reference(state: Path, namespace: str, owner: str, reference: dict, *,
+                               round: int | None = None) -> None:
+    from .private_dirs import linked, snapshot_root
+
+    digest = _snapshot_digest(reference)
+    root = (_snapshot_content_root(state, namespace, owner, round) if namespace == "routing"
+            else snapshot_root(state, namespace, owner, round))
+    path = root / (digest + ".json")
+    if linked(path):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Snapshot file must be an ordinary private file")
+    native_path(path).unlink(missing_ok=True)

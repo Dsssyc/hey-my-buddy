@@ -18,7 +18,7 @@ _ATTEMPT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
 _REPARSE_POINT = 0x400
 _CREDENTIAL_FILES = frozenset({
     'agent-credential.json', 'execution-start.json',
-    'inquiry.json', 'finish-bridge.json',
+    'inquiry.json', 'finish-bridge.json', 'snapshot-mcp.json',
     'zcode-control.json', 'builtin-provider.json', 'personal-provider.json',
     'auth.json', 'patch.json', 'settings.json', 'inquiry.sock',
 })
@@ -249,3 +249,20 @@ def validate_private_fd(fd: int) -> None:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise BoardError('PRIVATE_PATH_UNSAFE', 'File must be owner-private')
+
+
+def snapshot_root(state: Path, namespace: str, owner: str | None = None,
+                  round: int | None = None) -> Path:
+    """Resolve a private snapshot namespace, owner, or routing round."""
+    if namespace not in {"routing", "maintenance", "profile"}:
+        raise BoardError("INVALID_ARGUMENT", "Unknown private snapshot namespace")
+    root = _absolute(state) / ("profiles" if namespace == "profile" else namespace)
+    if owner is not None:
+        if not isinstance(owner, str) or not owner or "\0" in owner:
+            raise BoardError("INVALID_ARGUMENT", "Invalid private snapshot owner")
+        root /= hashlib.sha256(owner.encode()).hexdigest()
+    if round is not None:
+        if namespace != "routing" or owner is None or type(round) is not int or round < 1:
+            raise BoardError("INVALID_ARGUMENT", "Invalid private snapshot round")
+        root /= str(round)
+    return root
