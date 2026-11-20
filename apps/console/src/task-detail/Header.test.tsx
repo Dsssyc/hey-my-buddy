@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Header } from "./Header";
@@ -38,12 +38,13 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
       artifactId: null, attemptId: "att-2", actor: HOST, createdAt: at("11:05"),
     } : null;
     const view = render(<TooltipProvider><Header view={parseTask(record, "m1")}
-      workflow={entry.loaded ? workflow({ state: entry.state, hostConclusion: conclusion }) : null} turns={2}
+      workflow={entry.loaded ? workflow({ state: entry.state, hostConclusion: conclusion }) : null}
       endMs={Date.parse(at("11:05"))}
-      error="" busy={false} onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
+      error="" busy={false} onRefresh={() => {}} onOpenRun={vi.fn()} onBack={() => {}}/></TooltipProvider>);
     const status = view.container.querySelector("[data-slot=detail-status]")!;
     expect(screen.getByRole("heading", { name: language === "zh" ? "未命名微任务" : "Unnamed micro task" })).toBeTruthy();
     expect(status.textContent).toBe(entry[language]);
+    expect(!!screen.queryByText(language === "zh" ? "归属" : "Owner")).toBe(entry.lead);
     expect(status.querySelector("[data-slot=state-mark]")?.getAttribute("data-kind")).toBe(entry.mark);
     if (entry.mark === "review") {
       expect(status.querySelector("[data-slot=state-mark] path")?.getAttribute("fill")).toBe("none");
@@ -61,8 +62,8 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
       : { directory: "Another micro task is using this working directory", model: "The selected model service is at capacity", unknown: "Waiting for admission" };
     const reason = (queueReason: string | null) => {
       const view = render(<TooltipProvider><Header view={parseTask(task({ state: "queued", queueReason }), "m1")}
-        workflow={null} turns={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
-        onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
+        workflow={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+        onRefresh={() => {}} onOpenRun={vi.fn()} onBack={() => {}}/></TooltipProvider>);
       const text = view.container.querySelector('[data-slot="detail-queue-reason"]')?.textContent;
       view.unmount();
       return text;
@@ -77,8 +78,8 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
   it.each([false, true])("shows the queued pause with matching stop evidence motion (%s)", async shutdownConfirmed => {
     await i18n.changeLanguage(language);
     const view = render(<TooltipProvider><Header view={parseTask(task({ state: "queued", queueReason: "paused", shutdownConfirmed }), "m1")}
-      workflow={null} turns={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
-      onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
+      workflow={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+      onRefresh={() => {}} onOpenRun={vi.fn()} onBack={() => {}}/></TooltipProvider>);
     const status = view.container.querySelector('[data-slot="detail-status"]')!;
     expect(status.textContent).toBe(language === "zh" ? "已暂停" : "Paused");
     const mark = status.querySelector('[data-slot="state-mark"]')!;
@@ -86,4 +87,22 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     expect(mark.classList.contains("state-breathe")).toBe(!shutdownConfirmed);
     expect(view.container.querySelector('[data-slot="detail-queue-reason"]')).toBeNull();
   });
+});
+
+it.each([
+  { title: "Prepare shared checkout", macroTaskId: "macro-2", text: "Prepare shared checkout" },
+  { title: null, macroTaskId: null, text: "run:123456789012…" },
+])("links a queued blocker with its recorded macro task", ({ title, macroTaskId, text }) => {
+  const runId = "run:123456789012345678901234";
+  const view = parseTask(task({ state: "queued", queueReason: "cwd-overlap", blockingTask: { runId, title, macroTaskId } }), "m1");
+  const onOpenRun = vi.fn();
+  render(<TooltipProvider><Header view={view} workflow={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+    onRefresh={vi.fn()} onBack={vi.fn()} onOpenRun={onOpenRun}/></TooltipProvider>);
+  const button = screen.getByRole("button", { name: title ?? runId });
+  expect(button.textContent?.trim()).toBe(text);
+  fireEvent.click(button);
+  expect(onOpenRun).toHaveBeenCalledExactlyOnceWith(runId, macroTaskId ?? undefined);
+  expect(screen.queryByText("归属")).toBeNull();
+  expect(screen.queryByText("回合")).toBeNull();
+  expect(screen.getByText("历时")).toBeTruthy();
 });

@@ -87,7 +87,7 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
           : <div className="relative flex min-h-0 flex-1 flex-col">
             {/* A uniform overflow value lets the hook recognize wheel events on the Radix viewport. */}
             <ScrollArea className="min-h-0 min-w-0 flex-1" viewportProps={{ ref: scrollRef, tabIndex: 0, "aria-label": t("sessionView.content"), style: { overflow: "auto" }, className: "overscroll-contain [overflow-anchor:none] [&>div]:block!" }}>
-              <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[868px] flex-col px-4 pb-8 sm:px-6">
+              <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[1060px] flex-col px-4 pb-8 sm:px-6">
                 {data.hasEarlier && positioned && <div ref={sentinel} aria-hidden="true" className="h-0 w-full" />}
                 {rows.length ? <SessionBlocks routingMode={routingMode} rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
                   setExpanded(previous => { const next = new Set(previous); if (open) next.add(key); else next.delete(key); return next; });

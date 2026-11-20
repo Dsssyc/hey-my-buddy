@@ -18,7 +18,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const title = page.locator('[data-slot=detail-pane] h3').first();
     await expect(title).toHaveText("回合 2");
     const [headBox, stripBox, tabsBox, titleBox] = await Promise.all([header.boundingBox(), strip.boundingBox(), tabs.boundingBox(), title.boundingBox()]);
-    expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
+    expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(0, 0);
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
     expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
     await expect(strip).toHaveCSS("border-bottom-width", "0px");
@@ -29,10 +29,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
       const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color;
     });
     await expect(band).toHaveCSS("background-color", paper);
-    await expect(band).toHaveCSS("border-top-width", "1px");
     await expect(band).toHaveCSS("border-bottom-width", "1px");
-    await expect(band).toHaveCSS("padding-top", "12px");
-    await expect(band).toHaveCSS("padding-bottom", "12px");
     // The workspace is the page's own ground, and the header bar carries the ruler's.
     expect(await header.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(paper);
     await expect(page.locator('[data-slot=task-detail]')).toHaveCSS("background-color", paper);

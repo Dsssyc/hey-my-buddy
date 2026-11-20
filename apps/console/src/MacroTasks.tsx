@@ -226,7 +226,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   };
 
   const selectMacroTask = (macroTaskId: string) => { setShowNarrowList(false); go({ macroTaskId, runId: null, step: null }, "push"); };
-  const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
+  const openRun = (runId: string, from: string | null = null, macroTaskId = selected) => go({ macroTaskId, runId, step: null }, "push", from);
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
   const feedback = currentSummary && (["pause", "resume", "end"] as WorkAction[]).map(action => {
@@ -262,7 +262,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         const { tab: _tab, ...overview } = location;
         go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
       }}
-      onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
+      onBack={backToTimeline} onOpenRun={(next, macroTaskId) => openRun(next, null, macroTaskId)} />}
     listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}

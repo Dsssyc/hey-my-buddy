@@ -1,8 +1,8 @@
-import { useNamedBuddy, accessibleBuddyName } from "../components/AliasTag";
-import { useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { AliasTag, useNamedBuddy, accessibleBuddyName } from "../components/AliasTag";
+import { useContext, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode, Ref } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
@@ -22,6 +22,11 @@ import type { Step, Steps } from "./steps";
 import { modelEffort } from "./names";
 import type { Interval } from "../timeline/labels";
 import { DetailLinks } from "./linking";
+import type { DetailTab } from "./location";
+import { TimelineThumbnail } from "./TimelineThumbnail";
+import { buddyColorKey, eventName } from "../macro-task-display";
+import { isFailedRow } from "../timeline/failure";
+import { formatClock, formatDuration } from "../i18n/format";
 
 const STEP_SELECTION_RADIUS_PX = 8;
 
@@ -54,14 +59,20 @@ function anchorOf(step: Step | null, spans: readonly { spanId: string; startAt: 
  * decided then and there. Selecting another step reveals its drawn slice or
  * marker with the smallest horizontal scroll; later reads leave the view alone.
  */
-export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revealRef }: {
+export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revealRef, tab }: {
   row: TimelineRow; timeline: MacroTaskTimeline; steps: Steps; selected: number;
   /** The address's step, counted from 1, exactly as the page's own onStep. */
   onStep: (step: number) => void; nowMs: number;
-  revealRef: Ref<() => void>;
+  revealRef: Ref<() => void>; tab: DetailTab;
 }) {
   const { t } = useTranslation("taskDetail");
   const named = useNamedBuddy();
+  const [display, setDisplay] = useState({ tab, open: tab === "overview" });
+  const expanded = display.tab === tab ? display.open : tab === "overview";
+  if (display.tab !== tab) setDisplay({ tab, open: expanded });
+  const show = (open: boolean) => setDisplay({ tab, open });
+  const timelineId = useId();
+  const thumbnail = useViewport<HTMLButtonElement>(300);
   const links = useContext(DetailLinks)!;
   const focusedKey = links.origin && stepForItem(steps, links.origin, timeline) === selected ? links.origin : null;
   const { viewport, setViewport, width } = useViewport(640);
@@ -81,6 +92,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     ? (mark => mark ? `event:${mark.seq}` : null)(step.events.find(event => SETTLING_EVENTS.includes(event.kind)))
     : step?.kind === "handoff" || step?.kind === "acceptance" ? null : step?.key ?? null;
   const selectedKey = focusedKey?.startsWith("settle:") ? null : focusedKey ?? stepKey;
+  const thumbnailSelection = focusedKey ?? (step?.kind === "acceptance" && step.pending ? `settle:${row.runId}` : selectedKey ?? step?.key ?? null);
   // The opening anchor is decided from the first presented state and never revisited.
   const initialAnchor = useRef<number | null | undefined>(undefined);
   if (initialAnchor.current === undefined) initialAnchor.current = anchorOf(steps.steps[selected] ?? null, spans, wait?.startMs ?? null);
@@ -90,7 +102,9 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
   const buddyColors = useMemo(() => buddyColorsFor(timeline.spans), [timeline.spans]);
   const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, Math.max(1, width - SLACK * 2), row.runId, viewportRef,
     steps.steps[selected]?.at ?? null, nowMs, SLACK);
-  useTimelineGestures(gestureArea, ruler, zoomAt, () => zoom(0), true);
+  useTimelineGestures(gestureArea, ruler, zoomAt, () => zoom(0), true, {
+    element: expanded ? null : thumbnail.viewport, reveal: () => show(true),
+  });
   useEffect(() => {
     if (centered.current || !scale || !viewport) return;
     centered.current = true;
@@ -145,47 +159,80 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     </g>;
   };
   const middle = STRIP_PX / 2;
-  return <div ref={setGestureArea} data-slot="detail-strip" role="group" aria-label={t("strip.label")} onKeyDown={event => {
-    if (event.defaultPrevented || (event.target as Element).closest("input, textarea, select, [role=dialog]")) return;
+  const buddy = step?.span?.routing?.routerBuddy ?? step?.span?.buddy ?? step?.to ?? null;
+  const color = buddyColors.get(buddyColorKey(buddy));
+  const title = !step ? null : step.kind === "turn" ? t("step.turn", { n: step.turnIndex })
+    : step.kind === "cancel" ? step.events[0] && eventName(step.events[0])
+      : t(`step.${step.kind}`);
+  const end = parseTimelineInstant(step?.span?.endAt ?? null) ?? (step?.outcome === "running" ? nowMs : null);
+  return <div data-slot="detail-strip" role="group" aria-label={t("strip.label")} onKeyDown={event => {
+    if (!expanded || event.defaultPrevented || (event.target as Element).closest("input, textarea, select, [role=dialog]")) return;
     if (event.key === "+" || event.key === "=") { event.preventDefault(); zoom(1); }
     else if (event.key === "-") { event.preventDefault(); zoom(-1); }
     else if (event.key === "0") { event.preventDefault(); zoom(0); }
-  }} className="relative flex flex-none select-none" style={{ height: TIMELINE_AXIS_PX + STRIP_PX }}>
-    <div data-slot="step-navigation" className="flex shrink-0 flex-col items-center justify-between border-r border-line px-3 py-2">
-      <span data-slot="step-counter" className="whitespace-nowrap text-xs font-medium tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
-      <div className="flex gap-1.5">
+  }} className="select-none">
+    <div data-slot="step-bar" className="flex min-h-9 min-w-0 items-center gap-2 pl-1.5 pr-3 text-xs sm:pr-6">
+      <div data-slot="step-navigation" className="flex shrink-0 items-center">
         <Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.previous")} aria-disabled={selected === 0 || undefined} onClick={() => { if (selected > 0) onStep(selected); }}>
           <ChevronLeft aria-hidden="true"/>
         </Button>
+        <span data-slot="step-counter" className="min-w-[9.5ch] text-center font-medium whitespace-nowrap tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
         <Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.next")} aria-disabled={selected === steps.steps.length - 1 || undefined} onClick={() => { if (selected < steps.steps.length - 1) onStep(selected + 2); }}>
           <ChevronRight aria-hidden="true"/>
         </Button>
       </div>
+      <button ref={thumbnail.setViewport} type="button" data-slot="timeline-toggle" aria-expanded={expanded} aria-controls={timelineId}
+        aria-label={expanded ? t("strip.hide") : input.domain ? t("strip.show") : `${t("strip.show")} · ${t("strip.empty")}`}
+        onClick={() => show(!expanded)}
+        className="flex h-7 w-[clamp(200px,32cqw,420px)] max-w-[calc(100cqw-13rem)] @min-[700px]:max-w-[calc(100cqw-25rem)] shrink-0 cursor-pointer items-center justify-center overflow-hidden border-l border-line bg-sunk text-ink2 outline-none transition-colors duration-150 motion-reduce:transition-none hover:text-ink focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        {expanded ? <span className="flex min-w-0 items-center gap-1 px-2"><span className="truncate">{t("strip.hide")}</span><ChevronUp className="size-3 shrink-0" aria-hidden="true"/></span>
+          : <TimelineThumbnail input={input} width={thumbnail.width} spans={spans} events={events} steps={steps.steps} runId={row.runId}
+              selectedKey={thumbnailSelection} buddyColors={buddyColors} wait={wait} failed={isFailedRow(row)} nowMs={nowMs}/>}
+      </button>
+      <div data-slot="step-readout" className="flex min-w-0 flex-1 items-center gap-2 @max-[640px]:flex-wrap @max-[640px]:gap-x-2 @max-[640px]:gap-y-0">
+        <span className="shrink-0 font-medium">{title}</span>
+        {buddy && <span className="flex min-w-0 items-center text-ink2 @max-[520px]:hidden">
+          {color && <span aria-hidden="true" className="mr-1.5 size-2.5 shrink-0" style={{ backgroundColor: color }}/>}
+          <span className="truncate">{modelEffort(buddy)}</span><AliasTag alias={named(buddy)?.alias}/>
+        </span>}
+        {step?.at != null && <span data-slot="step-clock" className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap tabular-nums text-ink3 @max-[520px]:hidden">
+          <span>{formatClock(step.at)}{end !== null && ` – ${formatClock(end)}`}</span>
+          {step.ms !== null && <span className="text-ink">{formatDuration(step.ms, "fine")}</span>}
+        </span>}
+      </div>
     </div>
-    <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
-      {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
-        <ZoomRuler ref={setRuler} className="bg-transparent" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
-          <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
-        </ZoomRuler>
-        <div className="relative">
-          <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
-            selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection} itemLinks={links.items}
-            onOpen={(_runId, key) => links.onItem(key)} onSelect={() => {}}
-            onHover={() => {}} onFocusSpan={() => {}} onMarker={() => {}}/>
-          {overlay(x => <>
-            {delegationAt !== null && sliceButton("delegation", 0, t("step.delegation"), x(delegationAt),
-              <circle cx={x(delegationAt)} cy={middle} r={4} className="fill-past"/>)}
-            {steps.steps.map((item, index) => item.kind === "handoff" && item.at !== null && Number.isFinite(item.at)
-              ? sliceButton(item.key, index, [t("step.handoff"), accessibleBuddyName(modelEffort(item.from), named(item.from)) || t("unknown"), accessibleBuddyName(modelEffort(item.to), named(item.to)) || t("unknown")].join(" · "), x(item.at!),
-                <path d={`M${x(item.at!)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-ink2"/>)
-              : null)}
-            {acceptanceIndex >= 0 && wait && sliceButton(`settle:${row.runId}`, acceptanceIndex, t("wait.acceptance"), x(wait.startMs),
-              <WaitingDiamond x={x(wait.startMs)} y={middle} kind="review"/>,
-              `settle:${row.runId}`)}
-          </>)}
-          {input.nowAtEnd && <NowLine x={SLACK + scale.toX(nowMs)!}/>}
+    <div id={timelineId} inert={!expanded}
+      className="grid grid-rows-[0fr] overflow-hidden motion-safe:transition-[grid-template-rows] motion-safe:duration-200 data-[expanded=true]:grid-rows-[1fr]"
+      data-expanded={expanded}>
+      <div className="min-h-0 overflow-hidden">
+        <div ref={setGestureArea} data-slot="detail-timeline" className="relative flex" style={{ height: TIMELINE_AXIS_PX + STRIP_PX }}>
+            <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
+              {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
+                <ZoomRuler ref={setRuler} className="bg-transparent" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
+                  <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
+                </ZoomRuler>
+                <div className="relative">
+                  <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
+                    selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection} itemLinks={links.items}
+                    onOpen={(_runId, key) => links.onItem(key)} onSelect={() => {}}
+                    onHover={() => {}} onFocusSpan={() => {}} onMarker={() => {}}/>
+                  {overlay(x => <>
+                    {delegationAt !== null && sliceButton("delegation", 0, t("step.delegation"), x(delegationAt),
+                      <circle cx={x(delegationAt)} cy={middle} r={4} className="fill-past"/>)}
+                    {steps.steps.map((item, index) => item.kind === "handoff" && item.at !== null && Number.isFinite(item.at)
+                      ? sliceButton(item.key, index, [t("step.handoff"), accessibleBuddyName(modelEffort(item.from), named(item.from)) || t("unknown"), accessibleBuddyName(modelEffort(item.to), named(item.to)) || t("unknown")].join(" · "), x(item.at!),
+                        <path d={`M${x(item.at!)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-ink2"/>)
+                      : null)}
+                    {acceptanceIndex >= 0 && wait && sliceButton(`settle:${row.runId}`, acceptanceIndex, t("wait.acceptance"), x(wait.startMs),
+                      <WaitingDiamond x={x(wait.startMs)} y={middle} kind="review"/>,
+                      `settle:${row.runId}`)}
+                  </>)}
+                  {input.nowAtEnd && <NowLine x={SLACK + scale.toX(nowMs)!}/>}
+                </div>
+              </div>}
+            </ScrollArea>
         </div>
-      </div>}
-    </ScrollArea>
+      </div>
+    </div>
   </div>;
 }

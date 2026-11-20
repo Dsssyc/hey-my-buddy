@@ -131,7 +131,7 @@ function fixture(options: {
     }
     return structuredClone(state);
   });
-  const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+  const api = { publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, kind: "standalone", title: row.task, titleSource: "task", project: row.lineage?.project ?? null }))),
       totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),

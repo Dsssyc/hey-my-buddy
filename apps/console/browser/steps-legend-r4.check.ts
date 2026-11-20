@@ -10,7 +10,7 @@ for (const { locale, theme, width, counter, next, waitMeaning, clusterMeaning, i
 ]) test.describe(`steps and legend ${locale}`, () => {
   test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
 
-  test("shows position above reachable arrows and explains every legend mark", async ({ page }) => {
+  test("shows position between reachable arrows and explains every legend mark", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await page.goto(`#tasks/${A}/preview-run-a1/1`);
     const strip = page.locator('[data-slot="detail-strip"]');
@@ -19,7 +19,8 @@ for (const { locale, theme, width, counter, next, waitMeaning, clusterMeaning, i
     await expect(position).toHaveText(new RegExp(`^${counter} 1 / [2-9][0-9]*$`));
     const before = await position.textContent();
     const [positionBox, arrowBox] = await Promise.all([position.boundingBox(), forward.boundingBox()]);
-    expect(positionBox!.y + positionBox!.height).toBeLessThan(arrowBox!.y);
+    expect(positionBox!.x + positionBox!.width).toBe(arrowBox!.x);
+    expect(positionBox!.y + positionBox!.height / 2).toBe(arrowBox!.y + arrowBox!.height / 2);
     expect(arrowBox!.width).toBe(28);
     expect(arrowBox!.height).toBe(28);
     await expect(forward).toHaveAttribute("data-variant", "ghost");

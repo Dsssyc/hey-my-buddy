@@ -88,15 +88,14 @@ describe("reaching the top of the transcript", () => {
   });
 
   it("polls additions without observing history when no earlier page exists", async () => {
-    const session = vi.fn().mockResolvedValueOnce(page(0, 2, false)).mockResolvedValueOnce(page(2, 2, false));
+    const session = vi.fn().mockResolvedValueOnce({ ...page(0, 2, false), state: "running" }).mockResolvedValueOnce(page(2, 2, false));
     renderPanel({ session });
     expect(await screen.findByText("第 1 条记录")).toBeTruthy();
     // No earlier page can be read, so the top sentinel is not even attached and
     // no intersection can disturb the follow state.
     expect(observers.filter(item => item.targets.some(target => target.getAttribute("aria-hidden") === "true"))).toEqual([]);
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3400)); });
+    await screen.findByText("第 3 条记录");
     expect(session).toHaveBeenCalledTimes(2);
     expect(session.mock.calls[1][2]).toEqual({ after: 2, limit: SESSION_PAGE_SIZE });
-    expect(screen.getByText("第 3 条记录")).toBeTruthy();
   });
 });

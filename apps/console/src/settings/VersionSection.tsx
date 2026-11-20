@@ -6,6 +6,7 @@ import type { RuntimeVersionInfo, VersionFacts } from "../types";
 import { formatDateTime, formatNumber } from "../i18n/format";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "../components/ui/collapsible";
 import { StateMark } from "../components/ui/state-mark";
+import { CodeBlockCopyButton } from "../components/ui/code-block";
 import { Section } from "./Section";
 
 function Facts({ value }: { value: VersionFacts }) {
@@ -29,23 +30,63 @@ function Facts({ value }: { value: VersionFacts }) {
   </div>;
 }
 
+const numeric = /^(0|[1-9]\d*)$/;
+const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function versionParts(value: string) {
+  const match = semver.exec(value);
+  if (!match || match[0] !== value) return null;
+  const prerelease = match[4]?.split(".");
+  if (prerelease?.some(part => /^\d+$/.test(part) && !numeric.test(part))) return null;
+  return { core: match.slice(1, 4).map(BigInt), prerelease };
+}
+
+function isNewer(candidate: string, current: string | null) {
+  const next = versionParts(candidate);
+  const running = current && versionParts(current);
+  if (!next || !running) return false;
+  for (const [index, part] of next.core.entries()) {
+    if (part !== running.core[index]) return part > running.core[index]!;
+  }
+  const a = next.prerelease, b = running.prerelease;
+  if (!a || !b) return !a && !!b;
+  for (const [index, part] of a.entries()) {
+    const other = b[index];
+    if (other === undefined) return true;
+    if (part === other) continue;
+    if (numeric.test(part)) return numeric.test(other) && BigInt(part) > BigInt(other);
+    return numeric.test(other) || part > other;
+  }
+  return false;
+}
+
 /** Read once on the first visible visit, including StrictMode and hide/show. */
 export function VersionSection({ api, active }: { api: ConsoleApi; active: boolean }) {
   const { t } = useTranslation("settings");
   const [info, setInfo] = useState<RuntimeVersionInfo | null>(null), [error, setError] = useCopyState();
+  const [published, setPublished] = useState<string | null>(null);
+  const publication = useRef<ReturnType<ConsoleApi["publishedVersion"]> | null>(null);
   const pending = useRef<Promise<RuntimeVersionInfo> | null>(null);
   useEffect(() => {
     if (!active) return;
     let current = true;
     pending.current ??= api.runtimeVersion();
+    publication.current ??= api.publishedVersion();
+    void publication.current.then(value => { if (current) setPublished(value?.publishedVersion ?? null); });
     pending.current.then(value => { if (current) setInfo(value); }).catch(reason => { if (current) setError(() => errorText(reason)); });
     return () => { current = false; };
   }, [api, active]);
+  const available = info && published && isNewer(published, info.running.softwareVersion) ? published : null;
+  const upgrade = available ? `uvx hey-my-buddy@${available} install` : null;
   return <Section title={t("version.title")}>
     {error ? <p role="alert" className="flex items-center gap-2 text-xs text-fail"><StateMark kind="fail" />{t("version.failed", { error })}</p>
       : info ? <div className="space-y-5">
         <div className="space-y-3">{info.running.mode === "source" && <h3 className="text-xs text-ink2">{t("version.runningSource")}</h3>}<Facts value={info.running} /></div>
         {info.running.mode === "source" && <div className="space-y-3"><h3 className="text-xs text-ink2">{t("version.installedRuntime")}</h3>{info.installed ? <Facts value={info.installed} /> : <p className="text-xs text-ink2">{t("version.unrecorded")}</p>}</div>}
+        {upgrade && <div data-slot="published-version" className="space-y-1 text-xs">
+          <p className="text-ink2">{t("version.available", { version: available })}</p>
+          <div className="flex min-w-0 items-center gap-2"><code className="min-w-0 wrap-anywhere">{upgrade}</code><CodeBlockCopyButton value={upgrade}/></div>
+        </div>}
       </div> : <p className="text-xs text-ink2" role="status">{t(active ? "version.loading" : "version.unread")}</p>}
   </Section>;
 }

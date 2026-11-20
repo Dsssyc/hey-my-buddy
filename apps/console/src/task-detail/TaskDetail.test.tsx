@@ -146,13 +146,14 @@ describe("opening the detail of a micro task", () => {
 });
 
 describe("the head of the detail", () => {
-  it("names the micro task, its state, elapsed time and turns without a Started fact", async () => {
+  it("names the micro task, its state and elapsed time in the header", async () => {
     open();
     await ready();
     const head = document.querySelector("[data-slot=detail-header]") as HTMLElement;
     expect(within(head).getByRole("heading", { name: "微任务详情" })).toBeTruthy();
     expect(head.textContent).toContain("等待验收");
-    expect(head.textContent).toContain("回合2");
+    expect(within(head).queryByText("回合")).toBeNull();
+    expect(within(head).queryByText("归属")).toBeNull();
     expect(head.textContent).toContain("历时");
     expect(within(head).queryByText("开始")).toBeNull();
     expect(head.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();

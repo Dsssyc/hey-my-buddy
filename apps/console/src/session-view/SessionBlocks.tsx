@@ -3,6 +3,7 @@ import { ChevronRight, Brain, Minus } from "lucide-react";
 import { Message, MessageContent } from "../components/ui/message";
 import { Marker, MarkerContent } from "../components/ui/marker";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceLine, TraceIcon } from "../components/ui/trace";
+import { Disclosure } from "../components/ui/collapsible";
 import { CodeBlockCopyButton } from "../components/ui/code-block";
 import { MessageResponse } from "./Markdown";
 import { ToolRow, Output, kindIcon, CallStatus } from "./ToolRow";
@@ -48,18 +49,21 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
         const text = row.message.update.content.text;
         if (row.type === "task") {
           const excerpt = taskExcerpt(taskText);
-          body = <div data-slot="session-task" className="bg-sunk px-3.5 py-3">
+          body = <div data-slot="session-task" className="rounded-md bg-sunk px-4 py-3">
             <p className="mb-1 text-xs text-ink3">{t("sessionView.task")}</p>
             <h3 className="text-[14px] font-semibold wrap-anywhere">{routingMode !== undefined ? t(`sessionView.routingTask.${routingMode === "review" ? "review" : "fast"}`) : excerpt.title}</h3>
             <div className="mt-1 line-clamp-2 text-[13px] leading-[1.65] text-ink2 wrap-anywhere"><MessageResponse>{routingMode !== undefined ? [excerpt.title, excerpt.opening].filter(Boolean).join("\n") : excerpt.opening}</MessageResponse></div>
-            <TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><TraceCollapsibleTrigger className="mt-2 rounded-none text-xs text-ink3">{t("sessionView.fullPrompt", { count: [...text].length })}</TraceCollapsibleTrigger><TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={text} id={`${key}:prompt`} expansion={expansion} preview={false}/></TraceCollapsibleContent></TraceCollapsible>
+            <TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><div className="mt-2 flex items-center justify-between gap-3 border-t border-line pt-2">
+              <span className="text-xs tabular-nums text-ink3">{t("sessionView.promptLength", { count: [...text].length })}</span>
+              <TraceCollapsibleTrigger className="px-1 py-0.5 text-xs"><Disclosure open={open} className="size-3"/>{t(open ? "sessionView.hidePrompt" : "sessionView.fullPrompt")}</TraceCollapsibleTrigger>
+            </div><TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={text} id={`${key}:prompt`} expansion={expansion} preview={false}/></TraceCollapsibleContent></TraceCollapsible>
           </div>;
         } else if (row.type === "reasoning") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><TraceCollapsibleTrigger className="text-xs"><TraceLine><TraceIcon><Brain size={13}/></TraceIcon>{t("sessionView.reasoning")}</TraceLine></TraceCollapsibleTrigger><TraceCollapsibleContent className="text-sm"><MessageResponse>{text}</MessageResponse></TraceCollapsibleContent></TraceCollapsible></Trace>;
         else if (row.type === "marker") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
           <TraceCollapsibleTrigger className="min-h-[30px] text-xs"><ChevronRight size={13} aria-hidden className={open ? "rotate-90" : undefined}/>{markerName(row.message.update._meta?.nativeType, t)}</TraceCollapsibleTrigger>
           <TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={markerBody(row.message)} id={`${key}:body`} expansion={expansion} language={row.message.update._meta?.nativeType === "turn/diff/updated" ? "diff" : "text"}/></TraceCollapsibleContent>
         </TraceCollapsible></Trace>;
-        else body = <div className="group/message relative max-w-[700px] min-w-0">
+        else body = <div className="group/message relative min-w-0">
           <Message><MessageContent className="text-[14.5px] leading-[1.72]"><div className="pr-7"><MessageResponse>{text}</MessageResponse></div></MessageContent></Message>
           <div className={`absolute right-0 top-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100`}><CodeBlockCopyButton value={text}/></div>
         </div>;

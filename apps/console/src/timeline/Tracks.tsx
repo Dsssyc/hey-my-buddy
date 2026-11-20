@@ -168,7 +168,20 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 }
 
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
-const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
+export const timelineDiamond = (x: number, y: number, radius = 5.5) => `M${x} ${y - radius}l${radius} ${radius}-${radius} ${radius}-${radius}-${radius}Z`;
+
+export function positionSpans(spans: readonly TimelineSpan[], scale: TimelineScale, nowMs: number) {
+  const positioned: PositionedSpan[] = [];
+  for (const span of spans) {
+    const outcome = spanOutcome(span), startMs = instant(span.startAt);
+    const endMs = instant(span.endAt) ?? (["running", "open", "unknown"].includes(outcome) ? nowMs : null);
+    if (startMs === null || endMs === null) continue;
+    const start = scale.toX(startMs), end = scale.toX(endMs);
+    if (start === null || end === null || end < start) continue;
+    positioned.push({ span, start, end, outcome, execution: span.kind === "execution" || span.kind === "routing" });
+  }
+  return positioned;
+}
 
 const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = TIMELINE_TRACK_PX, surface = "background", selectionRef, itemLinks }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number;
@@ -197,15 +210,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
   const hitPath = (start: number, end: number) => fragmentHitPath(start, end, middle, -INSET_PX, scale.widthPx + INSET_PX);
   const barTextY = middle + 4;
   const topTextY = 12;
-  const positioned: PositionedSpan[] = [];
-  for (const span of spans) {
-    const outcome = spanOutcome(span), startMs = instant(span.startAt);
-    const endMs = instant(span.endAt) ?? (["running", "open", "unknown"].includes(outcome) ? nowMs : null);
-    if (startMs === null || endMs === null) continue;
-    const start = scale.toX(startMs), end = scale.toX(endMs);
-    if (start === null || end === null || end < start) continue;
-    positioned.push({ span, start, end, outcome, execution: span.kind === "execution" || span.kind === "routing" });
-  }
+  const positioned = positionSpans(spans, scale, nowMs);
   const wait = acceptanceInterval(row, spans, nowMs);
   const acceptanceOpen = wait?.open ?? false;
   const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDuration(wait.endMs - wait.startMs, "minutes") } : null;
@@ -373,7 +378,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
       onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if ((key.key === "Enter" || key.key === " ")) { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(marker.x - 5.5, marker.x + 5.5)} fill="transparent"/>
       {isHighlighted(markerKey(marker)) && <rect data-slot="selected-item" x={marker.x - INQUIRY_SELECTION_RADIUS_PX} y={middle - 9} width={INQUIRY_SELECTION_RADIUS_PX * 2} height={18} fill="none" className="pointer-events-none stroke-focus"/>}
-      <path data-slot="inquiry-mark" d={diamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
+      <path data-slot="inquiry-mark" d={timelineDiamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
       <rect aria-hidden="true" data-slot="fragment-focus" x={marker.x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(markerKey(marker)) && "group-focus/fragment:opacity-100")}/>
     </g>)}
     {singletonEvents.map(marker => { const { event, x } = marker; const highlighted = markerHasKey(marker, selectedKey) || markerHasKey(marker, highlightedKey); return <g key={event.seq} role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={markerHasKey(marker, selectedKey)} aria-label={markerReadout(marker)} onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}

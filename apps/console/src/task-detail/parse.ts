@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { z } from "zod";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
+import { blockingTaskSchema } from "../types";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
 import { parseInputFailure } from "./input-failure";
@@ -312,6 +313,12 @@ function parseRouting(value: unknown): Routing | null {
   };
 }
 
+function parseBlockingTask(value: unknown, what: string) {
+  const parsed = blockingTaskSchema.safeParse(value);
+  if (!parsed.success) refuse(what);
+  return parsed.data;
+}
+
 /** The compact collaboration record of one micro task (`workflow_get {runId}`). */
 export function parseWorkflow(value: unknown, runId: string): Workflow {
   const workflow = rec(value, "workflow");
@@ -323,6 +330,7 @@ export function parseWorkflow(value: unknown, runId: string): Workflow {
   const taskSummary = rec(workflow.task, "workflow.task");
   return {
     runId, taskRevision: int(taskSummary.revision, "workflow.task.revision"), state: str(workflow.state, "workflow.state"),
+    blockingTask: parseBlockingTask(workflow.blockingTask, "workflow.blockingTask"),
     buddy: parseBuddy(workflow.buddy, "workflow.buddy"),
     checkout: oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "workflow.checkout"),
     projectKind: oneOf(project.kind, ["git", "folder"] as const, "workflow.project.kind"),
@@ -606,6 +614,8 @@ export function parseTask(value: unknown, runId: string): TaskView {
   const lineage = parseLineage(task.lineage);
   const workflow = rec(task.workflow, "task.workflow");
   str(workflow.state, "task.workflow.state");
+  parseBlockingTask(task.blockingTask, "task.blockingTask");
+  parseBlockingTask(workflow.blockingTask, "task.workflow.blockingTask");
   for (const key of ["title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
   oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "task.workflow.checkout");
   oneOf(workflow.projectKind, ["git", "folder"] as const, "task.workflow.projectKind");

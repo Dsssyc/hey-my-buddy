@@ -15,6 +15,7 @@ export default {
     save: "保存", saving: "保存中", saved: "提醒设置已保存。", unavailable: "提醒设置暂不可用，请刷新控制台。", disconnected: "连接中断或当前浏览器无权修改。", unchanged: "没有需要保存的改动。", busy: "正在保存提醒设置。", unsaved: "未保存",
   },
   version: {
+    available: "PyPI 已发布版本 {{version}}",
     title: "版本", software: "软件版本", installedAt: "安装时间", details: "详细信息", contract: "契约版本", schema: "schema", sourceCommit: "来源提交", unrecorded: "未记录",
     runningSource: "正在运行（源码）", installedRuntime: "已安装运行时", loading: "正在读取版本…", unread: "尚未读取版本", failed: "无法读取版本：{{error}}",
   },

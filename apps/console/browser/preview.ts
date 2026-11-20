@@ -14,6 +14,7 @@ export const test = base.extend({
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(`${message.text()} (${message.location().url})`); });
+    await page.route("**/api/published-version", route => route.fulfill({ json: { publishedVersion: null, checkedAt: null } }));
     await use(page);
     // Let in-flight synthetic response handlers finish before the page is disposed.
     await page.unrouteAll({ behavior: "wait" });

@@ -32,7 +32,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const before = await assertBack(page);
     release();
     await expect(page.locator('[data-slot=step-navigation]')).toBeVisible();
-    const step = (await page.locator('[data-slot=step-navigation] button').first().boundingBox())!;
+    const step = (await page.locator('[data-slot=step-navigation] button svg').first().boundingBox())!;
     await assertBack(page, step.x);
     expect(Math.abs(before - step.x)).toBeLessThanOrEqual(1);
     await shot(page, `head-${theme}-${width}`);

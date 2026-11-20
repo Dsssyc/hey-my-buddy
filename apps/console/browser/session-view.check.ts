@@ -109,7 +109,7 @@ test.describe("session content and navigation", () => {
 
     const task = row(page, "task");
     await expect(task.locator('[data-slot="session-task"]')).toContainText("设计并实现工作目标时间轴");
-    const prompt = task.getByRole("button", { name: /Expand full text sent to buddy/ });
+    const prompt = task.getByRole("button", { name: /^(Show|Hide) full prompt$/ });
     await expect(prompt).toHaveAttribute("aria-expanded", "false");
     await prompt.click();
     await expect(prompt).toHaveAttribute("aria-expanded", "true");
@@ -309,7 +309,7 @@ test.describe("session content and navigation", () => {
     const switched = page.waitForEvent("requestfailed", { predicate: request => request.url().includes("/session?") });
     await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
     expect((await switched).failure()?.errorText).toContain("ABORTED");
-    const prompt = row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ });
+    const prompt = row(page, "task").getByRole("button", { name: "Show full prompt" });
     await prompt.click();
     await expect(row(page, "task")).toContainText("为合成任务选择执行 buddy。");
   });
@@ -491,7 +491,7 @@ test.describe("four harness preview records", () => {
   test("DSH renders a question and answer without tool rows", async ({ page }) => {
     await openSession(page, session("preview-run-b9", 5, B));
     await expect(row(page, "task")).toContainText("核对合成平台路径中的字符编码并交回结果");
-    await row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await row(page, "task").getByRole("button", { name: "Show full prompt" }).click();
     await expect(row(page, "task").locator('[data-slot="session-output"]')).toContainText("合成平台路径的编码是否一致？");
     await expect(row(page, "answer")).toContainText("合成样例里的路径可以正常读取");
     await expect(row(page, "calls")).toHaveCount(0);
@@ -503,7 +503,7 @@ test.describe("four harness preview records", () => {
     await openSession(page, session("preview-run-a1", 2));
     const task = row(page, "task");
     await expect(task.locator("h3")).toHaveText("Choose a buddy for this micro task");
-    await task.getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await task.getByRole("button", { name: "Show full prompt" }).click();
     await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
     await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
     const answer = row(page, "answer");

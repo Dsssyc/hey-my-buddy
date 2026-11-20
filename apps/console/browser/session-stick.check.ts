@@ -17,11 +17,12 @@ for (const theme of ["light", "dark"] as const) test.describe(`session stick ${t
   // Both new message rows and a growing existing tool output must obey the same
   // follow / escape / return contract on the real Radix scrolling viewport.
   for (const format of ["messages", "tool"] as const) test(`${format}: follows additions, preserves upward reading, returns and resumes following`, async ({ page }) => {
-    let next = 0;
+    let next = 0, offered = 0;
     await page.route("**/api/tasks/*/attempts/*/session?*", async route => {
       const after = new URL(route.request().url()).searchParams.get("after");
       const initial = after === null;
-      const text = initial ? "Initial output line\n".repeat(120) : `stream-tail-${++next}\n`;
+      const send = initial || next < offered;
+      const text = initial ? "Initial output line\n".repeat(120) : send ? `stream-tail-${++next}\n` : "";
       const events = format === "messages"
         ? initial ? Array.from({ length: 60 }, (_, index) => message(`Initial message ${index}`)) : [message(text)]
         : [{ sessionId: "att-a1-2", update: {
@@ -31,7 +32,7 @@ for (const theme of ["light", "dark"] as const) test.describe(`session stick ${t
           _meta: { nativeItemId: "stream-tool", contentSegment: "stdout" },
         } }];
       const before = initial ? 0 : Number(after);
-      await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before, after: before + events.length, hasEarlier: false, events } });
+      await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before, after: before + (send ? events.length : 0), hasEarlier: false, events: send ? events : [] } });
     });
     await open(page, address);
     await expect(panel(page).locator('[data-session-block]').first()).toBeAttached();
@@ -56,8 +57,7 @@ for (const theme of ["light", "dark"] as const) test.describe(`session stick ${t
     }
     await expect.poll(() => distance(page)).toBeLessThanOrEqual(2);
     const poll = async (tail: number) => {
-      const response = page.waitForResponse(value => value.url().includes("/session?") && value.url().includes("after="));
-      await response;
+      offered = tail;
       await expect(panel(page)).toContainText(`stream-tail-${tail}`);
       await viewport(page).evaluate(() => new Promise(requestAnimationFrame));
     };
@@ -67,9 +67,8 @@ for (const theme of ["light", "dark"] as const) test.describe(`session stick ${t
     await expect(more).toHaveCount(0);
 
     await viewport(page).hover();
-    const scrolled = viewport(page).evaluate(node => new Promise<void>(resolve => node.addEventListener("scroll", () => resolve(), { once: true })));
     await page.mouse.wheel(0, -1400);
-    await scrolled;
+    await expect.poll(() => distance(page)).toBeGreaterThan(100);
     await viewport(page).evaluate(() => new Promise(requestAnimationFrame));
     const reading = await viewport(page).evaluate(node => node.scrollTop);
     await poll(2);

@@ -17,25 +17,36 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
   const latest = useRef<SessionData | null>(null);
   const requests = useRef(new Set<AbortController>());
   const visible = useRef(false);
+  const source = useRef<typeof read | null>(null);
   const earlierPending = useRef(false);
-  const update = (transform: (previous: SessionData | null) => SessionData) => setData(previous => {
-    const next = transform(previous);
-    latest.current = next;
-    return next;
-  });
+  const update = (transform: (previous: SessionData | null) => SessionData) => {
+    latest.current = transform(latest.current);
+    setData(latest.current);
+  };
   const read = useCallback(async (params: { before?: number; after?: number }, controller: AbortController) =>
     parseSession(await client.session(taskId, attemptId, { ...params, limit: SESSION_PAGE_SIZE }, controller.signal)), [client, taskId, attemptId]);
 
   useEffect(() => {
+    if (source.current !== read) {
+      source.current = read;
+      latest.current = null;
+      setData(null);
+      setError(null);
+    }
     if (!active) return;
     earlierPending.current = false;
     setEarlierBusy(false);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let delay = 250;
     let forward: AbortController | null = null;
     async function poll() {
+      if (latest.current?.state === "ended") return;
       const controller = new AbortController();
       let failed = false;
+      let received = false;
+      let caughtUp = false;
+      let ended = false;
       forward = controller;
       requests.current.add(controller);
       try {
@@ -43,23 +54,36 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
         if (cursor === undefined) {
           const page = await read({}, controller);
           if (controller.signal.aborted) return;
-          update(() => ({ ...page, events: records(page), change: "initial" }));
+          ended = page.state === "ended";
+          const startsMidCall = page.events[0]?.update.sessionUpdate === "tool_call_update";
+          const earlier = startsMidCall && page.hasEarlier ? await read({ before: page.before }, controller).catch(() => null) : null;
+          if (controller.signal.aborted) return;
+          update(() => ({ ...page, before: earlier?.before ?? page.before, hasEarlier: earlier?.hasEarlier ?? page.hasEarlier,
+            events: earlier ? [...records(earlier), ...records(page)] : records(page), change: "initial" }));
           return;
         }
         while (!controller.signal.aborted) {
           const page = await read({ after: cursor }, controller);
           if (controller.signal.aborted) return;
-          update(previous => ({ ...previous!, state: page.state, stopped: page.stopped, coverage: page.coverage, after: page.after,
+          update(previous => ({ ...previous!, state: page.events.length < SESSION_PAGE_SIZE ? page.state : "running", stopped: page.stopped, coverage: page.coverage, after: page.after,
             events: page.events.length ? [...previous!.events, ...records(page)] : previous!.events, change: "later" }));
+          received ||= page.events.length > 0;
           cursor = page.after;
-          if (page.events.length < SESSION_PAGE_SIZE) break;
+          if (page.events.length < SESSION_PAGE_SIZE) {
+            caughtUp = true;
+            ended = page.state === "ended";
+            break;
+          }
         }
       } catch (failure) {
         if (!controller.signal.aborted && !isAbortError(failure)) { failed = true; setError(failure); }
       } finally {
         requests.current.delete(controller);
         if (forward === controller) forward = null;
-        if (!stopped && !failed && !controller.signal.aborted && visible.current) timer = setTimeout(() => void poll(), 3000);
+        if (caughtUp) delay = received ? 250 : Math.min(1000, delay + 250);
+        if (!stopped && !failed && !controller.signal.aborted && visible.current && !ended) {
+          timer = setTimeout(() => void poll(), delay);
+        }
       }
     }
     function visibility() {
@@ -92,7 +116,7 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
     requests.current.add(controller);
     try {
       const page = await read({ before: latest.current.before }, controller);
-      if (!controller.signal.aborted) update(previous => ({ ...previous!, state: page.state, stopped: page.stopped, coverage: page.coverage, before: page.before, hasEarlier: page.hasEarlier,
+      if (!controller.signal.aborted) update(previous => ({ ...previous!, before: page.before, hasEarlier: page.hasEarlier,
         events: [...records(page), ...previous!.events], change: "earlier" }));
     } catch (failure) {
       if (!controller.signal.aborted && !isAbortError(failure)) setError(failure);

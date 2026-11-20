@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, X, File, Search, Terminal, Pencil, Globe, Wrench, LoaderCircle } from "lucide-react";
+import { Disclosure } from "../components/ui/collapsible";
 import type { LucideIcon } from "lucide-react";
 import { TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceLine, TraceIcon, TraceTitle } from "../components/ui/trace";
 import { CodeBlockActions, CodeBlockCopyButton } from "../components/ui/code-block";
@@ -62,7 +63,7 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
       <TraceLine className="w-full gap-2 text-[13px]">
         <TraceIcon><Icon size={13}/></TraceIcon>
         <TraceTitle ref={titleRef} className="flex-1 text-left font-mono text-ink">{title}</TraceTitle>
-        <CallStatus status={tool.status}/>
+        <CallStatus status={tool.status}/><Disclosure open={open} className="size-3.5"/>
       </TraceLine>
     </TraceCollapsibleTrigger>
     <TraceCollapsibleContent className="mt-0 mb-2 ml-6 border-0 pr-0 pl-0 text-[12px]">

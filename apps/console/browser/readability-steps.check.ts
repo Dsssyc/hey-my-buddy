@@ -30,8 +30,8 @@ for (const { locale, previous, next, copy, failed } of [
         strip.locator('[data-slot="timeline-track"]').boundingBox(),
         back.boundingBox(),
       ]);
-      expect(navigation!.x + navigation!.width).toBeLessThan(track!.x + 1);
-      expect(Math.abs(arrow!.y + arrow!.height / 2 - (track!.y + track!.height / 2))).toBeLessThan(8);
+      expect(navigation!.y + navigation!.height).toBeLessThan(track!.y);
+      expect(arrow!.x).toBe(navigation!.x);
       const slices = await strip.locator('[data-slot="timeline-track"] g[data-key^="span:"]').evaluateAll(groups => groups.map(group => {
         const hit = group.querySelector('[data-slot="span-hit"]');
         const bar = group.querySelector('[data-slot="execution-bar"], [data-slot="routing-bar"]');

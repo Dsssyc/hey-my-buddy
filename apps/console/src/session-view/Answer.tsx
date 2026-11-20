@@ -30,7 +30,7 @@ export function Answer({ content, copyText, id, routing }: { content: AnswerCont
     entries = routing ? [...order.flatMap(key => all.filter(([name]) => name === key)), ...all.filter(([key]) => !order.includes(key))] : all;
   }
   const { t } = useTranslation("taskDetail");
-  return <div className="group/message relative max-w-[700px] min-w-0">
+  return <div className="group/message relative min-w-0">
     <Marker className="mb-3 border-t border-line pt-4 text-xs text-ink3"><MarkerContent>{t("sessionView.answer")}</MarkerContent></Marker>
     <Message><MessageContent className="text-[14.5px] leading-[1.72]"><div className="pr-7">
       {content.format === "markdown" ? <MessageResponse>{content.text}</MessageResponse> : entries.length ? <Fields entries={entries} router={routing}/> : <Value value={content.value}/>}

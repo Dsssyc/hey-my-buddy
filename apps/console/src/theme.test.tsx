@@ -22,7 +22,7 @@ function api(): ConsoleApi {
   return {
     snapshot: vi.fn(async () => snapshot()),
     // This source fixture has no recorded runtime or installation version facts.
-    runtimeVersion: vi.fn(async (): Promise<RuntimeVersionInfo> => ({
+    publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async (): Promise<RuntimeVersionInfo> => ({
       running: { mode: "source", softwareVersion: null, contractVersion: null,
         schemaVersion: null, sourceCommit: null, installedAt: null },
       installed: null,
