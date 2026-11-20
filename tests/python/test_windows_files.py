@@ -82,29 +82,190 @@ class ACLPolicyTests(unittest.TestCase):
             with self.subTest(ace=ace), self.assertRaises(BoardError):
                 files.validate_acl(USER, USER, True, [((0, 0), 0, USER), ace])
 
-    def test_handle_security_query_preserves_missing_and_null_dacl(self):
-        security = mock.MagicMock()
-        security.TokenUser = 1
-        security.SE_FILE_OBJECT = 1
-        security.OWNER_SECURITY_INFORMATION = 1
-        security.DACL_SECURITY_INFORMATION = 4
-        security.SE_DACL_PRESENT = 4
-        security.ConvertSidToStringSid.side_effect = lambda value: value
-        security.GetTokenInformation.return_value = (USER, 0)
-        descriptor = security.GetSecurityInfo.return_value
-        descriptor.GetSecurityDescriptorOwner.return_value = USER
-        for control, dacl in ((0, mock.Mock()), (4, None)):
-            descriptor.GetSecurityDescriptorControl.return_value = (control, 1)
-            descriptor.GetSecurityDescriptorDacl.return_value = dacl
-            with mock.patch.object(files, '_security', return_value=(mock.Mock(), mock.Mock(), security)):
-                with self.assertRaises(BoardError):
-                    files._validate_root_acl(123)
-        security.GetSecurityInfo.assert_called_with(123, 1, 5)
+    def test_foreign_trustee_diagnostics_use_only_redacted_categories(self):
+        for trustee, kind in (
+            ('S-1-1-0', 'everyone'),
+            ('S-1-3-0', 'creator-owner'),
+            ('S-1-5-11', 'authenticated-users'),
+            ('S-1-5-32-545', 'builtin-users'),
+            ('S-1-15-2-1', 'all-application-packages'),
+            ('S-1-15-2-2', 'all-restricted-application-packages'),
+            ('S-1-15-3-123', 'app-package-sid'),
+            ('S-1-5-80-123', 'service-sid'),
+            ('S-1-5-32-546', 'builtin-group-sid'),
+            ('S-1-12-1-111-222-333-444', 'other-account-sid'),
+            (FOREIGN, 'other-account-sid'),
+        ):
+            with self.subTest(kind=kind), self.assertRaises(BoardError) as raised:
+                files.validate_acl(USER, USER, True, [((0, 16), 1, trustee)])
+            error = raised.exception
+            self.assertEqual(error.code, 'PRIVATE_PATH_UNSAFE')
+            self.assertEqual(error.details, {'aceType': 0, 'aceFlags': 16, 'trusteeKind': kind})
+            self.assertNotIn(trustee, str(error))
+
+    def test_deny_malformed_and_foreign_owner_diagnostics_omit_account_sids(self):
+        for owner, ace, details in (
+            (USER, ((1, 16), 1, FOREIGN), {'aceType': 1, 'aceFlags': 16}),
+            (USER, ((0, 16), 1), {'aceShape': 'malformed'}),
+            (USER, ((0,), 1, FOREIGN), {'aceShape': 'malformed'}),
+            (FOREIGN, ((0, 16), 1, USER), {}),
+        ):
+            with self.subTest(details=details), self.assertRaises(BoardError) as raised:
+                files.validate_acl(owner, USER, True, [ace])
+            self.assertEqual(raised.exception.details, details)
+            self.assertNotIn(FOREIGN, str(raised.exception))
 
     def test_import_needs_no_pywin32_at_module_load(self):
         code = "import sys; sys.path.insert(0, sys.argv[1]); import hey_my_buddy.windows_files; assert 'win32security' not in sys.modules"
         result = subprocess.run([sys.executable, '-S', '-c', code, str(Path(files.__file__).parents[1])], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class StateRootACLTests(unittest.TestCase):
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.root = Path(temporary).resolve() / 'state'
+        self.api = self.enterContext(mock.patch.object(files, 'WindowsFileAPI')).return_value
+        self.api._call.side_effect = lambda method, *args: method(*args)
+        self.reader, self.writer = FakeHandle(1), FakeHandle(2)
+        self.api._open.side_effect = [self.reader, self.writer]
+        self.api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
+        self.api.close.side_effect = lambda handle: handle.Close()
+
+        self.security = mock.Mock(TokenUser=1, SE_FILE_OBJECT=1, OWNER_SECURITY_INFORMATION=1,
+                                  DACL_SECURITY_INFORMATION=4, PROTECTED_DACL_SECURITY_INFORMATION=-0x80000000,
+                                  SE_DACL_PRESENT=4, ACL_REVISION=2)
+        self.security.OpenProcessToken.side_effect = lambda *_: FakeHandle(3)
+        self.security.GetTokenInformation.return_value = (USER, 0)
+        self.security.ConvertSidToStringSid.side_effect = lambda value: value
+        self.security.ConvertStringSidToSid.side_effect = lambda value: value
+        self.enterContext(mock.patch.object(files, '_security', return_value=(mock.Mock(), mock.Mock(), self.security)))
+
+    def descriptor(self, *, owner=USER, present=True, aces=()):
+        descriptor = mock.Mock()
+        descriptor.GetSecurityDescriptorOwner.return_value = owner
+        descriptor.GetSecurityDescriptorControl.return_value = (4 if present else 0, 1)
+        if aces is None:
+            descriptor.GetSecurityDescriptorDacl.return_value = None
+        else:
+            dacl = descriptor.GetSecurityDescriptorDacl.return_value
+            dacl.GetAceCount.return_value = len(aces)
+            dacl.GetAce.side_effect = aces
+        return descriptor
+
+    def test_compliant_root_only_opens_for_read(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=[((0, 16), 1, USER)])
+        files.check_state_root(self.root, create=True)
+        self.assertTrue(self.root.is_dir())
+        self.api._open.assert_called_once_with(self.root, 0x20080, files.OPEN_EXISTING, share_delete=True)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+
+    def test_foreign_owner_is_refused_without_attempting_repair(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(owner=FOREIGN, aces=None)
+        with self.assertRaisesRegex(BoardError, 'foreign owner') as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertEqual(raised.exception.details, {'path': str(self.root)})
+        self.api._open.assert_called_once_with(self.root, 0x20080, files.OPEN_EXISTING, share_delete=True)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+
+    def test_repairs_owned_root_with_unacceptable_dacl(self):
+        cases = (
+            ('foreign', True, [((0, 16), 1, FOREIGN)], USER, USER),
+            ('null', True, None, files.ADMINISTRATORS_SID, USER),
+            ('missing', False, [], files.ADMINISTRATORS_SID, files.ADMINISTRATORS_SID),
+        )
+        for name, present, aces, owner, user in cases:
+            with self.subTest(dacl=name):
+                self.api.reset_mock()
+                self.security.reset_mock()
+                self.reader, self.writer = FakeHandle(1), FakeHandle(2)
+                self.api._open.side_effect = [self.reader, self.writer]
+                self.security.GetTokenInformation.return_value = (user, 0)
+                dacl = self.security.ACL.return_value
+
+                def security_info(handle, _, information):
+                    if handle is self.reader:
+                        return self.descriptor(owner=owner, present=present, aces=aces)
+                    self.assertTrue(self.reader.closed)
+                    if information == 1:
+                        self.security.SetSecurityInfo.assert_not_called()
+                        return self.descriptor(owner=owner)
+                    self.security.SetSecurityInfo.assert_called_once()
+                    return self.descriptor(owner=owner, aces=[((0, 3), 0x1F01FF, user)])
+
+                self.security.GetSecurityInfo.side_effect = security_info
+                files.check_state_root(self.root, create=True)
+                self.assertEqual(self.api._open.call_args_list, [
+                    mock.call(self.root, access, files.OPEN_EXISTING, share_delete=True)
+                    for access in (0x20080, 0x60080)
+                ])
+                self.assertEqual(self.api.info.call_args_list, [mock.call(self.reader), mock.call(self.writer)])
+                self.assertEqual(self.security.GetSecurityInfo.call_args_list, [
+                    mock.call(self.reader, 1, 5), mock.call(self.writer, 1, 1), mock.call(self.writer, 1, 5),
+                ])
+                trustees = [USER, files.SYSTEM_SID, files.ADMINISTRATORS_SID] if user == USER else [user, files.SYSTEM_SID]
+                self.assertEqual(dacl.AddAccessAllowedAceEx.call_args_list, [
+                    mock.call(2, 3, 0x1F01FF, trustee) for trustee in trustees
+                ])
+                self.security.SetSecurityInfo.assert_called_once_with(
+                    self.writer, 1, 4 | -0x80000000, None, None, dacl, None)
+                self.assertTrue(self.reader.closed)
+                self.assertTrue(self.writer.closed)
+
+    def test_read_only_root_check_reports_foreign_ace_without_repair(self):
+        self.root.mkdir()
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=[((0, 16), 1, FOREIGN)])
+        with self.assertRaises(BoardError) as raised:
+            files.check_state_root(self.root, create=False)
+        self.assertEqual(raised.exception.code, 'PRIVATE_PATH_UNSAFE')
+        self.assertEqual(raised.exception.details, {
+            'path': str(self.root), 'aceType': 0, 'aceFlags': 16, 'trusteeKind': 'other-account-sid',
+        })
+        self.assertNotIn(FOREIGN, str(raised.exception))
+        self.api._open.assert_called_once_with(self.root, 0x20080, files.OPEN_EXISTING, share_delete=True)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+
+    def test_reopened_junction_is_refused_before_reading_or_writing_its_acl(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=None)
+        self.api.info.side_effect = [(files.FILE_ATTRIBUTE_DIRECTORY, 0),
+                                     (files.FILE_ATTRIBUTE_DIRECTORY | files.FILE_ATTRIBUTE_REPARSE_POINT, 0)]
+        with self.assertRaisesRegex(BoardError, 'real directory'):
+            files.check_state_root(self.root, create=True)
+        self.security.GetSecurityInfo.assert_called_once_with(self.reader, 1, 5)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_reopened_foreign_owner_is_refused_before_writing_its_acl(self):
+        self.security.GetSecurityInfo.side_effect = [self.descriptor(aces=None), self.descriptor(owner=FOREIGN)]
+        with self.assertRaisesRegex(BoardError, 'foreign owner'):
+            files.check_state_root(self.root, create=True)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_failed_post_write_check_propagates_and_closes_handle(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=None)
+        with self.assertRaisesRegex(BoardError, 'non-NULL DACL') as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertEqual(raised.exception.details, {'path': str(self.root)})
+        self.security.SetSecurityInfo.assert_called_once()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_write_dac_denial_propagates_after_closing_read_handle(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=None)
+        denial = PermissionError('access denied')
+        self.api._open.side_effect = [self.reader, denial]
+        with self.assertRaises(PermissionError) as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertIs(raised.exception, denial)
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+
 
 class HandleBoundaryTests(unittest.TestCase):
     def setUp(self):
@@ -505,6 +666,65 @@ class NativePrivateFilesTests(unittest.TestCase):
             state_root._checked_roots.clear()
             with self.assertRaisesRegex(BoardError, 'foreign ACE'):
                 state_root.check_state_root(root)
+
+    def test_owner_repairs_wide_inheritance_and_children_inherit_the_private_acl(self):
+        import win32api, win32con, win32security as security
+
+        token = security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            user = security.GetTokenInformation(token, security.TokenUser)[0]
+        finally:
+            token.Close()
+        trustees = tuple(dict.fromkeys((security.ConvertSidToStringSid(user),
+                                        files.SYSTEM_SID, files.ADMINISTRATORS_SID)))
+        inherit = files.OBJECT_INHERIT_ACE | files.CONTAINER_INHERIT_ACE
+
+        def acl_at(path):
+            descriptor = security.GetFileSecurity(str(native_path(path)), security.DACL_SECURITY_INFORMATION)
+            control, _ = descriptor.GetSecurityDescriptorControl()
+            dacl = descriptor.GetSecurityDescriptorDacl()
+            entries = []
+            for index in range(dacl.GetAceCount()):
+                header, mask, sid = dacl.GetAce(index)
+                entries.append((header, mask, security.ConvertSidToStringSid(sid)))
+            return control, entries
+
+        for foreign in ('S-1-1-0', 'S-1-15-2-1', 'S-1-3-0'):
+            with self.subTest(trustee=foreign), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(state_root, '_checked_roots', {}):
+                parent = Path(temporary)
+                dacl = security.ACL()
+                for trustee in (*trustees, foreign):
+                    dacl.AddAccessAllowedAceEx(security.ACL_REVISION, inherit, files.FILE_ALL_ACCESS,
+                                              security.ConvertStringSidToSid(trustee))
+                security.SetNamedSecurityInfo(str(parent), security.SE_FILE_OBJECT,
+                                              security.DACL_SECURITY_INFORMATION | security.PROTECTED_DACL_SECURITY_INFORMATION,
+                                              None, None, dacl, None)
+
+                root = parent / 'state'
+                self.assertEqual(state_root.check_state_root(root, create=True), root)
+                control, entries = acl_at(root)
+                self.assertTrue(control & security.SE_DACL_PROTECTED)
+                self.assertCountEqual(entries, [((0, inherit), files.FILE_ALL_ACCESS, trustee) for trustee in trustees])
+
+                child = root / 'child'
+                child.mkdir()
+                leaf = child / 'file'
+                leaf.write_bytes(b'inherited')
+                for path in (child, leaf):
+                    child_control, child_entries = acl_at(path)
+                    self.assertFalse(child_control & security.SE_DACL_PROTECTED)
+                    self.assertCountEqual([entry[2] for entry in child_entries], trustees)
+                    for (ace_type, flags), mask, _ in child_entries:
+                        self.assertEqual(ace_type, 0)
+                        self.assertTrue(flags & 0x10)  # INHERITED_ACE
+                        self.assertEqual(mask, files.FILE_ALL_ACCESS)
+
+                state_root._checked_roots.clear()
+                self.assertEqual(state_root.check_state_root(root, create=False), root)
+                state_root._checked_roots.clear()
+                self.assertEqual(state_root.check_state_root(root, create=True), root)
+                self.assertEqual(acl_at(root), (control, entries))
 
     def test_ordinary_creation_does_not_protect_dacl_and_descriptor_only_checks_type(self):
         import win32security as security
