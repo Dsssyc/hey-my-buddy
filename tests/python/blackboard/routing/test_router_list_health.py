@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock, seed_buddy
 
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -308,6 +310,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.assertFalse(entry["inSkipWindow"])
 
     def test_ineligible_items_carry_their_resolution_code(self):
+        self.enterContext(patch.dict(PERMISSION_LEVELS, {"claude": {"read": "enforced"}}))
         self.add_buddy(A, enabled=0)
         self.add_buddy(B, harness="claude")
         self.add_buddy(C)

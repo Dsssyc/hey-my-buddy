@@ -82,8 +82,8 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(result.native_evidence.unconfirmed, ("settings-readback",))
 
     def test_multiple_denials_share_one_bounded_input_fact(self):
-        collector = native_run._TurnCollector(self.worker_request("write"), mock.Mock(),
-                                              lambda _facts: native_run.RunFeedback(action="continue"))
+        collector = native_run._TurnCollector(mock.Mock(), lambda _facts: native_run.RunFeedback(action="continue"),
+                                              tools=native_run._tool_evidence(self.worker_request("write")))
         collector._connection = mock.Mock()
         collector._connection.observations.return_value = {"unknownEvents": 0, "unreadResponses": 0}
         for index, command in enumerate(("npm test", "node node_modules/typescript/bin/tsc --noEmit", "测" * 300)):

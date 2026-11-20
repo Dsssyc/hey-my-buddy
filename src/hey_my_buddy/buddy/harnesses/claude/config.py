@@ -86,7 +86,8 @@ def discovery_args() -> list[str]:
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
                    output_schema: dict, full_access: bool = False,
-                   mcp_config_path: str | None = None, inquiry_tools=(), web_only: bool = False) -> list[str]:
+                   mcp_config_path: str | None = None, inquiry_tools=(), web_only: bool = False,
+                   no_tools: bool = False, snapshot_mcp: bool = False) -> list[str]:
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
@@ -95,8 +96,8 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     """
     args = [*base_args(),
             "--no-session-persistence",
-            "--tools", ",".join(WEB_TOOLS if web_only else [*(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
-                                 *(("ToolSearch",) if mcp_config_path else ())]),
+            "--tools", ",".join(() if no_tools else WEB_TOOLS if web_only else [*(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
+                                 *(("ToolSearch",) if mcp_config_path and not snapshot_mcp else ())]),
             "--permission-prompt-tool", "stdio",
             "--settings", settings_path,
             "--session-id", session_id,
@@ -105,6 +106,8 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "default", "--allowedTools", ",".join(WEB_TOOLS),
                  "--disallowedTools", "mcp__*", "--strict-mcp-config",
                  "--mcp-config", canonical_json({"mcpServers": {}})]
+    elif no_tools:
+        args += ["--strict-mcp-config", "--permission-mode", "default"]
     elif read_only:
         # Mode stays default so any write ask is a real denial path, and the
         # session-wide disallow list hard-denies writes for child agents too.

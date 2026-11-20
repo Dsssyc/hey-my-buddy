@@ -54,6 +54,7 @@ from ..inquiry_bridge import InquiryBridge
 from ..input_admission import admission_error
 from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import ReceiptError
+from ..snapshot_mount import snapshot_coverage_refs, stdio_mcp_entry, stdio_tool_names, verify_mounted_calls
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
 from ..run_contract import (
@@ -121,6 +122,12 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
+#: The MCP resource row the none scope must also disable: its id is not a
+#: ``tool-*`` row, and DSH CLI 0.2.2-rc.1 otherwise keeps exposing
+#: ``list_mcp_resources``, ``list_mcp_resource_templates`` and
+#: ``read_mcp_resource`` from the built-in ``@deepseek-ai/dsh-mcp-resources``
+#: (verified with ``--dump-config``, probes note 2026-11-19).
+MCP_RESOURCES_ROW = "mcp-resources"
 #: The executor row every no-preset scope keeps: DSH CLI 0.2.2-rc.1 refuses the
 #: turn before any model activity when no executor row remains ("The selected
 #: tool executor is unavailable. Load an executor in this composition before
@@ -190,11 +197,16 @@ def _launch_policy(request: RunRequest, state: _RunState, deadline: float) -> tu
             cwd=request.cwd, private_root=Path(request.private_state.invocation_root), deadline=deadline)
         if problem is not None:
             state.native_facts["toolInventory"] = make_reason(_INVENTORY_REASONS[problem], version=version or "unknown")
-            if request.permission == "web":
+            if request.permission == "web" or request.snapshot_query is not None:
                 detail = ("could not be read" if problem == UNREADABLE else "has an unrecognized YAML entry format")
-                raise NativeError(problem, f"DSH CLI {version or 'unknown'}: tool inventory {detail}; web scope unavailable")
+                raise NativeError(problem, f"DSH CLI {version or 'unknown'}: tool inventory {detail}; {request.permission} scope unavailable")
         retained = (NONE_SCOPE_RETAINED_ROWS if request.permission == "none" else WEB_SCOPE_RETAINED_ROWS)
         rows = [{"id": name, "disabled": True} for name in (inventory or ()) if name not in retained]
+        if request.permission == "none":
+            # The resource row is outside the tool-* inventory, so only this
+            # explicit row keeps the none scope from exposing the built-in
+            # read-only MCP resource tools.
+            rows.append({"id": MCP_RESOURCES_ROW, "disabled": True})
         return [*rows, {"id": PLAN_MODE_ROW, "disabled": True}], {}
     return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
@@ -503,6 +515,7 @@ class _RunState:
     working_directory_rejection: WorkingDirectoryRejection | None = None
     model_responded: bool = False
     native_request_sent: bool | None = False
+    correction_count: int = 0
     native_admission_error: dict | None = None
     initial_request_attempted: bool = False
     root_model_activity: bool = False
@@ -731,12 +744,13 @@ class _RunFacts:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
     def mapping(self, *, tool_calls: int, model_responded: bool, settled: bool, raw_answer: str | None,
-                denied: int) -> dict:
+                denied: int, session_tool_calls: int = 0, read_tool_violations: int = 0) -> dict:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
             "modelResponded": model_responded,
             "toolCalls": tool_calls,
+            "sessionToolCalls": session_tool_calls, "readToolViolations": read_tool_violations,
             # DSH has no separate marker-frame family: every tool frame is
             # already a projected fact counted in toolCalls.
             "toolMarkerFrames": 0,
@@ -852,7 +866,7 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native DSH execution: the single native path of this harness."""
-    micro_task = services is not None
+    micro_task = bool(request.session_services)
     # The continuation is the request's own fact: only the micro task Worker
     # carrier resumes a native session; the fast and review carriers rebuild a
     # fresh root session whatever they carry.
@@ -875,7 +889,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     tools = DshToolFacts({"harness": "dsh", "taskId": request.identity.task_id,
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation},
-                         state_dir=Path(request.private_state.state_dir))
+                         state_dir=Path(request.private_state.state_dir),
+                         session_tools=stdio_tool_names(request.snapshot_query)
+                         if request.snapshot_query is not None else ())
     activity = DshActivity()
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()
@@ -901,7 +917,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         sessions: list[str] = []
         evidence: RootTurnEvidence | None = None
         raw_answer: str | None = None
-        correction_count = 0
         drained: bool | None = None
         pump: _Pump | None = None
 
@@ -914,7 +929,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
             feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
                                               model_responded=state.model_responded,
-                                              raw_answer=raw, denied=denied_count()))
+                                              raw_answer=raw, denied=denied_count(),
+                                              session_tool_calls=tools.session_tool_calls,
+                                              read_tool_violations=tools.evidence.read_tool_violations
+                                              if request.snapshot_query is not None else 0))
             if feedback.action == "stop":
                 raise ObserverInterrupt()
             return feedback
@@ -982,7 +1000,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     state.status = "ok"
                     notify(settled=True)
             else:
-                raw_answer, correction_count = _final_message_rounds(
+                raw_answer = _final_message_rounds(
                     client=client, pump=pump, request=request, deadline=deadline, cancel=cancel,
                     state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
                     fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel, session=session)
@@ -1045,7 +1063,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 continuation = ContinuationFacts(resumable=True)
         return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                              sessions=sessions, evidence=evidence, raw_answer=raw_answer,
-                             correction_count=correction_count, drained=drained,
+                             correction_count=state.correction_count, drained=drained,
                              invocation_root=invocation_root, record=record,
                              stderr_mirror=services.native_stderr if micro_task else None,
                              continuation=continuation).model_copy(
@@ -1145,6 +1163,8 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
             prompt_sent = True
         if initial:
             state.native_request_sent = True
+        else:
+            state.correction_count += 1
 
     def send() -> None:
         nonlocal prompt_aborted
@@ -1251,7 +1271,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                           deadline: float, cancel: CancelFlag, state: _RunState,
                           facts: _RunFacts, tools: DshToolFacts, activity: DshActivity,
                           sessions: list, fold, notify, denied, send_cancel,
-                          session: DshSessionProjector | None) -> tuple[str | None, int]:
+                          session: DshSessionProjector | None) -> str | None:
     """The final-message carrier: one fresh root session per executed correction.
 
     The scope only decides the native tool settings; the value carrier follows
@@ -1261,9 +1281,12 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
     the same process and the same total deadline.
     """
     input_text = request.input_text
-    correction_count = 0
+    # The mounted snapshot service rides on the request, never on the Worker
+    # completion binding: every scope that reaches this carrier mounts it
+    # under the fixed server name (ADR-035 decision 3).
+    servers = [stdio_mcp_entry(request.snapshot_query)] if request.snapshot_query is not None else []
     while True:
-        session_id, snapshot = _open_session(client=client, request=request, servers=[],
+        session_id, snapshot = _open_session(client=client, request=request, servers=servers,
                                              state=state, tools=tools, activity=activity,
                                              sessions=sessions, deadline=deadline)
         state.configured = True
@@ -1285,6 +1308,14 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                     facts.note_unknown("foreign-root-text")
                 return changed
             update = params.get("update") if isinstance(params, dict) else None
+            if isinstance(update, dict) and update.get("sessionUpdate") in ("tool_call", "tool_call_update"):
+                # DSH narrates between tool calls; the structured answer is the
+                # final assistant segment after the last tool call of the turn
+                # (DSH CLI 0.2.2-rc.1, probes note 2026-11-19), so any earlier
+                # narration segment is dropped when a later tool call arrives.
+                raw_parts.clear()
+                raw_bytes = 0
+                return changed
             if isinstance(update, dict) and update.get("sessionUpdate") == "agent_message_chunk":
                 for text in text_blocks(update.get("content")):
                     encoded = text.encode()
@@ -1305,7 +1336,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
             # published as settled.
             tools.close_root(session_id)
             _close_session(client, session_id, deadline=deadline)
-            return None, correction_count
+            return None
         if failure is not None:
             raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
         raw = "".join(raw_parts)
@@ -1313,10 +1344,9 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
         _close_session(client, session_id, deadline=deadline)
         feedback = notify(settled=True, raw=raw)
         if feedback.action == "correct":
-            correction_count += 1
             input_text = feedback.input_text
             continue
-        return raw, correction_count
+        return raw
 
 
 def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
@@ -1591,7 +1621,18 @@ def _build_result(request: RunRequest, *, state: _RunState,
     # and never stand in for stream evidence.
     stream_complete = bool(drained is True and sessions and state.prompt_stop_reason)
     exclude = evidence.verified_delivery() if evidence is not None else frozenset()
-    tool_package = tools.finish(stream_complete, exclude_calls=exclude) if state.session_opened else None
+    verified_session_calls: frozenset[tuple[str, str]] = frozenset()
+    snapshot_coverage: list[dict] = []
+    if state.session_opened and request.snapshot_query is not None:
+        # The mounted snapshot calls are verified against the signed ledger in
+        # both directions only now, after the stream drained: a mismatch leaves
+        # every mounted call unverified for the publication judge instead of
+        # failing the driver.
+        verified_session_calls, snapshot_coverage = verify_mounted_calls(
+            request.snapshot_query, tools.snapshot_calls, tools.roots)
+    tool_package = tools.finish(stream_complete and snapshot_coverage is not None, exclude_calls=exclude,
+                                verified_session_calls=verified_session_calls
+                                ) if state.session_opened else None
     value, completion = _value_and_completion(evidence, raw_answer,
                                               correction_count, stream_complete)
     record_failure = record.get("failure") if record else None
@@ -1640,8 +1681,10 @@ def _build_result(request: RunRequest, *, state: _RunState,
                   if state.event_count or activity.counts["modelTurns"] else None),
         continuation=continuation,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
-        evidence_refs=_evidence_refs(client, invocation_root, state,
-                                     record=record, stderr_mirror=stderr_mirror))
+        evidence_refs=(*_evidence_refs(client, invocation_root, state,
+                                       record=record, stderr_mirror=stderr_mirror),
+                       *snapshot_coverage_refs(invocation_root, snapshot_coverage
+                                               if tool_package and tool_package["streamComplete"] else None)))
 
 
 def _value_and_completion(evidence: RootTurnEvidence | None,

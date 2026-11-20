@@ -106,9 +106,12 @@ class _ReviewCases:
         self.assertEqual(len(prompts), 2)
         marker = "Return only one JSON value matching this schema: "
         for prompt in prompts:
-            supplied = prompt.split(marker, 1)[1].split("\n\nFormat correction:", 1)[0]
+            supplied = prompt.split(marker, 1)[1].split("\n\n", 1)[0]
             self.assertEqual(json.loads(supplied), SCHEMA)
-        self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nFormat correction:"))
+        # A fresh-session correction reassembles the whole prompt, then carries
+        # the rejected answer and the precise correction instruction.
+        self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nYour previous answer was rejected"))
+        self.assertIn("\nFormat correction: answer-invalid-json", prompts[1])
 
     def test_router_accepts_an_unchanged_frozen_copy(self):
         self.prepare_fixture()

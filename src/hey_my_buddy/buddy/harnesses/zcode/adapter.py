@@ -16,6 +16,9 @@ class ZcodeAdapter:
     name = "zcode"
     native_resume = True
     interrupted_resume = False
+    # A correction starts a fresh native session; the correction input
+    # reassembles the full role text, query entry and previous answer.
+    same_session_corrections = False
     native_resume_permission_change = True
     model_discovery = True
 

@@ -110,7 +110,7 @@ class RejectionPhaseTests(unittest.TestCase):
             "plugins": {'my."plugin"': {"mcp_servers": {'user."data"': {}}}},
         }}
         request = mock.Mock(permission="web", cwd="/private/checkout")
-        overrides = native_run._web_config(connection, request)
+        overrides = native_run._tool_config(connection, request)
         connection.call.assert_called_once_with("config/read", {"cwd": request.cwd, "includeLayers": False})
         self.assertEqual(overrides, {
             "web_search": "live", "features.shell_tool": False, "features.view_image": False,
@@ -129,7 +129,7 @@ class RejectionPhaseTests(unittest.TestCase):
             "plugins": {"my.plugin": {"mcp_servers": {
                 "disabled": {"enabled": False}, "active": {"enabled": True}}}},
         }}
-        overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+        overrides = native_run._tool_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
         self.assertEqual(overrides["mcp_servers"], {"active": {"enabled": False}})
         self.assertIs(overrides["features.plugins"], False)
         self.assertNotIn("plugins", overrides)
@@ -138,7 +138,7 @@ class RejectionPhaseTests(unittest.TestCase):
         for plugins in ({}, {"installed": {"enabled": True}}):
             connection = mock.Mock()
             connection.call.return_value = {"config": {"mcp_servers": {}, "plugins": plugins}}
-            overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+            overrides = native_run._tool_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
             self.assertIs(overrides["features.plugins"], False)
             self.assertNotIn("plugins", overrides)
 
@@ -147,7 +147,7 @@ class RejectionPhaseTests(unittest.TestCase):
             connection = mock.Mock()
             connection.call.return_value = {"config": configured}
             with self.subTest(configured=configured), self.assertRaises(CodexProtocolError):
-                native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+                native_run._tool_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
             self.assertEqual(connection.call.call_count, 1)
 
     def test_input_start_and_foreign_activity_do_not_start_the_root_model(self):
@@ -453,7 +453,7 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.usage)
 
     def test_one_format_correction_runs_a_second_turn_on_the_same_thread(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy", session_preserved=True)
         result = self.fast_run("format", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
@@ -463,7 +463,7 @@ class FastSeamTests(SeamCase):
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertEqual([turn["input"][0]["text"] for turn in trace["turns"]],
                          ["Pick a buddy",
-                          "Pick a buddy\n\nFormat correction: answer-invalid-json" + CORRECTION_SUFFIX])
+                          "Format correction: answer-invalid-json" + CORRECTION_SUFFIX])
         updates = self.session_updates(result)
         self.assertEqual([row['content']['text'] for row in updates if row['sessionUpdate'] == 'user_message_chunk'],
                          [turn['input'][0]['text'] for turn in trace['turns']])

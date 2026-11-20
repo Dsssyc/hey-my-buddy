@@ -219,7 +219,7 @@ class HarnessConformanceTests(unittest.TestCase):
                     if level in declaration:
                         self.assertIn(declaration[level], ENFORCEMENTS)
                     self.assertEqual(f"permission:{level}" in capabilities, level in declaration)
-                self.assertEqual("none" in declaration, name != "claude")
+                self.assertIn("none", declaration)
 
     def test_every_harness_declares_the_no_tool_scope_and_carriers_match(self):
         """The fourth scope ``none`` is a per-harness declaration, not a universal one.

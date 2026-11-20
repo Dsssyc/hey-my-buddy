@@ -21,7 +21,7 @@ from ...errors import BoardError
 from ...paths import native_path, resolved_path
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
-from ...private_files import open_read, publish_bytes, read_bytes, read_text
+from ...private_files import open_read, publish_bytes, read_bytes, read_snapshot, read_text
 from ...protocol import usage
 from ...protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 from ...protocol.workspace_manifest import turn_manifest
@@ -35,9 +35,11 @@ from ..harnesses.controller import (
 from ..harnesses.run_contract import (
     PrivateStatePaths,
     ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
+    SnapshotQueryMount,
 )
+from ..harnesses.snapshot_mount import prepare_snapshot_mount
 from . import turn_io, worker_services
-from .run_observers import FastCorrection, MaintenanceCorrection, ReviewObserver, worker_observer
+from .run_observers import FastCorrection, MaintenanceCorrection, ReviewObserver, selection_validator, worker_observer
 from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt,
@@ -195,6 +197,21 @@ def _merge_native_evidence(result: RunResult, payload: dict) -> None:
         payload.setdefault("nativeEvidence", {}).update(facts)
 
 
+def _snapshot_coverage(result) -> dict | None:
+    """The verified snapshot delivery coverage's private file reference.
+
+    The driver writes the coverage the ledger verification accepted as one
+    digest-bound private file; only its reference crosses to the service, where
+    the maintenance plane's read-coverage guard reads it back (ADR-035
+    decision 7). ``None`` means this run mounted no snapshot service or
+    verified no delivery.
+    """
+    for ref in result.evidence_refs:
+        if ref.kind == "snapshot-coverage":
+            return {"location": ref.location, "sizeBytes": ref.size_bytes, "sha256": ref.sha256}
+    return None
+
+
 def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     from ..harnesses.registry import fast_evidence_is_top_level, run_seam
 
@@ -229,6 +246,9 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
             payload.setdefault("nativeEvidence", {}).update(evidence)
     if tools:
         payload["toolEvidence"] = tools
+    coverage = _snapshot_coverage(result)
+    if coverage is not None:
+        payload["snapshotCoverage"] = coverage
     return payload
 
 
@@ -280,6 +300,9 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
                         "elapsedMs": verdict["elapsedMs"]}
     if tools is not None:
         payload["toolEvidence"] = tools
+    coverage = _snapshot_coverage(result)
+    if coverage is not None:
+        payload["snapshotCoverage"] = coverage
     if payload["status"] == "ok":
         raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
                ) if result.value is not None else None
@@ -479,11 +502,37 @@ def _native_services(module, *, inquiry=None):
     return factory(inquiry=inquiry) if factory is not None else None
 
 
+def _mounted_snapshot(control: dict, prompt_text: str) -> tuple[SnapshotQueryMount | None, object | None]:
+    """Prepare this run's snapshot mount and its protocol-20 selection validator.
+
+    The control's ``snapshot`` reference is the frozen input the service
+    dispatched for this attempt. A routing mount also supplies the frozen
+    document the observer's unified selection validation reads; a maintenance
+    mount keeps the plane's own publisher semantics. No reference means no
+    mount, and the run stays on its existing single-prompt contract.
+    """
+    reference = control.get("snapshot")
+    if not isinstance(reference, dict):
+        return None, None
+    state_dir = Path(control["stateDir"])
+    identity = {"taskId": control["taskId"], "attemptId": control["attemptId"],
+                "generation": control["generation"], "invocationId": control["invocationId"]}
+    mount = prepare_snapshot_mount(
+        invocation_root=Path(control["privateRoot"]), state_dir=state_dir, identity=identity,
+        input_sha256=hashlib.sha256(prompt_text.encode()).hexdigest(), snapshot=reference)
+    if reference.get("namespace") != "routing":
+        return mount, None
+    document = read_snapshot(state_dir, reference["namespace"], reference["owner"],
+                             reference["reference"], round=reference.get("round"))
+    return mount, selection_validator(document)
+
+
 def fast_request(control: dict, module):
     """Project one no-tool control file into the frozen request and observer."""
     invocation_root = Path(control["privateRoot"])
     request_values = control["noToolRequest"]
     base_prompt = structured_prompt(request_values["prompt"], request_values["outputSchema"])
+    snapshot, validator = _mounted_snapshot(control, base_prompt)
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
@@ -497,17 +546,23 @@ def fast_request(control: dict, module):
         input_text=base_prompt, permission="none",
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
         budget=RunBudget(timeout_seconds=None),
+        snapshot_query=snapshot,
     )
+    from ..harnesses.registry import adapter
+    session_preserved = adapter(control["harness"]).same_session_corrections
     if control.get("maintenance"):
-        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get())
+        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get(),
+                                           session_preserved=session_preserved)
     else:
-        correction = FastCorrection(request_values["outputSchema"], base_prompt)
+        correction = FastCorrection(request_values["outputSchema"], base_prompt,
+                                    validator=validator, session_preserved=session_preserved)
     return request, _native_services(module), correction.observer, correction, base_prompt.parts
 
 
 def review_request(control: dict, module):
     values = control["readOnlyRequest"]
     prompt = structured_prompt(values["prompt"], values["outputSchema"])
+    snapshot, validator = _mounted_snapshot(control, prompt)
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
@@ -518,9 +573,13 @@ def review_request(control: dict, module):
                                         native_root=control["nativeRoot"]),
         input_text=prompt, output_schema=values["outputSchema"], permission="read",
         budget=RunBudget(timeout_seconds=None),
-        capture_evidence=values.get("captureEvidence") is True)
+        capture_evidence=values.get("captureEvidence") is True,
+        snapshot_query=snapshot)
+    from ..harnesses.registry import adapter
     observer = ReviewObserver(values["outputSchema"], prompt,
-                              can_correct=control["canCorrect"])
+                              can_correct=control["canCorrect"],
+                              validator=validator,
+                              session_preserved=adapter(control["harness"]).same_session_corrections)
     return request, _native_services(module), observer.observer, observer, prompt.parts
 
 

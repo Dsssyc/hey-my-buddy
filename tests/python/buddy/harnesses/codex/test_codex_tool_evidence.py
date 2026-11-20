@@ -167,7 +167,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             "nativeIdentity": ROOT, "callId": "item-1", "categories": ["execute"],
             "phases": ["end", "start"], "facts": [{"toolName": "commandExecution", "category": "execute"}],
             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-            "incomplete": False, "malformed": False, "belongsToRoot": True,
+            "incomplete": False, "malformed": False, "belongsToRoot": True, "sessionServiceVerified": False,
         }])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
 
@@ -508,7 +508,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual(evidence["version"], 3)
+        self.assertEqual(evidence["version"], 4)
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])

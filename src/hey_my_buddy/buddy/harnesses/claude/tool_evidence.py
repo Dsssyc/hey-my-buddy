@@ -27,6 +27,8 @@ from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 
+from ..snapshot_mount import ObservedSnapshotCalls
+
 HARNESS = "claude"
 #: The exact name of the built-in tool the CLI's ``--json-schema`` contributes
 #: by itself. An MCP server's tool never bears this bare name: the CLI spells
@@ -60,10 +62,15 @@ class ReadOnlyToolEvidence:
     a complete stream is claimed only when the stream itself closed.
     """
 
-    def __init__(self, binding: dict, *, state_dir: Path, native_schema_delivery: bool = False):
-        self._evidence = ToolEventEvidence(binding, state_dir=state_dir)
+    def __init__(self, binding: dict, *, state_dir: Path, native_schema_delivery: bool = False,
+                 session_tools=()):
+        self._evidence = ToolEventEvidence(binding, state_dir=state_dir, session_service_tools=session_tools)
         self._roots: list[dict] = []
         self._foreign_session = False
+        self._expected_session = None
+        self._active_root = None
+        self.snapshot_calls = ObservedSnapshotCalls(names=frozenset(session_tools))
+        self._session_starts = set()
         self._correlated: dict[tuple, str] = {}
         self._package: dict | None = None
         # The delivery-candidate facts, kept only when the caller armed the
@@ -81,6 +88,27 @@ class ReadOnlyToolEvidence:
         self._delivery_verified: tuple[tuple[str, str], ...] = ()
 
     @property
+    def roots(self) -> list[dict]:
+        return self._roots
+
+    @property
+    def session_tool_calls(self) -> int:
+        return len(self._session_starts)
+
+    @property
+    def read_tool_violations(self) -> int:
+        return self._evidence.read_tool_violations if self.snapshot_calls.names else 0
+
+    def begin_round(self, session_id: str, *, native_schema_delivery: bool) -> None:
+        self._expected_session = session_id
+        self._active_root = None
+        self._foreign_session = False
+        self._delivery_armed = native_schema_delivery
+        self._delivery_candidates.clear()
+        self._delivery_input_order.clear()
+        self._delivery_settled = False
+
+    @property
     def tool_calls(self) -> int:
         """The unified started-call count the runtime budgets are enforced against.
 
@@ -93,13 +121,11 @@ class ReadOnlyToolEvidence:
         package always agree.
         """
         total = self._evidence.tool_calls
-        if not self._delivery_candidates:
-            return total
         if self._delivery_settled:
             return max(0, total - len(self._delivery_verified))
         held = sum(1 for candidate in self._delivery_candidates.values()
                    if self._exemptable(candidate))
-        return max(0, total - held)
+        return max(0, total - held - len(self._delivery_verified))
 
     def observe_frame(self, frame: dict) -> None:
         """Collect one stream frame's tool facts; never raises, never filters."""
@@ -107,23 +133,32 @@ class ReadOnlyToolEvidence:
             return
         if frame.get("type") == "system" and frame.get("subtype") == "init":
             session = _native_id(frame.get("session_id"))
-            if session is not None:
+            if session is not None and (
+                    not self.snapshot_calls.names or session == self._expected_session):
                 identity = {"sessionId": session}
                 if identity not in self._roots:
                     self._roots.append(identity)
+                self._active_root = identity if self._expected_session is not None or len(self._roots) == 1 else None
             return
         parent = _native_id(frame.get("parent_tool_use_id"))
         identity, provable = self._identity(frame, parent)
         if frame.get("type") == "result" and parent is None and identity in self._roots:
             self._evidence.close_root(identity)
             return
-        for call_id, name, phase, use_input, outcome in self._facts(frame):
+        for call_id, name, phase, use_input, outcome, result in self._facts(frame):
             if phase == "start":
                 self._observe_delivery_use(identity, provable, parent, call_id, name, use_input)
             self._record(identity, provable, call_id, name, phase, outcome)
+            if phase == "start" and call_id is not None and name in self.snapshot_calls.names:
+                self._session_starts.add((canonical_json(identity), call_id))
+                self.snapshot_calls.observe(identity, call_id, name, arguments=use_input, started=True)
+            elif phase == "end":
+                self.snapshot_calls.observe(identity, call_id, None, result=result, completed=True,
+                                            ok={"success": True, "failure": False}.get(outcome))
 
     def finish(self, stream_complete: bool, *,
-               exclude_calls: tuple[tuple[str, str], ...] | None = None) -> dict:
+               exclude_calls: tuple[tuple[str, str], ...] | None = None,
+               verified_session_calls=()) -> dict:
         """Close the collector once and return the ``toolEvidence`` fact package.
 
         The first finish fixes the package: a later failure re-reports it, and
@@ -134,7 +169,8 @@ class ReadOnlyToolEvidence:
         """
         if self._package is None:
             self._package = self._evidence.finish(list(self._roots), stream_complete is True,
-                                                  exclude_calls=exclude_calls)
+                                                  exclude_calls=self._delivery_verified if exclude_calls is None else exclude_calls,
+                                                  verified_session_calls=verified_session_calls)
         return self._package
 
     def settle_delivery(self, delivered, confirmed_root: dict) -> tuple[tuple[str, str], ...]:
@@ -160,7 +196,7 @@ class ReadOnlyToolEvidence:
         if self._delivery_settled:
             return self._delivery_verified
         self._delivery_settled = True
-        self._delivery_verified = self._verified(delivered, confirmed_root)
+        self._delivery_verified += self._verified(delivered, confirmed_root)
         return self._delivery_verified
 
     def _verified(self, delivered, confirmed_root) -> tuple[tuple[str, str], ...]:
@@ -267,14 +303,14 @@ class ReadOnlyToolEvidence:
             return identity, True
         session = _native_id(frame.get("session_id"))
         if session is not None:
-            if len(self._roots) == 1 and self._roots[0] == {"sessionId": session}:
-                return dict(self._roots[0]), True
+            if self._active_root == {"sessionId": session}:
+                return dict(self._active_root), True
             self._foreign_session = True
             return {"sessionId": session}, True
         # A single handshake-confirmed root may adopt the frames the CLI sent
         # without a per-frame session, until another session appears.
-        if len(self._roots) == 1 and not self._foreign_session:
-            return dict(self._roots[0]), True
+        if self._active_root is not None and not self._foreign_session:
+            return dict(self._active_root), True
         return {}, False
 
     @staticmethod
@@ -285,7 +321,7 @@ class ReadOnlyToolEvidence:
             for block in _content(frame):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     yield (_native_id(block.get("id")), _native_id(block.get("name")), "start",
-                           block.get("input"), "unknown")
+                           block.get("input"), "unknown", None)
         elif frame_type == "user":
             for block in _content(frame):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -297,7 +333,7 @@ class ReadOnlyToolEvidence:
                     outcome = ("failure" if error is True
                                else "unknown" if "is_error" in block and error is not False
                                else "success")
-                    yield _native_id(block.get("tool_use_id")), None, "end", None, outcome
+                    yield _native_id(block.get("tool_use_id")), None, "end", None, outcome, block
         elif frame_type == "stream_event":
             event = frame.get("event")
             block = event.get("content_block") if isinstance(event, dict) else None
@@ -307,7 +343,7 @@ class ReadOnlyToolEvidence:
             # the one place the delivered value is observed.
             if isinstance(event, dict) and event.get("type") == "content_block_start" \
                     and isinstance(block, dict) and block.get("type") == "tool_use":
-                yield _native_id(block.get("id")), _native_id(block.get("name")), "start", None, "unknown"
+                yield _native_id(block.get("id")), _native_id(block.get("name")), "start", None, "unknown", None
 
     def _record(self, identity: dict, provable: bool, call_id, name, phase, outcome) -> None:
         key = None

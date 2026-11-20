@@ -186,8 +186,8 @@ class InitialCheckTests(unittest.TestCase):
         self.assertEqual(facts["limit"]["state"], "unknown")
         self.assertEqual(facts["measurement"]["total"], len(request.input_text))
 
-    def test_correction_is_not_preflighted_again_even_when_it_is_longer_than_the_initial_limit(self):
-        self.control.update(operation="fast", taskId="task", attemptId="attempt", generation=1,
+    def test_fresh_session_correction_is_not_preflighted_again_despite_the_initial_limit(self):
+        self.control.update(operation="fast", harness="claude", taskId="task", attemptId="attempt", generation=1,
             noToolRequest={"prompt": prompts.router_prompt("Choose"), "outputSchema": {"type": "object"}})
         initial_size = len(self.request().input_text)
         sent = []

@@ -27,6 +27,7 @@ def main():
         return
     case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
     turns = 0
+    dynamic_tools = ()
     native_config = {"mcp_servers": {"user-tool": {}},
                      "web_search": "enabled", "approval_policy": "on-request"}
     user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
@@ -74,11 +75,14 @@ def main():
                  "layers": [{"name": {"type": "user", "file": "<native-user-config>"},
                              "config": {"mcp_servers": {"user-tool": {}}, "features": {"apps": True}}, "version": "1"}]}})
         elif method == "thread/start":
+            dynamic_tools = params.get("dynamicTools", ())
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}), encoding="utf-8", newline="\n")
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
                        "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
+            if case == "snapshot":
+                receipt.update(cwd=params["cwd"], sandbox={"type": "readOnly", "networkAccess": True})
             if case == "missing-model":
                 del receipt["model"]
             elif case == "unreadable-model":
@@ -137,6 +141,22 @@ def main():
             if case == "foreign-thread-started":
                 send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
+            if case == "snapshot":
+                assert "query_task" in {tool["name"] for tool in dynamic_tools}
+                for call_id, args in (("page", {"limit": 5}), ("error", {"offset": 999})):
+                    event("item/started", turn_id, item={"type": "dynamicToolCall", "id": call_id})
+                    event("rawResponseItem/completed", turn_id, item={
+                        "type": "function_call", "name": "query_task", "call_id": call_id})
+                    send({"id": "tool-" + call_id, "method": "item/tool/call", "params": {
+                        "threadId": "thread-1", "turnId": turn_id, "callId": call_id,
+                        "tool": "query_task", "arguments": args}})
+                    reply = json.loads(sys.stdin.readline())["result"]
+                    assert reply["success"] is (call_id == "page")
+                    event("item/completed", turn_id, item={
+                        "type": "dynamicToolCall", "id": call_id, **reply,
+                        "status": "completed" if reply["success"] else "failed"})
+                    event("rawResponseItem/completed", turn_id, item={
+                        "type": "function_call_output", "call_id": call_id})
             if case.startswith("protocol-"):
                 for method, item in item_frames(case.removeprefix("protocol-")):
                     event(method, turn_id, item=item)
@@ -184,7 +204,7 @@ def main():
                              "reasoningOutputTokens": 1, "totalTokens": 22}
                     event("thread/tokenUsage/updated", turn_id, tokenUsage={
                         "last": usage, "total": {key: value * turns for key, value in usage.items()}})
-            answer = "not-json" if case in ("format", "usage-format", "usage-then-missing") and turns == 1 else json.dumps({"buddyId": "foreign" if case == "outside" else "legal"})
+            answer = "not-json" if case in ("format", "usage-format", "usage-then-missing", "snapshot") and turns == 1 else json.dumps({"buddyId": "foreign" if case == "outside" else "legal"})
             if case == "router-facts":
                 buddy = params["outputSchema"]["properties"]["buddyId"]["enum"][0]
                 answer = json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": buddy, "note": "Offline fixture reads the frozen program facts",

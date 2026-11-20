@@ -17,6 +17,7 @@ from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -158,6 +159,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(review.facts["modelResponseWaitSeconds"], 30)
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
+        self.enterContext(patch.dict(PERMISSION_LEVELS, {"claude": {"read": "enforced"}}))
         self.add_buddy(A, enabled=0)
         self.add_buddy(B, harness="claude")
         self.add_buddy(C)
@@ -169,6 +171,13 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["code"], "router-disabled")
         self.assertNotIn("reason", resolution.inspections[0])
         self.assertEqual(resolution.inspections[1]["code"], "router-no-tool-unsupported")
+
+    def test_fast_mode_accepts_claude_none(self):
+        self.add_buddy(A, harness="claude")
+        self.set_settings(ids=[A], mode="fast")
+        with self.board_.store.db.read() as db:
+            resolution = router.current_router(db, now=T0)
+        self.assertEqual(resolution.buddy_id, A)
 
     def test_cooling_provider_is_skipped_until_its_deadline(self):
         self.add_buddy(A, model="alpha")
@@ -287,6 +296,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["consecutiveNoAnswers"], 25)
 
     def test_all_unavailable_reports_one_summary_problem(self):
+        self.enterContext(patch.dict(PERMISSION_LEVELS, {"claude": {"read": "enforced"}}))
         self.add_buddy(A, enabled=0)
         self.add_buddy(B, harness="claude")
         self.set_settings(ids=[A, B])

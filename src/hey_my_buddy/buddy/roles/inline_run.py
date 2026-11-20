@@ -226,6 +226,9 @@ def _profile_execute(control, handle, module, started):
             "toolCalls": sum(evidence["toolCalls"] for evidence in evidences),
             "unsettledToolCalls": sum(evidence["unsettledToolCalls"] for evidence in evidences),
             "toolSummary": tool_evidence.merge_tool_summaries(evidence["toolSummary"] for evidence in evidences),
+            # The profile plane mounts no session service; the aggregated form
+            # still states that explicitly (ADR-035 decision 3).
+            "sessionServiceTools": [],
         }
     def any_fact(values):
         return True if True in values else None if None in values else False

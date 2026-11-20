@@ -67,6 +67,15 @@ for line in sys.stdin:
         assert 'titleGenerationEnabled' not in p
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
+        elif case.startswith('snapshot-'):
+            assert len(p['mcpServers']) == 1
+            server = p['mcpServers'][0]
+            assert server['name'] == 'hey_my_buddy_snapshot'
+            from hey_my_buddy.buddy.roles.snapshot_mcp import SnapshotService
+            service = SnapshotService.from_file(Path(server['args'][-1]))
+            exact = ['mcp__hey_my_buddy_snapshot__' + tool['name'] for tool in service.tools]
+            assert set(p['toolAllowlist']) == set(exact + (
+                ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch'] if case == 'snapshot-read' else []))
         elif case in ('write-final', 'write-post-close'):
             assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
@@ -93,7 +102,7 @@ for line in sys.stdin:
         elif p.get('afterMessageId') == f'a-{session}' and subscribed and prompt_sent:
             result = {'messages':[]}
         elif case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct',
-                    'usage-correct-quota', 'quota-truncated') and subscribed and prompt_sent:
+                    'usage-correct-quota', 'quota-truncated', 'snapshot-none', 'snapshot-read') and subscribed and prompt_sent:
             result = {'messages':[{'info':{'sessionId':f's-{session}', 'messageId':f'a-{session}',
                 'parentMessageId':f'u-{session}', 'role':'assistant',
                 'tokens':{'input':12, 'output':3, 'reasoning':1, 'cache':{'read':2,'write':1}}},
@@ -149,6 +158,23 @@ for line in sys.stdin:
             send({'method':'v4/telemetry/event','params':{'sessionId':f's-{session}',
                   'turnId':f't-{session}','kind':'turn.started','eventSeq':1}})
         event('turn.started',1,{'inputId':ident})
+        if case.startswith('snapshot-'):
+            seq = 1
+            for call_id, args in (('page', {'limit': 5}), ('error', {'offset': 999})):
+                reply = service.mcp_call('query_task', args)
+                name = 'mcp__hey_my_buddy_snapshot__query_task'
+                event('model.streaming', seq + 1, {'kind': 'tool_call', 'toolCallId': call_id,
+                      'toolName': name, 'input': args, 'done': False})
+                event('tool.updated', seq + 2, {'kind': 'scheduled', 'toolCallId': call_id,
+                      'toolName': name, 'inputOmitted': True})
+                prefix = 'MCP tool returned an error:' + chr(10) if reply['isError'] else ''
+                event('tool.updated', seq + 3, {'kind': 'result', 'toolCallId': call_id,
+                      'result': {'success': True, 'content': prefix + reply['content'][0]['text']}})
+                seq += 3
+            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident,
+                  'response': 'wrong' if session == 1 else '{"choice":"a"}'})
+            send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
+            continue
         if case in ('usage-quota', 'usage-projection-quota', 'usage-correct-quota'):
             send({'method':'v4/telemetry/event','params':{'version':1,'eventId':f'usage-{session}',
                   'eventSeq':3,'sessionId':f's-{session}','turnId':f't-{session}',
@@ -307,12 +333,13 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["read"],
              "phases": ["end", "start"], "facts": [{"toolName": "Read", "category": "read"}],
              "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-             "incomplete": False, "malformed": False, "belongsToRoot": True}])
+             "incomplete": False, "malformed": False, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
+        self.assertEqual(set(package), tool_evidence.SESSION_PACKAGE_FIELDS)
         # The blackboard consumes the projection: the recorded read call is a
         # legal review fact, and fast mode's zero-call rule rejects it.
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir))
@@ -350,7 +377,8 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["other"],
              "phases": ["end"], "facts": [{"toolName": None, "category": "other"}],
              "consistent": True, "endBeforeStart": True, "outcome": "unknown",
-             "incomplete": True, "malformed": True, "belongsToRoot": True}])
+             "incomplete": True, "malformed": True, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
@@ -364,7 +392,8 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": None, "categories": ["execute"],
              "phases": ["start"], "facts": [{"toolName": "Bash", "category": "execute"}],
              "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-             "incomplete": True, "malformed": True, "belongsToRoot": True}])
+             "incomplete": True, "malformed": True, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -640,7 +669,8 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["version"], 3)
+        self.assertEqual(package["version"], tool_evidence.TOOL_EVIDENCE_VERSION)
+        self.assertEqual(package["sessionServiceTools"], [])
         self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])

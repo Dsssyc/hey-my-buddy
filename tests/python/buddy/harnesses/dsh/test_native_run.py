@@ -552,12 +552,13 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNone(observed["permissionMode"])
         rows = json.loads(native_path(patch_path).read_text(encoding="utf-8"))
         # The storage roots precede the disabled tool rows. The none scope keeps
-        # only the executor row DSH needs to open a turn; every other tool row
-        # and plan-mode are disabled, so the model receives no tool.
+        # only the executor row DSH needs to open a turn; every other tool row,
+        # the built-in mcp-resources row and plan-mode are disabled, so the
+        # model receives no tool.
         self.assertEqual([row["id"] for row in rows],
                          ["session-persistence-jsonl", "storage-json",
                           *(row for row in CONFIRMED_TOOL_ROWS if row != "tool-executor-native"),
-                          native_run.PLAN_MODE_ROW])
+                          native_run.MCP_RESOURCES_ROW, native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
         self.assertEqual(Path(pin["config"]["root"]).name, "sessions")
@@ -597,7 +598,10 @@ class FastSeamTests(NativeRunCase):
                 patch = json.loads(native_path(Path(request.private_state.invocation_root) /
                                                "dsh-launch-patch.json").read_text())
                 disabled = {row["id"] for row in patch if row.get("disabled")}
-                self.assertEqual(disabled, set(inventory) - retained | {"plan-mode"})
+                expected_disabled = set(inventory) - retained | {"plan-mode"}
+                if scope == "none":
+                    expected_disabled.add(native_run.MCP_RESOURCES_ROW)
+                self.assertEqual(disabled, expected_disabled)
                 self.assertTrue(all(row["disabled"] is True for row in patch[2:]))
 
     def test_inventory_failure_blocks_web_but_none_runs_with_a_versioned_reason_and_no_dump_leak(self):
@@ -627,7 +631,7 @@ class FastSeamTests(NativeRunCase):
                         launch.assert_called_once()
                         self.assertEqual(result.end.status, "ok", result.end.message)
                         self.assertEqual(result.effective_policy.tools.requested.value,
-                                         {"disabledRows": ["plan-mode"]})
+                                         {"disabledRows": [native_run.MCP_RESOURCES_ROW, "plan-mode"]})
                     facts = next(ref for ref in result.evidence_refs if ref.kind == "dsh-native-facts")
                     payload = json.loads(native_path(Path(facts.location)).read_text())
                     self.assertEqual(payload["toolInventory"],
@@ -1798,7 +1802,8 @@ class NativeConfigurationTests(NativeRunCase):
                     rows = json.loads(native_path(patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                     expected = (["session-persistence-jsonl", "storage-json"]
                                 + ([*(row for row in CONFIRMED_TOOL_ROWS
-                                      if row != "tool-executor-native"), "plan-mode"]
+                                      if row != "tool-executor-native"),
+                                    native_run.MCP_RESOURCES_ROW, "plan-mode"]
                                    if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)

@@ -189,6 +189,23 @@ class SessionService(InternalModel):
     tool_names: JsonTuple(Text(512), max_items=MAX_SERVICE_TOOL_NAMES) = ()
 
 
+class SnapshotQueryMount(InternalModel):
+    """The read-only frozen snapshot query service mounted for one run.
+
+    A routing or maintenance run carries this mount instead of — never beside
+    the meaning of — a Worker completion or inquiry service (ADR-035 decision
+    3). The values are the two facts every driver needs: the private
+    configuration file that binds this attempt's HMAC key to one frozen
+    snapshot, and the bare query tool names that file exposes. The stdio MCP
+    drivers qualify the names with the fixed server name; Codex registers the
+    bare names as its ``dynamicTools``. The live service object never travels
+    in the request: each driver builds it from the configuration file.
+    """
+
+    config_path: AbsolutePath
+    tool_names: JsonTuple(Text(128), max_items=MAX_SERVICE_TOOL_NAMES) = ()
+
+
 
 class SessionRecordCloseFailure(InternalModel):
     """Bounded diagnostic facts of a failed display-record close."""
@@ -236,13 +253,17 @@ class RunRequest(InternalModel):
     budget: RunBudget
     continuation: Optional[RunContinuation] = None
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
+    snapshot_query: Optional[SnapshotQueryMount] = None
     capture_evidence: bool = False
 
     @model_validator(mode="after")
-    def _web_starts_a_new_native_session(self) -> "RunRequest":
+    def _check_native_bindings(self) -> "RunRequest":
         if self.permission == "web" and self.continuation is not None \
                 and self.continuation.mode == "native-session":
             raise fail("web permission requires a new native session", field="continuation")
+        if self.snapshot_query is not None and (self.permission not in ("none", "read")
+                                                or self.identity.turn_id is not None or self.session_services):
+            raise fail("snapshot queries require a structured none or read run", field="snapshotQuery")
         return self
 
 class NativeIdentity(InternalModel):
@@ -631,7 +652,8 @@ __all__ = [
     "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
     "UNLISTED_NATIVE_EVENTS",
     "ResumeCheckpoint", "RunBudget", "RunBuddy", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
-    "PermissionLevel", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
+    "PermissionLevel", "RunRequest", "RunResult", "RunValue", "SessionService", "SnapshotQueryMount",
+    "StopEvidence",
     "StopLayer", "canonical_json",
     "fold_unknown_events", "unknown_event_name",
 ]

@@ -81,7 +81,9 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertEqual(observer.observer(tolerated).action, "continue")
         answer = observer.observer(tolerated | {"settled": True, "rawAnswer": "{"})
         self.assertEqual(answer.action, "correct")
-        self.assertEqual(answer.input_text, "Choose\n\nFormat correction: answer-invalid-json. "
+        self.assertEqual(answer.input_text,
+                         "Choose\n\nYour previous answer was rejected and is kept below as data. "
+                         "Previous answer:\n{\nFormat correction: answer-invalid-json. "
                          "Return exactly the supplied JSON Schema; do not repeat exploration.")
         self.assertEqual(observer.observer({"settled": True, "rawAnswer": "{"}).action, "continue")
         self.assertEqual(observer.observer({"toolCalls": 3}).action, "continue")

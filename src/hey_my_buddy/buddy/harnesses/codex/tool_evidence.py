@@ -17,6 +17,7 @@ from pathlib import Path
 from ....errors import BoardError
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ...roles.turn_io import canonical_json
+from ..snapshot_mount import ObservedSnapshotCalls
 
 HARNESS = "codex"
 
@@ -88,9 +89,17 @@ class CodexToolEventProjector:
     is allowed.
     """
 
-    def __init__(self, binding: dict, *, state_dir: Path):
-        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
+    def __init__(self, binding: dict, *, state_dir: Path, session_tools=()):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir,
+                                          session_service_tools=session_tools)
         self.roots: list[dict] = []
+        #: The mounted snapshot service's bare dynamic tool names, with the
+        #: observed native calls the driver later verifies against the ledger.
+        self.session_tools = frozenset(session_tools)
+        self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
+        self._session_starts: set[tuple[str, str]] = set()
+        self._snapshot_requests: dict[tuple[str, str], tuple[str, object]] = {}
+        self._dynamic_phases: dict[tuple[str, str], dict] = {}
         self._started: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     @property
@@ -98,20 +107,66 @@ class CodexToolEventProjector:
         """Deduplicated observed starts; the cumulative tool budget uses this."""
         return self.evidence.tool_calls
 
+    @property
+    def session_tool_calls(self) -> int:
+        """Observed starts of mounted snapshot service calls, verbatim."""
+        return len(self._session_starts | self._dynamic_phases.keys())
+
     def observe_root(self, session_id: str, turn_id: str) -> None:
         """Record one root turn identity exactly as its native receipt carried it."""
         root = {"sessionId": session_id, "turnId": turn_id}
         if root not in self.roots:
             self.roots.append(root)
 
-    def finish(self, stream_complete: bool) -> dict:
+    def observe_snapshot_request(self, identity: dict, call_id: str, tool_name: str,
+                                 arguments: object) -> None:
+        """Retain the item/tool/call request's own arguments for one mounted call.
+
+        The request frame is the only place the native protocol shows the
+        exact arguments the model sent; the call's phases and result still
+        come from the streamed items alone.
+        """
+        key = (canonical_json(identity), call_id)
+        self._snapshot_requests[key] = (tool_name, arguments)
+        self.snapshot_calls.observe(identity, call_id, tool_name, arguments=arguments,
+                                    **self._dynamic_phases.get(key, {}))
+
+    def snapshot_frame(self, message: dict) -> bool:
+        if not self.session_tools:
+            return False
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return False
+        identity = native_identity(params)
+        item = params.get("item")
+        if not isinstance(item, dict) or identity is None:
+            return False
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(call_id, str) or not call_id:
+            return False
+        key = (canonical_json(identity), call_id)
+        if item.get("type") == "dynamicToolCall":
+            # The typed start can precede the RPC naming the tool. An unnamed
+            # dynamic item is provisionally held, then judged from its phases
+            # and receipt when the root settles.
+            return item.get("tool") is None or (isinstance(item["tool"], str) and item["tool"] in self.session_tools)
+        if item.get("type") == "function_call":
+            return (isinstance(item.get("name"), str) and item["name"] in self.session_tools
+                    and item.get("namespace") in (None, "functions"))
+        return item.get("type") == "function_call_output" and (
+            key in self._snapshot_requests or key in self._session_starts)
+
+    def finish(self, stream_complete: bool, *, verified_session_calls=()) -> dict:
         """Close the stream and return the ``toolEvidence`` package.
 
         ``stream_complete`` reports that every observed root turn completed and
         the controller held the stream to its end — drained to EOF on the
         no-tool branch, completed turns on the review branch.
+        ``verified_session_calls`` names the mounted snapshot calls whose signed
+        ledger receipts the driver verified in both directions.
         """
-        return self.evidence.finish(list(self.roots), stream_complete)
+        return self.evidence.finish(list(self.roots), stream_complete,
+                                    verified_session_calls=verified_session_calls)
 
     def observe_notification(self, message: dict) -> None:
         """Project the tool facts of one notification frame, before any filtering."""
@@ -138,6 +193,12 @@ class CodexToolEventProjector:
             return
         if kind in NON_TOOL_ITEMS:
             return
+        if kind == "dynamicToolCall" and self.session_tools:
+            # The typed item carries the native call id in ``item["id"]`` —
+            # exactly the ``item/tool/call`` request's ``callId`` — while the
+            # raw item of the same call names the tool (Codex CLI 0.169.1,
+            # probes note 2026-11-19). The two fold into one observed call.
+            self._snapshot_typed(params, item, method)
         if kind in TYPED_TOOL_OUTPUTS:
             # A rendered output starts no call. Its completed item is only an
             # end fact, joined to a request by the native id, never by its text.
@@ -154,6 +215,30 @@ class CodexToolEventProjector:
         self._observe(params, phase="start" if method == "item/started" else "end",
                       tool_name=kind, call_id=item.get("id") or item.get("call_id"),
                       outcome=_native_outcome(item, kind) if method == "item/completed" else "unknown")
+
+    def _snapshot_typed(self, params, item: dict, method: str) -> None:
+        identity = native_identity(params)
+        call_id = item.get("id") or item.get("call_id")
+        if identity is None or not isinstance(call_id, str) or not call_id:
+            return
+        if item.get("tool") is not None and (not isinstance(item["tool"], str)
+                                             or item["tool"] not in self.session_tools):
+            return
+        key = (canonical_json(identity), call_id)
+        phases = self._dynamic_phases.setdefault(key, {})
+        if method == "item/started":
+            phases["started"] = True
+        elif method == "item/completed":
+            status = item.get("status")
+            success = True if status == "completed" else False if status == "failed" else None
+            if type(item.get("success")) is bool and item["success"] is not success:
+                success = None
+            phases.update(completed=True, result={"success": success,
+                                                  "contentItems": item.get("contentItems")},
+                          ok=success)
+        request = self._snapshot_requests.get(key)
+        if request is not None:
+            self.snapshot_calls.observe(identity, call_id, request[0], **phases)
 
     def _raw(self, params) -> None:
         item = params.get("item") if isinstance(params, dict) else None
@@ -173,6 +258,16 @@ class CodexToolEventProjector:
                           tool_name=name if name is not None else raw_type,
                           call_id=item.get("call_id") or item.get("id"),
                           native_type="mcpToolCall" if item.get("namespace") not in (None, "functions") else None)
+            identity = native_identity(params)
+            call_id = item.get("call_id") or item.get("id")
+            if name in self.session_tools:
+                if raw_type == "function_call" and item.get("namespace") in (None, "functions"):
+                    if identity is not None and isinstance(call_id, str) and call_id:
+                        self._session_starts.add((canonical_json(identity), call_id))
+                else:
+                    # A registered bare name on another native tool carrier
+                    # cannot supply the raw half of a dynamic query call.
+                    self._incomplete(params, tool_name=name, phase="start")
         elif raw_type in RAW_TOOL_OUTPUTS:
             self._output(params, item, raw_type)
         else:

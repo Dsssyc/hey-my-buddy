@@ -35,6 +35,9 @@ class ClaudeAdapter:
     name = "claude"
     native_resume = False
     interrupted_resume = False
+    # A correction starts a fresh native session; the correction input
+    # reassembles the full role text, query entry and previous answer.
+    same_session_corrections = False
     native_resume_permission_change = False
     model_discovery = True
 

@@ -16,10 +16,24 @@ ADAPTER_CAPABILITIES = {
 
 PERMISSION_LEVELS = {
     "codex": {"none": "convention", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
-    "claude": {"web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+    # Claude Code CLI 2.1.329 with `--tools "" --strict-mcp-config --mcp-config
+    # <snapshot only> --allowedTools mcp__hey_my_buddy_snapshot__*` exposes exactly
+    # StructuredOutput and the mounted snapshot tools — no ToolSearch, no built-in
+    # tools, no user MCP — so `none` is enforced (ADR-035 decision 3, probes note
+    # 2026-11-19).
+    "claude": {"none": "enforced", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
     "dsh": {"none": "enforced", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
     "zcode": {"none": "enforced", "read": "convention", "write": "convention", "full": "enforced"},
 }
+
+#: The harnesses that can mount the read-only frozen snapshot query service for
+#: the Router and maintenance planes (ADR-035 decision 2). The declaration is
+#: per harness, recorded only after the native probes confirmed the mount and
+#: its isolation: Codex through `dynamicTools`, Claude Code, DSH and ZCode
+#: through a fixed-name stdio MCP server. A harness without this capability
+#: loses only its `routing:fast` / `decision` / maintenance eligibility; its
+#: Worker `permission:read` (and every other level) stays exactly as declared.
+ROUTER_SNAPSHOT_QUERY_HARNESSES = frozenset({"codex", "claude", "dsh", "zcode"})
 
 #: Versions on which the ADR-023 clause 10 permission behavior was verified.
 #: An unknown version records missing verification, not unsupported permissions.
@@ -196,12 +210,16 @@ def adapter_capabilities(name: str) -> tuple[str, ...]:
 
 
 def buddy_capabilities(harness: str, stored: list[str]) -> list[str]:
-    """Add the role capabilities derived from this harness's permission levels."""
+    """Add the role capabilities derived from this harness's declared facts."""
     declared = PERMISSION_LEVELS.get(harness, {})
+    # Router-plane eligibility needs the frozen snapshot mount (ADR-035
+    # decision 2): without it the harness loses `routing:fast` / `decision`
+    # while keeping every Worker permission level it declares.
+    snapshots = harness in ROUTER_SNAPSHOT_QUERY_HARNESSES
     derived = []
-    if "read" in declared:
+    if snapshots and "read" in declared:
         derived.append("decision")
-    if "none" in declared:
+    if snapshots and "none" in declared:
         derived.append("routing:fast")
     derived.extend(f"permission:{level}" for level in declared)
     return [*stored, *derived]

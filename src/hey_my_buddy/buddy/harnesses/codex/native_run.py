@@ -75,6 +75,7 @@ from ..native_support import (
     NATIVE_ERROR_DETAIL_BYTES,
     NATIVE_SUMMARY_BYTES,
 )
+from ..snapshot_mount import SnapshotService, mounted_snapshot, snapshot_coverage_refs, verify_mounted_calls
 from ..run_contract import (
     ActivityPackage,
     CheckedBuddy,
@@ -176,6 +177,7 @@ class _RunFacts:
         self.unknown_counts: dict[str, int] = {}
         self.thread_notifications: dict[str, int] = {}
         self.markers = 0
+        self.unexplained_markers = 0
         self.denied: list[dict] = []
         self.dirty = False
 
@@ -185,13 +187,16 @@ class _RunFacts:
     def note_thread_notification(self, label: object) -> None:
         fold_unknown_events(self.thread_notifications, unknown_event_name(label))
 
-    def note_marker(self) -> None:
+    def note_marker(self, *, unexplained: bool = False) -> None:
         self.markers += 1
+        self.unexplained_markers += unexplained
 
-    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
+    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
+                session_tool_calls: int = 0, review_tools=None) -> dict:
         return {"settled": settled, "rawAnswer": raw_answer, "toolCalls": tool_calls,
-                "modelResponded": self.model_responded,
-                "toolMarkerFrames": self.markers,
+                "modelResponded": self.model_responded, "sessionToolCalls": session_tool_calls,
+                "toolMarkerFrames": self.markers if review_tools is None else self.unexplained_markers,
+                "readToolViolations": review_tools.read_tool_violations if review_tools is not None else 0,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
                 "threadNotifications": {"countsByType": dict(self.thread_notifications),
@@ -252,7 +257,7 @@ class _Classifier:
     def _tool_shaped(self, method: str, params: Any) -> bool:
         kind = self._item_kind(params)
         if method.startswith(_TOOL_METHOD_PREFIXES):
-            self.facts.note_marker()
+            self.facts.note_marker(unexplained=True)
             return True
         if not isinstance(kind, str):
             # A raw frame without an item kind names no operation; the role
@@ -367,6 +372,8 @@ class _RunState:
     interrupt_basis: str | None = None
     interrupt_terminal_confirmed: bool = False
     correction_count: int = 0
+    snapshot_service: SnapshotService | None = None
+    snapshot_turn_active: bool = False
     event_count: int = 0
     raw_answer: str | None = None
     drained: bool | None = None
@@ -682,7 +689,11 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     return thread_id
 
 
-def _web_config(connection: Connection, request: RunRequest) -> dict:
+def _tool_config(connection: Connection, request: RunRequest) -> dict:
+    return _restricted_thread_config(connection, request) if request.permission in ("none", "web") else {}
+
+
+def _restricted_thread_config(connection: Connection, request: RunRequest) -> dict:
     """Restrict this thread through native overrides, never user config files.
 
     config/read reports the merged server names, including disabled servers.
@@ -691,12 +702,10 @@ def _web_config(connection: Connection, request: RunRequest) -> dict:
     Plugins are disabled at their native load gate because config/read does
     not enumerate every MCP server that a plugin manifest can contribute.
     """
-    if request.permission != "web":
-        return {}
     configured = connection.call("config/read", {"cwd": request.cwd, "includeLayers": False}).get("config")
     if not isinstance(configured, dict):
         raise CodexProtocolError("invalid-config-readback", "Codex did not report its native configuration")
-    overrides = {"web_search": "live", "features.shell_tool": False,
+    overrides = {"web_search": "live" if request.permission == "web" else "disabled", "features.shell_tool": False,
                  "features.view_image": False, "agents.enabled": False,
                  "features.multi_agent": False, "features.multi_agent_v2": False,
                  "features.apps": False, "features.plugins": False,
@@ -727,7 +736,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     sandbox, _policy = _permission_sandbox(request)
     state.requested = requested
     inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
-    config = _web_config(connection, request)
+    config = _tool_config(connection, request)
     permission_config = {"config": config} if config else {}
     if config:
         state.worker_policy = {"config": config}
@@ -797,8 +806,9 @@ def _configure_review(connection: Connection, request: RunRequest,
     """One-shot read configuration with the same sandbox as a read Worker."""
     cwd, spec = request.cwd, buddy_spec(request)
     sandbox, policy = _permission_sandbox(request)
-    config = _web_config(connection, request)
+    config = _tool_config(connection, request)
     response = connection.call("thread/start", {
+        **_snapshot_tools(state),
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": sandbox, "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
@@ -845,10 +855,20 @@ def _configure_review(connection: Connection, request: RunRequest,
     return thread_id
 
 
+def _snapshot_tools(state: _RunState) -> dict:
+    if state.snapshot_service is None:
+        return {}
+    return {"dynamicTools": [{"type": "function", "name": tool["name"], "description": tool["description"],
+                              "inputSchema": tool["inputSchema"]}
+                             for tool in state.snapshot_service.tools]}
+
+
 def _configure_fast(connection: Connection, request: RunRequest, state: _RunState) -> str:
     """Fast configuration: native permission parameters, preserving user settings."""
     cwd, spec = request.cwd, buddy_spec(request)
+    config = _tool_config(connection, request)
     response = connection.call("thread/start", {
+        "config": config, **_snapshot_tools(state),
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
@@ -948,11 +968,27 @@ class _EventChain:
         self.truncated = False
         self.session = session
 
+    def observer_facts(self, *, settled: bool = False, raw: str | None = None, mode: str) -> dict:
+        return self.facts.mapping(
+            tool_calls=self.projector.tool_calls, settled=settled, raw_answer=raw,
+            session_tool_calls=self.projector.session_tool_calls,
+            review_tools=self.projector.evidence
+            if mode == "review" and self.state.snapshot_service is not None else None)
+
     def observe_facts(self, message: dict) -> None:
         """Project and classify one frame without the carrier stage."""
         if self.projector is not None:
             self.projector.observe_notification(message)
-        if self.classifier.observe(message):
+        snapshot_frame = self.projector is not None and self.projector.snapshot_frame(message)
+        if self.projector is not None and self.projector.session_tools and message.get("method") == "turn/completed":
+            params = message.get("params") or {}
+            turn = params.get("turn") or {}
+            items = turn.get("items")
+            if isinstance(items, list):
+                filtered = [item for item in items if not self.projector.snapshot_frame({
+                    "params": {**params, "item": item}})]
+                message = {**message, "params": {**params, "turn": {**turn, "items": filtered}}}
+        if snapshot_frame or self.classifier.observe(message):
             self.facts.dirty = True
 
     def observe(self, message: dict) -> None:
@@ -1180,6 +1216,8 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
         state.native_request_sent = None
 
     def on_sent() -> None:
+        if not initial:
+            state.correction_count += 1
         if initial:
             state.native_request_sent = True
         if chain.session is not None:
@@ -1246,7 +1284,9 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     projector = CodexToolEventProjector({"harness": "codex", "taskId": request.identity.task_id,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation},
-                                        state_dir=Path(request.private_state.state_dir))
+                                        state_dir=Path(request.private_state.state_dir),
+                                        session_tools=request.snapshot_query.tool_names
+                                        if request.snapshot_query is not None else ())
     activity = _ActivityWriter(services.live)
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()
@@ -1262,6 +1302,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             _take_feedback(observer(facts.mapping(tool_calls=0, settled=False, raw_answer=None)),
                            mode, settled=False)
             prep = _prepare(request, mode)
+            if request.snapshot_query is not None:
+                state.snapshot_service = mounted_snapshot(request.snapshot_query)
             if mode == "worker" and services.inquiry is not None:
                 configuration = services.inquiry.configuration
                 inquiry_bridge = InquiryBridge(
@@ -1314,6 +1356,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             state.status, state.reason = "error", "invalid-native-result"
             state.error_text = "Codex returned invalid or incomplete native data"
         finally:
+            state.snapshot_turn_active = False
             if inquiry_bridge is not None:
                 inquiry_bridge.close()
                 state.inquiry_report = inquiry_bridge.report()
@@ -1347,6 +1390,21 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
                        "text": "the root inquiry client tool is not active"}]})
             connection.send({"id": message["id"], "result": result})
             return
+        if (method == "item/tool/call" and state.snapshot_service is not None
+                and state.snapshot_turn_active and isinstance(params, dict)
+                and isinstance(params.get("tool"), str)
+                and params["tool"] in state.snapshot_service.tool_names
+                and params.get("namespace") is None
+                and params.get("threadId") == state.thread_id
+                and isinstance(params.get("turnId"), str) and params["turnId"]
+                and (state.turn_id is None or params["turnId"] == state.turn_id)
+                and isinstance(params.get("callId"), str) and 0 < len(params["callId"]) <= 512):
+            identity = {"sessionId": params["threadId"], "turnId": params["turnId"]}
+            tool, call_id, arguments = params["tool"], params["callId"], params.get("arguments")
+            result = state.snapshot_service.direct_call(tool, arguments, native_identity=identity, call_id=call_id)
+            chain.projector.observe_snapshot_request(identity, call_id, tool, arguments)
+            connection.send({"id": message["id"], "result": result})
+            return
         record = {"method": method if isinstance(method, str) and len(method) <= 80 else "unknown",
                   "threadId": params.get("threadId") if isinstance(params, dict) else None,
                   "turnId": params.get("turnId") if isinstance(params, dict) else None}
@@ -1371,8 +1429,7 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
                 chain.session.record.project(chain.session.flush)
         if facts.dirty:
             facts.dirty = False
-            tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
-            feedback = observer(facts.mapping(tool_calls=tool_calls, settled=False, raw_answer=None))
+            feedback = observer(chain.observer_facts(mode=mode))
             _take_feedback(feedback, mode, settled=False)
         if inquiry_poller:
             inquiry_poller[0].poll()
@@ -1473,9 +1530,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                                        nativeRequestThreadId=correlated["threadId"],
                                        nativeRequestTurnId=correlated["turnId"])
     state.status = "ok"
-    _settle_feedback(observer, chain,
-                     chain.projector.tool_calls if chain.projector is not None
-                     else evidence.tool_calls, state.raw_answer, "worker")
+    _take_feedback(observer(chain.observer_facts(settled=True, raw=state.raw_answer, mode="worker")),
+                   "worker", settled=True)
 
 
 def _structured_rounds(connection: Connection, chain: _EventChain, request: RunRequest,
@@ -1493,6 +1549,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
     while True:
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
+        state.turn_id = None
+        state.snapshot_turn_active = True
         response = _admit_turn(connection, request, thread_id, input_text, mode, state, chain)
         turn = response.get("turn")
         turn_id = turn.get("id") if isinstance(turn, dict) else None
@@ -1556,6 +1614,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     connection.pump()
             raw = _fast_final_checks(fast_state) if mode == "fast" else _review_final_checks(evidence)
         finally:
+            state.snapshot_turn_active = False
             state.event_count += evidence.event_seq
             item = fast_state["final"] if mode == "fast" else evidence.final_item
             if isinstance(item, dict) and isinstance(item.get("text"), str):
@@ -1565,11 +1624,9 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if mode == "review" and state.capture is not None:
             state.capture["turns"].append({"sessionId": thread_id, "turnId": turn_id,
                                            "started": True, "completed": True})
-        feedback = _settle_feedback(observer, chain,
-                                    chain.projector.tool_calls if chain.projector is not None
-                                    else evidence.tool_calls, raw, mode)
+        feedback = _take_feedback(observer(chain.observer_facts(settled=True, raw=raw, mode=mode)),
+                                  mode, settled=True)
         if feedback.action == "correct":
-            state.correction_count += 1
             input_text = feedback.input_text
             state.rounds_complete = False
             # The finished round's events are the next round's sequence offset.
@@ -1577,7 +1634,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
             round_index += 1
             continue
         break
-    if mode == "fast":
+    if mode == "fast" or state.snapshot_service is not None:
         state.drained = _drain_to_eof(connection, chain, observer, mode)
     state.status = "ok"
 
@@ -1599,12 +1656,6 @@ def _review_final_checks(evidence: TurnEvidence) -> str:
             or not isinstance(item, dict):
         raise CodexProtocolError("native-turn-failed", "No completed native structured answer")
     return item.get("text")
-
-
-def _settle_feedback(observer: Callable[[Mapping], RunFeedback], chain: _EventChain,
-                     tool_calls: int, raw: str | None, mode: str) -> RunFeedback:
-    feedback = observer(chain.facts.mapping(tool_calls=tool_calls, settled=True, raw_answer=raw))
-    return _take_feedback(feedback, mode, settled=True)
 
 
 def _drain_to_eof(connection: Connection, chain: _EventChain,
@@ -1637,8 +1688,7 @@ def _drain_to_eof(connection: Connection, chain: _EventChain,
             chain.observe(message)
         if chain.facts.dirty:
             chain.facts.dirty = False
-            tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
-            feedback = observer(chain.facts.mapping(tool_calls=tool_calls, settled=False, raw_answer=None))
+            feedback = observer(chain.observer_facts(mode=mode))
             _take_feedback(feedback, mode, settled=False)
 
 
@@ -1950,6 +2000,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
             fields["turn_id"] = state.turn_id
         native_identity = identity_or_none(fields)
     tool_package = None
+    snapshot_coverage = []
     if projector is not None and (state.thread_opened or mode == "review"):
         # Stream facts record the observed ends — the completed root turns
         # (worker: the micro task turn's own native receipt; review: every
@@ -1961,12 +2012,18 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         if mode == "fast":
             stream_complete = state.drained is True
         elif mode == "review":
-            stream_complete = state.rounds_complete
+            stream_complete = state.rounds_complete and (
+                state.snapshot_service is None or state.drained is True)
         else:
             checkpoint = state.checkpoint or {}
             stream_complete = (checkpoint.get("nativeTurnStarted") is True
                                and checkpoint.get("nativeTurnStatus") == "completed")
-        tool_package = projector.finish(stream_complete)
+        verified = ()
+        if state.snapshot_service is not None:
+            verified, snapshot_coverage = verify_mounted_calls(
+                request.snapshot_query, projector.snapshot_calls, projector.roots)
+        tool_package = projector.finish(stream_complete and snapshot_coverage is not None,
+                                        verified_session_calls=verified)
     value = None
     if bounded_utf8(state.raw_answer, MAX_VALUE_BYTES) is not None:
         value = RunValue(schema_status="unknown",
@@ -2014,7 +2071,9 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                 group_state="gone" if state.shutdown else "unknown"),
             interrupt=InterruptEvidence(requested=True if state.interrupt_requested else None,
                                         basis=state.interrupt_basis)),
-        evidence_refs=_evidence_refs(request, state, facts))
+        evidence_refs=(*_evidence_refs(request, state, facts), *snapshot_coverage_refs(
+            Path(request.private_state.invocation_root),
+            snapshot_coverage if tool_package and tool_package["streamComplete"] else None)))
 
 
 # -- model discovery -----------------------------------------------------------------

@@ -32,10 +32,11 @@ from ..private_files import publish_bytes
 ACP_CATEGORIES = ("read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other")
 TOOL_EVENT_PHASES = ("start", "end")
 TOOL_OUTCOMES = ("success", "failure", "unknown")
-# Existing harnesses and the web profile aggregator still produce version 3
-# until the snapshot-aware drive paths switch to the version 4 producer.
-TOOL_EVIDENCE_VERSION = 3
-SESSION_TOOL_EVIDENCE_VERSION = 4
+# Every new package is version 4: the session-service facts belong to the
+# current form even when no service was mounted (`sessionServiceTools: []`).
+# Sealed version 3 packages stay readable exactly as written.
+TOOL_EVIDENCE_VERSION = 4
+LEGACY_TOOL_EVIDENCE_VERSION = 3
 #: One call has a fixed identity, category set and phase set. Its serialized
 #: row is bounded; the number of rows grows with the work and travels as a file.
 MAX_CALL_BYTES = 32 * 1024
@@ -238,7 +239,6 @@ class ToolEventEvidence:
     def __init__(self, binding: dict, *, state_dir: Path, session_service_tools: Iterable[str] | None = None):
         self.state_dir = state_dir
         self.binding = _binding(binding)
-        self._version = TOOL_EVIDENCE_VERSION if session_service_tools is None else SESSION_TOOL_EVIDENCE_VERSION
         self._session_service_tools = _session_service_names(list(session_service_tools or ()))
         self._calls: dict[tuple[str, str | None], dict] = {}
         self._root_identities: list[dict] = []
@@ -258,6 +258,19 @@ class ToolEventEvidence:
         """Observed unique identified starts, before verified delivery exclusion."""
         return sum(1 for call in self._calls.values()
                    if call["nativeIdentity"] and call["callId"] and "start" in call["countedPhases"])
+
+    @property
+    def read_tool_violations(self) -> int:
+        """Observed non-read operations, with mounted queries held for receipt verification."""
+        allowed = PERMISSION_TOOL_CATEGORIES["read"]
+        return sum(
+            not call["consistent"] or any(
+                category not in allowed and name not in self._session_service_tools
+                and not (self.binding["harness"] == "codex" and self._session_service_tools
+                         and name == "dynamicToolCall")
+                and not (self.binding["harness"] == "claude" and name == "StructuredOutput")
+                for name, category in call["facts"])
+            for call in self._calls.values())
 
     def _observe(self, identity: dict, call_id: str | None, name: str | None,
                  category: str, phase: str | None, *, outcome: str = "unknown",
@@ -335,8 +348,7 @@ class ToolEventEvidence:
         this attempt. Verified delivery exclusions name the full native identity
         and call ID; conflicting/incomplete facts cannot be hidden by exclusion.
         Private session receipt verification supplies the same full call keys,
-        which the version 4 collector binds to complete calls of registered
-        tools. Passing even an empty tool list opts in to that form.
+        which the collector binds to complete calls of registered tools.
         Every later close preserves any previous incomplete stream report.
         """
         if not isinstance(native_identity, list):
@@ -349,8 +361,6 @@ class ToolEventEvidence:
         self._root_identities = roots
         self._excluded = _call_keys(() if exclude_calls is None else exclude_calls, "exclude_calls")
         verified = _call_keys(verified_session_calls, "verified_session_calls")
-        if verified and self._version != SESSION_TOOL_EVIDENCE_VERSION:
-            raise BoardError("INVALID_ARGUMENT", "verified session calls require version 4 tool evidence")
         reported = stream_complete is True
         self._stream_reported = reported if self._stream_reported is None else (self._stream_reported and reported)
         self._finished = True
@@ -377,25 +387,23 @@ class ToolEventEvidence:
                 "incomplete": call["incomplete"], "malformed": call["malformed"],
                 "belongsToRoot": call["nativeIdentity"] in self._root_identities,
             }
-            if self._version == SESSION_TOOL_EVIDENCE_VERSION:
-                row["sessionServiceVerified"] = (
-                    key in verified and not call["late"]
-                    and _complete_root_call(row) and _is_session_service_call(row, self._session_service_tools)
-                )
-                if row["sessionServiceVerified"]:
-                    bound_session_calls.add(key)
+            row["sessionServiceVerified"] = (
+                key in verified and not call["late"]
+                and _complete_root_call(row) and _is_session_service_call(row, self._session_service_tools)
+            )
+            if row["sessionServiceVerified"]:
+                bound_session_calls.add(key)
             calls.append(row)
         package = {
-            "version": self._version, "binding": dict(self.binding),
+            "version": TOOL_EVIDENCE_VERSION, "binding": dict(self.binding),
             "nativeIdentity": [dict(identity) for identity in self._root_identities],
             "streamComplete": (bool(self._stream_reported) and not self._late and not self._incomplete
                                and verified == bound_session_calls),
             "calls": write_tool_calls(self.binding, calls, state_dir=self.state_dir),
             "toolCalls": started, "unsettledToolCalls": unsettled,
             "toolSummary": summarize_tool_calls(calls),
+            "sessionServiceTools": sorted(self._session_service_tools),
         }
-        if self._version == SESSION_TOOL_EVIDENCE_VERSION:
-            package["sessionServiceTools"] = sorted(self._session_service_tools)
         return package
 
 
@@ -506,10 +514,10 @@ def _validate_tool_summary(summary: Any) -> None:
 def validate_tool_evidence_package(evidence: Any) -> None:
     """The envelope boundary; file content is checked by the receiving judge."""
     version = evidence.get("version") if isinstance(evidence, dict) else None
-    if type(version) is not int or version not in (TOOL_EVIDENCE_VERSION, SESSION_TOOL_EVIDENCE_VERSION):
+    if type(version) is not int or version not in (TOOL_EVIDENCE_VERSION, LEGACY_TOOL_EVIDENCE_VERSION):
         raise BoardError("INVALID_ARGUMENT", "the tool evidence version is not supported")
     fields = set(evidence)
-    expected = SESSION_PACKAGE_FIELDS if version == SESSION_TOOL_EVIDENCE_VERSION else PACKAGE_FIELDS
+    expected = SESSION_PACKAGE_FIELDS if version == TOOL_EVIDENCE_VERSION else PACKAGE_FIELDS
     if fields != expected:
         raise BoardError("INVALID_ARGUMENT", "the tool evidence package must carry exactly its fixed fields")
     if "sessionServiceTools" in fields:
@@ -542,7 +550,7 @@ def validate_tool_evidence_package(evidence: Any) -> None:
 
 
 def _call_summary(value: Any, harness: str, version: int, session_tools: frozenset[str]) -> dict:
-    fields = SESSION_CALL_FIELDS if version == SESSION_TOOL_EVIDENCE_VERSION else CALL_FIELDS
+    fields = SESSION_CALL_FIELDS if version == TOOL_EVIDENCE_VERSION else CALL_FIELDS
     if not isinstance(value, dict) or set(value) != fields:
         raise BoardError("INVALID_ARGUMENT", "a tool call summary must carry exactly its fixed fields")
     if value["outcome"] not in TOOL_OUTCOMES:
@@ -584,7 +592,7 @@ def _call_summary(value: Any, harness: str, version: int, session_tools: frozens
         raise BoardError("INVALID_ARGUMENT", "tool call consistency must match its distinct facts")
     if value["consistent"] and {category for _name, category in pairs} != set(value["categories"]):
         raise BoardError("INVALID_ARGUMENT", "a consistent call must carry exactly its observed category")
-    if version == SESSION_TOOL_EVIDENCE_VERSION:
+    if version == TOOL_EVIDENCE_VERSION:
         verified = value["sessionServiceVerified"]
         if type(verified) is not bool:
             raise BoardError("INVALID_ARGUMENT", "sessionServiceVerified must be a boolean")
@@ -661,6 +669,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
             return TOOL_EVIDENCE_UNVERIFIED
         allowed = PERMISSION_TOOL_CATEGORIES[permission]
         harness = evidence["binding"]["harness"]
+        session_tools = frozenset(evidence.get("sessionServiceTools", ()))
         incomplete = not evidence["streamComplete"]
         forbidden = False
         malformed = False
@@ -681,6 +690,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
                               and _allowed_codex_web_call(call))
             session_call = permission != "web" and call.get("sessionServiceVerified", False)
             if not session_call and (permission == "none"
+                                     or _is_session_service_call(call, session_tools)
                                      or call["consistent"] and not (categories <= allowed or codex_web_call)):
                 forbidden = True
             root = bool(call["nativeIdentity"]) and call["nativeIdentity"] in evidence["nativeIdentity"]
@@ -704,7 +714,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
 __all__ = [
     "ACP_CATEGORIES", "BINDING_FIELDS", "CALL_FIELDS", "CALL_FILE_FIELDS", "EVENT_FIELDS", "MAX_CALL_BYTES",
     "NATIVE_TOOL_CATEGORIES", "NON_TOOL_NAMES", "PACKAGE_FIELDS", "PERMISSION_TOOL_CATEGORIES",
-    "SESSION_CALL_FIELDS", "SESSION_PACKAGE_FIELDS", "SESSION_TOOL_EVIDENCE_VERSION",
+    "SESSION_CALL_FIELDS", "SESSION_PACKAGE_FIELDS", "LEGACY_TOOL_EVIDENCE_VERSION",
     "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION", "TOOL_OUTCOMES", "TOOLS_FORBIDDEN", "ToolEventEvidence",
     "classify_tool_name", "merge_tool_summaries", "summarize_tool_calls",
     "judge_tool_evidence", "normalize_tool_event", "read_tool_calls", "validate_tool_evidence_package",

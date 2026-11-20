@@ -340,6 +340,21 @@ def _snapshot_transport(raw: object) -> tuple[str, bool | None]:
     return raw, failed
 
 
+def snapshot_result_failed(raw: object) -> bool | None:
+    """The transport's own failure conclusion for one native result form.
+
+    The native drivers feed their observed snapshot tool result through the
+    same unwrapping rule the verifier applies, so the ``ok`` fact they retain
+    can never disagree with the receipt status the ledger signed. ``None``
+    means the form carries no status at all; an unusable form is also ``None``
+    and fails verification later on its own.
+    """
+    try:
+        return _snapshot_transport(raw)[1]
+    except ValueError:
+        return None
+
+
 def verify_snapshot_reply(raw: object, configuration: dict, tool_name: str, *, ok: bool) -> dict:
     """Verify one reply. The ledger verifier separately consumes its sequence."""
     try:

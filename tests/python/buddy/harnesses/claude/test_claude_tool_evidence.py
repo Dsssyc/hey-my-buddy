@@ -145,7 +145,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["version"], 3)
+        self.assertEqual(package["version"], 4)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
                           for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [("toolu_1", ["read"], ["end", "start"]),
@@ -574,7 +574,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
-        self.assertEqual(evidence["version"], 3)
+        self.assertEqual(evidence["version"], 4)
         self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])

@@ -20,8 +20,11 @@ from pathlib import Path
 
 from ....paths import native_path
 from ....private_files import open_read
-
-from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
+from ....protocol.tool_evidence import (
+    PERMISSION_TOOL_CATEGORIES, ToolEventEvidence, classify_tool_name, normalize_tool_event,
+)
+from ..session_receipts import snapshot_result_failed
+from ..snapshot_mount import ObservedSnapshotCalls
 
 HARNESS = "zcode"
 
@@ -56,11 +59,19 @@ class ZcodeToolFacts:
     projection cannot name, keeping the receipt's call count at least one.
     """
 
-    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path):
-        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
+    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path,
+                 session_tools: Iterable[str] = ()):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir,
+                                          session_service_tools=session_tools)
         self.roots: list[dict] = []
         self.close_pending = False
         self.violation = False
+        #: The mounted snapshot service's qualified tool names, with the
+        #: observed native calls the driver later verifies against the ledger.
+        self.session_tools = frozenset(session_tools)
+        self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
+        self._snapshot_inputs: dict[tuple[str, str, str], tuple[str, dict]] = {}
+        self._session_starts: set[tuple[str, str, str]] = set()
         self._names: dict[tuple[str, str, str], str] = {}
         self._ended = set()
         self._closed = set()
@@ -110,6 +121,16 @@ class ZcodeToolFacts:
                 self.evidence.close_root(identity)
                 self._closed.add((identity['sessionId'], identity['turnId']))
             return
+        if self.session_tools and isinstance(params, dict) and params.get("type") == "model.streaming":
+            identity = _identity_of(params)
+            payload = params.get("payload")
+            if identity is not None and isinstance(payload, dict) and payload.get("kind") == "tool_call":
+                name, call_id, arguments = payload.get("toolName"), payload.get("toolCallId"), payload.get("input")
+                if (isinstance(name, str) and name in self.session_tools
+                        and isinstance(call_id, str) and isinstance(arguments, dict)):
+                    key = (identity["sessionId"], identity["turnId"], call_id)
+                    self._snapshot_inputs[key] = (name, arguments)
+            return
         if not isinstance(params, dict) or params.get("type") != "tool.updated":
             return
         payload = params.get("payload")
@@ -146,18 +167,34 @@ class ZcodeToolFacts:
                 self._names.setdefault(key, name)
                 if kind == "scheduled":
                     self._canonical_starts.add(key)
+                if name in self.session_tools:
+                    # A mounted snapshot call keeps its native arguments beside
+                    # the shared facts; the driver verifies them against the
+                    # signed ledger after the run ends.
+                    self._session_starts.add(key)
+                    streamed = self._snapshot_inputs.get(key)
+                    arguments = payload.get("input", payload.get("arguments"))
+                    if arguments is None and streamed is not None and streamed[0] == name:
+                        arguments = streamed[1]
+                    self.snapshot_calls.observe(identity, call_id, name, arguments=arguments, started=True)
         elif phase == "end" and identity is not None and call_id is not None:
             key = (identity["sessionId"], identity["turnId"], call_id)
             name = self._names.get(key)
             self._ended.add(key)
             result = payload.get("result")
-            outcome = False if kind == "error" else result.get("success") if isinstance(result, dict) else None
-            outcome = outcome if type(outcome) is bool else None
-            if key in self._outcomes and self._outcomes[key] is not outcome:
+            failed = None
+            if name in self.session_tools:
+                failed = snapshot_result_failed(result)
+                self.snapshot_calls.observe(identity, call_id, name, result=result, completed=True,
+                                            ok=(not failed) if failed is not None else None)
+            native_outcome = False if kind == "error" else result.get("success") if isinstance(result, dict) else None
+            native_outcome = native_outcome if type(native_outcome) is bool else None
+            if key in self._outcomes and self._outcomes[key] is not native_outcome:
                 self._incomplete(params, identity, call_id, phase, name)
-            self._outcomes.setdefault(key, outcome)
-            if key in self._metadata_outcomes and self._metadata_outcomes[key] is not self._outcomes[key]:
+            self._outcomes.setdefault(key, native_outcome)
+            if key in self._metadata_outcomes and self._metadata_outcomes[key] is not native_outcome:
                 self._incomplete(params, identity, call_id, phase, name)
+            outcome = not failed if failed is not None else native_outcome
         if identity is not None and phase is not None and call_id is not None and name is not None:
             # The envelope type is not an operation type and is never passed as
             # one; the shared table classifies the scheduled tool name alone.
@@ -321,13 +358,45 @@ class ZcodeToolFacts:
             "nativeIdentity": bounded, "callId": call_id, "toolName": name, "phase": phase})
 
     # -- receipt ---------------------------------------------------------------
+    def explains_tool_frame(self, message: dict, *, read: bool) -> bool:
+        params = message.get("params")
+        if message.get("method") != "session/event" or not isinstance(params, dict):
+            return False
+        identity = _identity_of(params)
+        payload = params.get("payload")
+        if identity is None or not isinstance(payload, dict):
+            return False
+        if params.get("type") == "tool.updated" and payload.get("kind") == "batch":
+            ids = payload.get("toolCallIds")
+        elif params.get("type") == "tool.updated":
+            ids = [payload.get("toolCallId")]
+        elif params.get("type") == "model.streaming" and payload.get("kind") == "tool_call":
+            name = payload.get("toolName")
+            if isinstance(name, str) and (name in self.session_tools
+                                          or read and classify_tool_name(HARNESS, name)
+                                          in PERMISSION_TOOL_CATEGORIES["read"]):
+                return isinstance(payload.get("toolCallId"), str)
+            ids = [payload.get("toolCallId")]
+        else:
+            return False
+        names = self._names if read else self._session_starts
+        return isinstance(ids, list) and bool(ids) and all(
+            isinstance(call_id, str) and (identity["sessionId"], identity["turnId"], call_id) in names
+            for call_id in ids)
+
     @property
     def tool_calls(self) -> int:
         """Observed unique call starts, for the receipt's cumulative count."""
         return self.evidence.tool_calls
 
+    @property
+    def session_tool_calls(self) -> int:
+        """Observed starts of mounted snapshot service calls, verbatim."""
+        return len(self._session_starts)
+
     def finish(self, stream_complete: bool, *,
-               exclude_calls: Iterable[tuple[str, str]] | None = None) -> dict:
+               exclude_calls: Iterable[tuple[str, str]] | None = None,
+               verified_session_calls: Iterable[tuple[str, str]] = ()) -> dict:
         """Close the collector and return the receipt's ``toolEvidence`` package.
 
         ``stream_complete`` is true only when the real native stream drained to
@@ -337,7 +406,9 @@ class ZcodeToolFacts:
         own full ``(canonical_json(native_identity), callId)`` keys: the shared collector
         removes exactly those calls' events and counts from its complete call
         table, while every unverified, foreign or conflicting fact the
-        projection observed stays.
+        projection observed stays. ``verified_session_calls`` names the mounted
+        snapshot calls whose signed ledger receipts the driver verified in both
+        directions; only those rows carry ``sessionServiceVerified``.
         """
         self.read_denials()
         for params, identity, payload, missing in self._pending_denial_batches:
@@ -349,7 +420,8 @@ class ZcodeToolFacts:
             self._incomplete({"sessionId": key[0], "turnId": key[1]},
                              {"sessionId": key[0], "turnId": key[1]}, key[2], None, self._names.get(key))
         return self.evidence.finish(list(self.roots), stream_complete is True,
-                                    exclude_calls=exclude_calls)
+                                    exclude_calls=exclude_calls,
+                                    verified_session_calls=verified_session_calls)
 
 
 __all__ = ["HARNESS", "ZcodeToolFacts"]
