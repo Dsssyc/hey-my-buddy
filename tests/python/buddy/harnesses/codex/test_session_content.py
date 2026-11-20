@@ -20,7 +20,8 @@ class SessionProjectionTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.state = Path(temp.name)
         self.record = SessionRecord(self.state / "attempt.jsonl", "attempt")
-        self.projector = CodexSessionProjector(self.record)
+        self.now = 1.0
+        self.projector = CodexSessionProjector(self.record, clock=lambda: self.now)
         self.addCleanup(self.projector.close)
         self.projector.record_input("sent input")
         self.projector.observe_root("thread", "turn", "sent input", [])
@@ -370,6 +371,31 @@ class SessionProjectionTests(unittest.TestCase):
         rows = self.updates()
         self.assertEqual(rows[-1]["content"]["text"], text)
         self.assertEqual(len(notifications(self.record.path)), 2)
+
+    def test_small_deltas_coalesce_until_time_threshold_then_start_a_new_batch(self):
+        self.frame("item/agentMessage/delta", itemId="message", delta="one ")
+        self.now = 1.14
+        self.frame("item/agentMessage/delta", itemId="message", delta="two ")
+        self.assertEqual(len(self.updates()), 1)
+
+        self.now = 1.15
+        self.frame("item/agentMessage/delta", itemId="message", delta="three")
+        self.assertEqual([row["content"]["text"] for row in self.updates()[1:]], ["one two three"])
+
+        self.now = 2.0
+        self.frame("item/agentMessage/delta", itemId="message", delta=" four")
+        self.assertEqual(len(self.updates()), 2)
+        self.projector.close()
+        self.assertEqual([row["content"]["text"] for row in self.updates()[1:]], ["one two three", " four"])
+
+    def test_delta_byte_threshold_counts_utf8_across_fragments(self):
+        text = "字" * 682
+        self.frame("item/agentMessage/delta", itemId="message", delta=text)
+        self.assertEqual(len(self.updates()), 1)
+        self.frame("item/agentMessage/delta", itemId="message", delta="é")
+        self.assertEqual([row["content"]["text"] for row in self.updates()[1:]], [text + "é"])
+        self.frame("item/agentMessage/delta", itemId="message", delta="x")
+        self.assertEqual(len(self.updates()), 2)
 
     def test_new_attempt_on_same_native_thread_has_a_separate_record(self):
         second = SessionRecord(self.state / "next-attempt.jsonl", "next-attempt")

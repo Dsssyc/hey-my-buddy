@@ -735,7 +735,9 @@ class BoardStore:
         # page passes it in so one page costs one relation read.
         view["lineage"] = lineage_result if lineage_result is not None else micro_task.resolve(connection, task)
         workflow = self.workflow.task_extension(connection, task)
+        view["blockingTask"] = None
         if workflow is not None:
+            view["blockingTask"] = self._blocking_task(connection, task, view["queueReason"])
             view["workflowShutdown"] = self.workflow.shutdown_summary(connection, task["task_id"])
             view["workflow"] = workflow
             view["workflowState"] = workflow["state"]
@@ -889,10 +891,32 @@ class BoardStore:
             "models": models,
         }
 
-    def _held_claims(self, connection: sqlite3.Connection) -> list[sqlite3.Row]:
-        return connection.execute(
-            "SELECT * FROM resource_claims WHERE state IN ('held','retained')"
-        ).fetchall()
+    def _overlapping_claim(self, connection: sqlite3.Connection, cwd: str,
+                           *, exclude_task: str | None = None) -> sqlite3.Row | None:
+        for claim in connection.execute(
+            "SELECT task_id, resource FROM resource_claims WHERE state IN ('held','retained') ORDER BY rowid"
+        ):
+            if claim["task_id"] != exclude_task and _overlaps(cwd, claim["resource"]):
+                return claim
+        return None
+
+    def _blocking_task(self, connection: sqlite3.Connection, task: sqlite3.Row,
+                       queue_reason: str | None) -> dict | None:
+        if task["state"] != "queued" or queue_reason != "cwd-overlap":
+            return None
+        from ..tasks.workflow import AGENT_KIND, current_scope
+        # A holder can belong to a run outside an execution credential's authority.
+        if (current_scope() or {}).get("kind") == AGENT_KIND:
+            return None
+        claim = self._overlapping_claim(connection, task["cwd"], exclude_task=task["task_id"])
+        if claim is None:
+            return None
+        run_id = claim["task_id"]
+        run = connection.execute(
+            "SELECT title, macro_task_id FROM workflow_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        return {"runId": run_id, "title": run["title"] if run else None,
+                "macroTaskId": run["macro_task_id"] if run else None}
 
     def _admission_blocker(self, connection: sqlite3.Connection, spec: dict, *, exclude_task: str | None = None) -> str | None:
         """Why this specification cannot start right now, or ``None`` when it can.
@@ -910,12 +934,7 @@ class BoardStore:
             active = self._model_active_counts(connection)
             if active.get(model_service, 0) >= self._effective_model_limit(connection, model_service):
                 return scheduling.REASON_MODEL_CAPACITY
-        for claim in self._held_claims(connection):
-            if exclude_task and claim["task_id"] == exclude_task:
-                continue
-            if _overlaps(spec["cwd"], claim["resource"]):
-                return "cwd-overlap"
-        return None
+        return "cwd-overlap" if self._overlapping_claim(connection, spec["cwd"], exclude_task=exclude_task) else None
 
     def _model_service_admission_blocker(self, connection: sqlite3.Connection, model_service: tuple[str, str, str]) -> str | None:
         """The capacity blocker for one already-resolved model service (no spec needed).

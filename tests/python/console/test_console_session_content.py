@@ -44,9 +44,11 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         with path.open('ab') as stream:
             stream.write(self.line(event))
 
-    def event(self, attempt_id, text):
-        return {'sessionId': attempt_id, 'update': {'sessionUpdate': 'agent_message_chunk',
-                                                  'content': {'type': 'text', 'text': text}}}
+    def event(self, attempt_id, text, *, item_id=None):
+        update = {'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': text}}
+        if item_id is not None:
+            update['_meta'] = {'nativeItemId': item_id, 'contentSegment': 'text'}
+        return {'sessionId': attempt_id, 'update': update}
 
     def get(self, browser, route, *, status=200, code=None):
         actual, headers, raw = browser.get(route)
@@ -87,6 +89,80 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         _, browser, route, _, events, _, _ = self.fixture(count=300)
         self.assertEqual(self.get(browser, route)['events'], events[-100:])
         self.assertEqual(self.get(browser, route + '?limit=256')['events'], events[-256:])
+
+    def test_backward_pages_include_split_messages_and_tool_starts(self):
+        _, browser, route, path, _, start, _ = self.fixture()
+        attempt = 'session-attempt'
+
+        def tool(call_id, *, opening=False):
+            update = {'toolCallId': call_id, 'sessionUpdate': 'tool_call' if opening else 'tool_call_update'}
+            update.update({'title': call_id} if opening else {'status': 'completed'})
+            return {'sessionId': attempt, 'update': update}
+
+        def blocks(item):
+            return [self.event(attempt, 'head', item_id=item), tool(item, opening=True),
+                    self.event(attempt, 'reasoning start', item_id=item + '-reasoning'),
+                    self.event(attempt, ' and more', item_id=item + '-reasoning'), tool(item)]
+
+        earlier_events = blocks('earlier')
+        latest_events = blocks('latest')
+        # Put an update before both the leading chunk and the other tool's start.
+        # It is included by the second tool's dependency and must pull in its own start.
+        latest_events = [tool('first', opening=True), tool('second', opening=True), tool('first'),
+                         *latest_events[2:4], tool('second')]
+        for event in earlier_events + latest_events:
+            self.append(path, event)
+
+        earlier_expected = earlier_events[1:]
+        latest_offset = start + sum(len(self.line(event)) for event in earlier_events)
+        latest = self.get(browser, route + '?limit=2')
+        self.assertEqual(latest['events'], latest_events)
+        self.assertEqual((latest['before'], latest['after'], latest['hasEarlier']),
+                         (latest_offset, path.stat().st_size, True))
+
+        earlier = self.get(browser, route + f'?before={latest_offset}&limit=2')
+        self.assertEqual(earlier['events'], earlier_expected)
+        self.assertEqual((earlier['before'], earlier['after'], earlier['hasEarlier']),
+                         (start + len(self.line(earlier_events[0])), latest_offset, True))
+
+        forward = self.get(browser, route + f'?after={latest_offset}&limit=2')
+        self.assertEqual(forward['events'], latest_events[:2])
+
+    def test_backward_page_aligns_a_message_without_tool_dependencies(self):
+        _, browser, route, path, _, start, _ = self.fixture()
+        attempt = 'session-attempt'
+        prefix = self.event(attempt, 'separate', item_id='previous')
+        chunks = [self.event(attempt, text, item_id='message') for text in ('一', '二', '三')]
+        tail = self.event(attempt, 'separate', item_id='next')
+        for event in [prefix, *chunks, tail]:
+            self.append(path, event)
+
+        page = self.get(browser, route + '?limit=2')
+        self.assertEqual(page['events'], [*chunks, tail])
+        self.assertEqual(page['before'], start + len(self.line(prefix)))
+        last = self.get(browser, route + '?limit=1')
+        earlier = self.get(browser, route + f'?before={last["before"]}&limit=1')
+        self.assertEqual(earlier['events'], chunks)
+        self.assertEqual(earlier['before'], page['before'])
+
+    def test_backward_alignment_is_bounded_by_lines_and_bytes(self):
+        _, browser, route, path, _, start, _ = self.fixture()
+        attempt = 'session-attempt'
+        for texts, skipped in ((list(map(str, range(260))), 3), (['x' * (512 * 1024), 'end'], 1)):
+            with self.subTest(rows=len(texts)):
+                with path.open('r+b') as stream:
+                    stream.truncate(start)
+                events = [self.event(attempt, text, item_id='long') for text in texts]
+                for event in events:
+                    self.append(path, event)
+                page = self.get(browser, route + '?limit=1')
+                self.assertEqual(page['events'], events[skipped:])
+                self.assertEqual((page['before'], page['after'], page['hasEarlier']),
+                                 (start + sum(len(self.line(event)) for event in events[:skipped]),
+                                  path.stat().st_size, True))
+                earlier = self.get(browser, route + f'?before={page["before"]}&limit=1')
+                self.assertEqual(earlier['events'], events[:skipped])
+                self.assertEqual((earlier['before'], earlier['hasEarlier']), (start, False))
 
     def test_invalid_parameters_and_byte_positions_are_rejected(self):
         _, browser, route, path, _, start, _ = self.fixture(count=2)

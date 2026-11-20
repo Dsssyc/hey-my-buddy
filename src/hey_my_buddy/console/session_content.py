@@ -14,7 +14,12 @@ from ..errors import BoardError
 from ..json_codec import decode_strict_json
 from ..paths import native_path
 from ..protocol.reasons import reason
-from ..protocol.session_content import SESSION_FORMAT, SessionFormat, SessionNotification
+from ..protocol.session_content import (
+    SESSION_FORMAT, MessageChunk, SessionFormat, SessionNotification, SessionUpdate, ToolCall, ToolCallUpdate,
+)
+
+_BACKTRACK_LINES = 256
+_BACKTRACK_BYTES = 512 * 1024
 
 
 def parse_query(query: str) -> dict:
@@ -52,6 +57,51 @@ def _last_newline(stream, end: int, floor: int) -> int:
 def _empty_page(params: dict) -> dict:
     cursor = params.get('before', params.get('after', 0))
     return {'events': [], 'before': cursor, 'after': cursor, 'hasEarlier': False}
+
+
+def _event(line: bytes) -> SessionNotification:
+    return SessionNotification.model_validate(decode_strict_json(line))
+
+
+def _track_tool_opening(update: SessionUpdate, missing: set[str]) -> None:
+    # Traversal is newest to oldest, so an update needs a start earlier in the record.
+    if isinstance(update, ToolCall):
+        missing.discard(update.tool_call_id)
+    elif isinstance(update, ToolCallUpdate):
+        missing.add(update.tool_call_id)
+
+
+def _message_item(update: SessionUpdate) -> tuple[str, str] | None:
+    if isinstance(update, MessageChunk) and update.meta is not None:
+        return update.session_update, update.meta.native_item_id
+    return None
+
+
+def _align_before(stream, first: int, start: int, events: list[SessionNotification]) -> int:
+    missing: set[str] = set()
+    for event in reversed(events):
+        _track_tool_opening(event.update, missing)
+    leading_item = _message_item(events[0].update)
+    earliest = max(start, first - _BACKTRACK_BYTES)
+    # Include the delimiter just before the earliest allowed event, if there is one.
+    floor = max(start, earliest - 1)
+    extra = []
+    for _ in range(_BACKTRACK_LINES):
+        if first <= earliest or (not missing and leading_item is None):
+            break
+        previous = _last_newline(stream, first - 1, floor) + 1
+        if previous < earliest:
+            break
+        stream.seek(previous)
+        event = _event(stream.read(first - previous))
+        item = _message_item(event.update)
+        if not missing and item != leading_item:
+            break
+        extra.append(event)
+        _track_tool_opening(event.update, missing)
+        first, leading_item = previous, item
+    events[:0] = reversed(extra)
+    return first
 
 
 def _page(stream, params: dict) -> dict:
@@ -93,9 +143,11 @@ def _page(stream, params: dict) -> dict:
             first = _last_newline(stream, first - 1, start) + 1
         stream.seek(first)
         lines = stream.read(last - first).split(b'\n')[:-1]
-    events = [SessionNotification.model_validate(decode_strict_json(line)).model_dump(
-        mode='json', by_alias=True, exclude_none=True) for line in lines]
-    return {'events': events, 'before': first, 'after': last, 'hasEarlier': first > start}
+    events = [_event(line) for line in lines]
+    if 'after' not in params and first > start and events:
+        first = _align_before(stream, first, start, events)
+    return {'events': [event.model_dump(mode='json', by_alias=True, exclude_none=True) for event in events],
+            'before': first, 'after': last, 'hasEarlier': first > start}
 
 
 def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
