@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 import threading
 
+from ...errors import BoardError
 from ...protocol.schemas import CODING_HARNESSES
 
 
@@ -143,7 +144,7 @@ def pending(connection, task):
         'SELECT r.*, a.started_at, e.seq AS event_seq FROM tasks t'
         ' JOIN attempts a ON a.attempt_id=COALESCE(t.active_attempt_id,t.selected_attempt_id)'
         ' JOIN attempt_reminders r ON r.attempt_id=a.attempt_id'
-        " JOIN events e ON e.kind='attempt.reminder' AND e.attempt_id=r.attempt_id"
+        " JOIN events e ON e.task_id=t.task_id AND e.kind='attempt.reminder' AND e.attempt_id=r.attempt_id"
         " AND json_extract(e.payload_json,'$.reminderId')=r.reminder_id"
         " WHERE t.task_id=? AND a.execution_state NOT IN ('finalizing','finished') AND a.result_json IS NULL"
         ' AND r.delivered_at IS NULL ORDER BY r.reminder_id LIMIT 1',
@@ -151,18 +152,21 @@ def pending(connection, task):
     ).fetchone()
 
 
-def consume(store, connection, task, delivery_id: str) -> dict | None:
-    """Claim a reminder inside the message delivery transaction."""
+def receipt(connection, task_id: str, delivery_id: str) -> dict | None:
     delivered = connection.execute(
         'SELECT r.*, a.started_at FROM attempt_reminders r'
         ' JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.delivery_id=?',
         (delivery_id,),
     ).fetchone()
-    if delivered is not None:
-        if delivered['task_id'] != task['task_id']:
-            from ...errors import BoardError
-            raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
-        return view(delivered)
+    if delivered is None:
+        return None
+    if delivered['task_id'] != task_id:
+        raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
+    return view(delivered)
+
+
+def consume(store, connection, task, delivery_id: str) -> dict | None:
+    """Claim a pending reminder after checking receipts in the same transaction."""
     row = pending(connection, task)
     if row is None:
         return None

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks import test_lead_lifecycle as lead_helpers
-from hey_my_buddy.blackboard.tasks import reminders
+from hey_my_buddy.blackboard.tasks import messages, reminders
 from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.errors import BoardError
 from support import FakeClock
@@ -160,6 +160,47 @@ class MessageTests(WorkflowTestCase):
         return board.store.task_wait({'runId': run_id, 'timeoutMs': 0, 'consumeReminders': True,
                                       'reminderWaitId': wait_id or uuid.uuid4().hex})
 
+    def test_empty_consume_and_issue_replay_do_not_open_write_transactions(self):
+        board = self.board()
+        run_id = self.submit(board)['runId']
+        selector = {'runId': run_id, 'reminderWaitId': 'issue-reply'}
+        with patch.object(board.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertEqual(messages.consume(board.store, selector), {})
+            with self.assertRaises(BoardError) as caught:
+                messages.consume(board.store, {**selector, 'runId': 'missing'})
+            self.assertEqual(caught.exception.code, 'NOT_FOUND')
+        board.store.record_service_issue('scheduler', RuntimeError('private scheduler failed'))
+        first = messages.consume(board.store, selector)
+        self.assertIn('issue', first)
+        with patch.object(board.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertEqual(messages.consume(board.store, selector), first)
+
+    def test_message_delivery_event_queries_use_task_index(self):
+        board = self.board()
+        run_id = self.submit(board)['runId']
+        statements = []
+        with board.store.db.read() as connection:
+            connection.set_trace_callback(statements.append)
+        try:
+            self.assertEqual(messages.consume(board.store, {'runId': run_id, 'reminderWaitId': 'no-message'}), {})
+        finally:
+            with board.store.db.read() as connection:
+                connection.set_trace_callback(None)
+        with board.store.db.read() as connection:
+            for prefix, event_tables in (
+                ('SELECT * FROM events WHERE', ('events',)),
+                ('SELECT p.* FROM events p', ('p', 'd')),
+                ('SELECT r.*, a.started_at, e.seq AS event_seq', ('e',)),
+            ):
+                with self.subTest(query=prefix):
+                    [statement] = [sql for sql in statements if sql.startswith(prefix)]
+                    plan = [row['detail'] for row in connection.execute('EXPLAIN QUERY PLAN ' + statement)]
+                    for table in event_tables:
+                        self.assertTrue(any(detail.startswith(f'SEARCH {table} ') and 'events_task_idx' in detail
+                                            for detail in plan), plan)
+                        self.assertFalse(any(detail.startswith(f'SCAN {table} ') or detail == f'SCAN {table}'
+                                             for detail in plan), plan)
+
     def test_wait_rejects_a_missing_or_invalid_run_identifier_at_the_boundary(self):
         board = self.board()
         for selector in ({}, {'runId': 1}, {'runId': ''}):
@@ -286,10 +327,51 @@ class MessageTests(WorkflowTestCase):
         board.store.record_execution_issue(claim['attempt']['attemptId'], 'shutdown', RuntimeError('unknown'))
         clock.advance(10)
         reminders.collect(board.store)
-        with ThreadPoolExecutor(2) as pool:
+        write = board.store.db.write
+        contenders = threading.Barrier(2, timeout=5)
+
+        def synchronized_write():
+            contenders.wait()
+            return write()
+
+        with patch.object(board.store.db, 'write', side_effect=synchronized_write), ThreadPoolExecutor(2) as pool:
             replies = list(pool.map(lambda _: self.receipt(board, run['runId'], 'same-wait'), range(2)))
         self.assertEqual(replies[0]['reminder'], replies[1]['reminder'])
         self.assertTrue(self.receipt(board, run['runId'])['issue'])
+
+    def test_waiters_recheck_an_unrelated_wakeup_during_a_write(self):
+        board = self.board()
+        run_id = self.submit(board)['runId']
+        unrelated_id = self.submit(board, request_id='unrelated', cwd=str(self.workdir('unrelated')))['runId']
+        initial_head = board.store.head()
+        events_wait = board.store.events_wait
+        subscribed = threading.Barrier(4, timeout=5)
+        writer_holds_lock = threading.Event()
+
+        def wait_for_events(params):
+            subscribed.wait()
+            result = events_wait(params)
+            if params['after'] == initial_head:
+                self.assertTrue(writer_holds_lock.wait(5))
+                self.assertEqual(result['events'][0]['taskId'], unrelated_id)
+            return result
+
+        params = {'runId': run_id, 'timeoutMs': 15000, 'consumeReminders': True, 'reminderWaitId': 'shared-wait'}
+        with patch.object(board.store, 'events_wait', side_effect=wait_for_events), ThreadPoolExecutor(3) as pool:
+            futures = [pool.submit(board.store.task_wait, params) for _ in range(3)]
+            subscribed.wait()
+            with board.store.db.write() as connection:
+                head = board.store._append_event(connection, 'attempt.progress', task_id=unrelated_id)
+            with board.store.db.write():
+                board.store._notify(head)
+                writer_holds_lock.set()
+                # All waiters must finish their empty recheck while SQLite's writer lock is held.
+                subscribed.wait()
+            board.store.record_service_issue('scheduler', RuntimeError('wake all retries'))
+            replies = [future.result(timeout=5)['issue'] for future in futures]
+        self.assertEqual(replies, [replies[0]] * 3)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM issue_deliveries').fetchone()[0], 1)
 
     def test_lead_wait_authority_is_limited_to_its_owned_tasks(self):
         board = self.board(max_concurrent=2)

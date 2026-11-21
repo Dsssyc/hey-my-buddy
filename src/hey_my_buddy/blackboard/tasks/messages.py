@@ -5,6 +5,7 @@ import json
 
 from ...errors import BoardError
 from ...protocol.awaiting import message_kind
+from . import reminders
 
 
 def pending_issue(connection, task_id: str):
@@ -45,41 +46,56 @@ def _issue_message(connection, receipt) -> dict:
     return {'issue': {'kind': kind, 'detail': detail}}
 
 
+def _receipt(connection, task_id: str, wait_id: str) -> dict | None:
+    issue = connection.execute('SELECT * FROM issue_deliveries WHERE wait_id=?', (wait_id,)).fetchone()
+    if issue is not None:
+        if issue['task_id'] != task_id:
+            raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
+        return _issue_message(connection, issue)
+    pause = connection.execute(
+        "SELECT * FROM events WHERE task_id=? AND kind='workflow.pause_delivered'"
+        " AND json_extract(payload_json,'$.waitId')=? ORDER BY seq DESC LIMIT 1",
+        (task_id, wait_id),
+    ).fetchone()
+    if pause is not None:
+        event = connection.execute('SELECT * FROM events WHERE seq=?',
+                                   (json.loads(pause['payload_json'])['pauseEventId'],)).fetchone()
+        return _pause_message(event)
+    reminder = reminders.receipt(connection, task_id, wait_id)
+    return {'reminder': reminder} if reminder is not None else None
+
+
 def consume(store, selector: dict) -> dict:
-    """Choose one message atomically, including concurrent retries of one await."""
-    from . import reminders
+    """Replay or wait without a writer, and claim new messages atomically."""
+    with store.db.read() as connection:
+        task = store._task_row(connection, selector)
+        task_id = task['task_id']
+        wait_id = selector['reminderWaitId']
+        receipt = _receipt(connection, task_id, wait_id)
+        if receipt is not None:
+            return receipt
+        if (reminders.pending(connection, task) is None and pending_issue(connection, task_id) is None
+                and pending_pause(connection, task_id) is None):
+            return {}
+
+    # A competing waiter or a state change may have resolved the message.
     with store.db.write() as connection:
         task = store._task_row(connection, selector)
-        receipt = connection.execute('SELECT * FROM issue_deliveries WHERE wait_id=?',
-                                     (selector['reminderWaitId'],)).fetchone()
+        task_id = task['task_id']
+        receipt = _receipt(connection, task_id, wait_id)
         if receipt is not None:
-            if receipt['task_id'] != task['task_id']:
-                raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
-            return _issue_message(connection, receipt)
-        pause_receipt = connection.execute(
-            "SELECT * FROM events WHERE kind='workflow.pause_delivered'"
-            " AND json_extract(payload_json,'$.waitId')=? ORDER BY seq DESC LIMIT 1",
-            (selector['reminderWaitId'],),
-        ).fetchone()
-        if pause_receipt is not None:
-            if pause_receipt['task_id'] != task['task_id']:
-                raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
-            pause_event = connection.execute(
-                'SELECT * FROM events WHERE seq=?',
-                (json.loads(pause_receipt['payload_json'])['pauseEventId'],),
-            ).fetchone()
-            return _pause_message(pause_event)
-        reminder = reminders.consume(store, connection, task, selector['reminderWaitId'])
+            return receipt
+        reminder = reminders.consume(store, connection, task, wait_id)
         if reminder is not None:
             return {'reminder': reminder}
-        issue = pending_issue(connection, task['task_id'])
+        issue = pending_issue(connection, task_id)
         if issue is None:
-            pause_event = pending_pause(connection, task['task_id'])
+            pause_event = pending_pause(connection, task_id)
             if pause_event is None:
                 return {}
             store._append_event(
-                connection, 'workflow.pause_delivered', task_id=task['task_id'],
-                payload={'pauseEventId': pause_event['seq'], 'waitId': selector['reminderWaitId']},
+                connection, 'workflow.pause_delivered', task_id=task_id,
+                payload={'pauseEventId': pause_event['seq'], 'waitId': wait_id},
                 wake_owned=False,
             )
             head = store._head_of(connection)
@@ -88,16 +104,16 @@ def consume(store, selector: dict) -> dict:
         opening = connection.execute('SELECT * FROM events WHERE seq=?', (issue['occurrence_seq'],)).fetchone()
         # Freeze the latest observation at delivery, not the opening's old cause.
         observation = connection.execute(
-            "SELECT MAX(seq) FROM events WHERE kind IN (?,?) AND attempt_id IS ?"
+            "SELECT MAX(seq) FROM events WHERE task_id IS ? AND kind IN (?,?) AND attempt_id IS ?"
             " AND json_extract(payload_json,'$.stage')=json_extract(?,'$.stage') AND seq>=?",
-            (opening['kind'], opening['kind'] + '_updated', opening['attempt_id'],
+            (opening['task_id'], opening['kind'], opening['kind'] + '_updated', opening['attempt_id'],
              opening['payload_json'], issue['occurrence_seq']),
         ).fetchone()[0]
         # The observation time can precede the event append time. Keep that
         # independent fact for replay after the live problem row is removed.
         connection.execute(
             'INSERT INTO issue_deliveries(task_id,occurrence_seq,observation_seq,observed_at,wait_id) VALUES(?,?,?,?,?)',
-            (task['task_id'], issue['occurrence_seq'], observation, issue['observed_at'], selector['reminderWaitId']),
+            (task_id, issue['occurrence_seq'], observation, issue['observed_at'], wait_id),
         )
         return _issue_message(connection, {'observation_seq': observation, 'observed_at': issue['observed_at']})
 
@@ -118,7 +134,6 @@ def observation(store, connection, task) -> dict:
 
 def ready(store, connection, task, *, previous: dict | None, lead_run_id: str, cursor: int) -> int | None:
     """Return a doorbell's source event; delivery receipts govern pending content."""
-    from . import reminders
     issue = pending_issue(connection, task['task_id'])
     if issue is not None:
         return issue['occurrence_seq']
