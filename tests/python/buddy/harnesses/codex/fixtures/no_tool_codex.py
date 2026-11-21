@@ -27,6 +27,9 @@ def main():
         return
     case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
     turns = 0
+    # Request methods seen on the wire, recorded into the trace so a test can
+    # prove which RPCs a turn run actually made.
+    rpc: list[str] = []
     dynamic_tools = ()
     native_config = {"mcp_servers": {"user-tool": {}},
                      "web_search": "enabled", "approval_policy": "on-request"}
@@ -51,6 +54,7 @@ def main():
         if "id" not in request:
             continue
         method, params, ident = request["method"], request.get("params") or {}, request["id"]
+        rpc.append(method)
         if method == "initialize":
             send({"id": ident, "result": {}})
         elif method == "account/read":
@@ -77,7 +81,7 @@ def main():
         elif method == "thread/start":
             dynamic_tools = params.get("dynamicTools", ())
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
-            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}), encoding="utf-8", newline="\n")
+            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv, "rpc": list(rpc)}), encoding="utf-8", newline="\n")
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
                        "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
@@ -104,6 +108,7 @@ def main():
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             recorded = json.loads(trace.read_text(encoding="utf-8"))
             recorded.setdefault("turns", []).append(params)
+            recorded["rpc"] = list(rpc)
             trace.write_text(json.dumps(recorded), encoding="utf-8", newline="\n")
             turn_id = f"turn-{turns}"
             if case == "gated":
