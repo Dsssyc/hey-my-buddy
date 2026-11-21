@@ -18,9 +18,10 @@ from unittest.mock import patch
 
 from mock_workspace import MockWorkspace
 from protocol.fixtures import native_turn
-from support import BoardTestCase, enable_fixture_buddy
+from support import BoardTestCase, FakeClock, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+from hey_my_buddy.cli import cli_views
 from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
@@ -203,6 +204,66 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_current_turn_tracks_execution_and_latest_activity_until_settlement(self):
+        clock = FakeClock()
+        board = self.board(clock=clock)
+        for entry in ("progress", "connection"):
+            with self.subTest(entry=entry):
+                submitted = self.submit(board, request_id=entry, cwd=str(self.workdir(entry)))
+                run_id = submitted["runId"]
+                claim = self.claim(board, run_id=run_id)
+                attempt = claim["claim"]["attempt"]
+                attempt_id = attempt["attemptId"]
+                actor = {"attemptId": attempt_id, "generation": attempt["generation"], "nonce": NONCE}
+                if entry == "connection":
+                    self.assertTrue(board.store.execution_connection(attempt_id, connected=False))
+
+                prepared = board.call("workflow_get", {"runId": run_id})
+                self.assertEqual(prepared["currentTurn"]["state"], "prepared")
+                self.assertNotIn("activity", prepared["currentTurn"])
+                entered_at = clock.advance(1)
+                if entry == "progress":
+                    board.call("execution_progress", {**actor, "phase": "executing"})
+                else:
+                    self.assertTrue(board.store.execution_connection(attempt_id, connected=True))
+                running = board.call("workflow_get", {"runId": run_id})
+                self.assertEqual(running["currentTurn"]["state"], "running")
+                self.assertEqual(running["currentTurn"]["updatedAt"], entered_at)
+                self.assertEqual(running["updatedAt"], entered_at)
+                self.assertGreater(entered_at, prepared["currentTurn"]["updatedAt"])
+                self.assertGreater(entered_at, prepared["updatedAt"])
+                self.assertNotIn("activity", running["currentTurn"])
+
+                board.call("execution_progress", {**actor, "data": {"activity": {
+                    "phase": "streaming-model", "observedAt": clock.advance(1), "eventSeq": 1,
+                }}})
+                observed_at = clock.advance(1)
+                activity = {"phase": "tool-running", "observedAt": observed_at,
+                            "lastNativeActivityAt": observed_at, "lastToolActivityAt": observed_at,
+                            "toolName": "read", "counts": {"toolCalls": 1}}
+                native = {**activity, "eventSeq": 2, "nativeSessionId": "native-session"}
+                board.call("execution_progress", {**actor, "data": {"activity": native}})
+                running = board.call("workflow_get", {"runId": run_id})
+                self.assertEqual(running["task"]["activity"], native)
+                for mode in ("brief", "full"):
+                    self.assertEqual(cli_views.render("get", running, mode)["currentTurn"]["activity"], activity)
+
+                settled_at = clock.advance(1)
+                self.finish_turn(board, claim)
+                self.assertFalse(board.store.execution_connection(attempt_id, connected=True))
+                with self.assertRaises(BoardError) as late:
+                    board.call("execution_progress", {**actor, "phase": "executing"})
+                self.assertEqual(late.exception.code, "ATTEMPT_FINISHED")
+                settled = board.call("workflow_get", {"runId": run_id})
+                self.assertIsNone(settled["task"]["activeAttemptId"])
+                self.assertEqual(settled["task"]["activity"], native)
+                self.assertEqual(settled["updatedAt"], settled_at)
+                for mode in ("brief", "full"):
+                    current = cli_views.render("get", settled, mode)["currentTurn"]
+                    self.assertEqual(current["state"], "returned")
+                    self.assertEqual(current["updatedAt"], settled_at)
+                    self.assertNotIn("activity", current)
+
     def test_turn_buddy_uses_the_bound_execution(self):
         board = self.board()
         self.register(board)

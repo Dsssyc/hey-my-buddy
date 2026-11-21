@@ -122,10 +122,32 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(answer["outcome"], "review-reminder")
         self.assertEqual(answer["actions"], run["actions"])
 
+    def test_running_reminders_and_issues_include_compact_activity(self):
+        observed_at = "2026-11-11T00:00:00Z"
+        activity = {"phase": "waiting-host", "observedAt": observed_at,
+                    "lastNativeActivityAt": observed_at, "lastToolActivityAt": observed_at,
+                    "toolName": "read", "counts": {"toolCalls": 1},
+                    "waitingReason": {"code": "native-authority-required", "params": {"kind": "permission"}}}
+        native = {**activity, "eventSeq": 7, "nativeSessionId": "native-session"}
+        for outcome, message in (
+            ("expected-duration", {"reminder": {"kind": "expected-duration"}}),
+            ("native-silence", {"reminder": {"kind": "native-silence"}}),
+            ("issue", {"issue": True}),
+        ):
+            with self.subTest(outcome=outcome):
+                run = {"runId": "run-1", "state": "running", "workflowState": "executing",
+                       "actions": ["await", "get"], "activity": native, "providerRejection": None, **message}
+                service = mock.Mock(return_value=run)
+                answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+                self.assertEqual(answer["outcome"], outcome)
+                self.assertEqual(answer["activity"], activity)
+                self.assertNotIn("providerRejection", answer)
+
     def test_pause_interruption_returns_once_without_treating_run_as_host_pending(self):
         active = {"runId": "run-1", "state": "queued", "workflowState": "executing",
                   "queueReason": "paused", "revision": 2, "actions": ["await", "get"]}
-        delivered = {**active, "pause": {"pausedAt": "2026-11-11T00:00:00Z", "eventId": 7}}
+        delivered = {**active, "pause": {"pausedAt": "2026-11-11T00:00:00Z", "eventId": 7},
+                     "activity": {"phase": "finishing", "eventSeq": 5}}
         calls = []
         def service(method, params, directory):
             calls.append(method)
@@ -136,6 +158,7 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(answer['outcome'], 'paused')
         self.assertEqual(answer['queueReason'], 'paused')
         self.assertEqual(answer['pause'], delivered['pause'])
+        self.assertEqual(answer["activity"], {"phase": "finishing"})
         self.assertNotIn('requestId', answer)
 
     def test_upgrade_handover_rearms_same_wait_inside_window(self):
@@ -173,19 +196,41 @@ class AwaitTests(unittest.TestCase):
         active = {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
                   "actions": ["await", "inquire", "cancel", "get"],
                   "selectedAttempt": {"issues": [{"code": "native-permission-denied"}]}}
+        activity = {"phase": "streaming-model", "observedAt": "2026-11-11T00:00:00Z"}
         calls = []
         def service(method, params, directory):
             calls.append(method)
             if method == "task_wait":
                 self.clock.advance(1)
+                return {**active, "activity": {**activity, "eventSeq": 2}}
             return active
         answer = await_run({"runId": "run-1", "waitSeconds": 1}, self.state_dir,
                            service=service, clock=self.clock)
         self.assertEqual(answer["outcome"], "wait-timeout")
         self.assertTrue(answer["timedOut"])
+        self.assertEqual(answer["activity"], activity)
         self.assertEqual(answer["selectedAttempt"]["issues"], [{"code": "native-permission-denied"}])
         self.assertEqual(calls, ["task_get", "task_wait"])
         self.assertNotIn("cancel", calls)
+
+    def test_failed_await_exposes_provider_rejection_and_omits_activity(self):
+        rejection = {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded"}
+        run = {"runId": "run-1", "state": "failed", "workflowState": "failed",
+               "actions": ["get"], "resultAvailable": True, "shutdownConfirmed": True,
+               "activity": {"phase": "finishing", "observedAt": "2026-11-11T00:00:00Z"},
+               "providerRejection": rejection}
+        responses = {
+            "task_get": run,
+            "task_wait": run,
+            "workflow_get": {"state": "failed", "actions": ["get"]},
+            "task_result": {"result": {"status": "failed", "providerRejection": rejection}},
+        }
+        def service(method, params, directory):
+            return responses[method]
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(answer["outcome"], "failed")
+        self.assertEqual(answer["providerRejection"], rejection)
+        self.assertNotIn("activity", answer)
 
     def test_client_interrupt_abandons_only_this_wait(self):
         def service(method, params, directory):

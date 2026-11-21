@@ -219,6 +219,12 @@ def _turn_input_context(input_json: str) -> dict:
     return document["context"]
 
 
+def _compact_activity(activity: dict) -> dict:
+    return {key: activity[key] for key in (
+        "phase", "observedAt", "lastNativeActivityAt", "lastToolActivityAt", "toolName", "counts", "waitingReason",
+    ) if key in activity}
+
+
 def _frozen_turn_routing(context: dict) -> dict | None:
     """The routing identity frozen in a turn, absent only in older turn inputs."""
     if "routing" not in context:
@@ -852,6 +858,11 @@ class WorkflowCoordinator:
         state = run_row["state"]
         from ..routing.quota_routing import cooling
         task_summary = self._task_summary(connection, task_row)
+        current_turn = self._turn_view(connection, turns[0]) if turns else None
+        activity = task_summary["activity"]
+        if (current_turn is not None and current_turn["attemptId"] == task_summary["activeAttemptId"]
+                and isinstance(activity, dict)):
+            current_turn["activity"] = _compact_activity(activity)
         view = {
             "runId": run_row["run_id"],
             "state": state,
@@ -877,7 +888,7 @@ class WorkflowCoordinator:
             "buddyRevision": run_row["buddy_revision"],
             "providerCooling": cooling(connection, self._buddy(run_row), now=projection_now),
             "routing": self._routing_view(connection, run_row, now=projection_now),
-            "currentTurn": self._turn_view(connection, turns[0]) if turns else None,
+            "currentTurn": current_turn,
             "turns": [self._turn_view(connection, row, compact=True) for row in turns],
             "activeRequest": active_request,
             "requests": [self._request_view(row, compact=True, connection=connection, now=projection_now) for row in requests],
