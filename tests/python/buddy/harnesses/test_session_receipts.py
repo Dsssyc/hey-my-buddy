@@ -358,7 +358,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
 
     def test_checkpoint_receipts_batch_serialized_overflow_explicitly(self):
         from hey_my_buddy.buddy.roles.worker_services import _checkpoint_batch
-        from hey_my_buddy.buddy.roles.turn_io import canonical_json
+        from hey_my_buddy.json_codec import canonical_json
         # 32 accepted-but-pathological questions (control characters expand
         # sixfold) cannot fit one receipt: the batch is the longest serialized
         # prefix and the overflow is counted, never silently dropped.

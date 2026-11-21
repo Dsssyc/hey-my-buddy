@@ -27,7 +27,7 @@ from hey_my_buddy.blackboard.service.harness_health import HARNESSES as HEALTH_H
 from hey_my_buddy.blackboard.store.db import HARNESS_SCHEMA
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.discovery import native_environment
-from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
 from hey_my_buddy.buddy.harnesses.registry import (
     BUILT_IN, RUN_SEAMS, adapters as built_in_adapters, fast_evidence_is_top_level, worker_format,
 )

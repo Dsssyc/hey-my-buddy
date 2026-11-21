@@ -15,7 +15,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     provider_from_account,
     permission_sandbox_settings,
 )
-from hey_my_buddy.buddy.roles.turn_io import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 
 
 def flag_value(args: list[str], flag: str) -> str | None:

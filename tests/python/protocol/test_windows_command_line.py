@@ -15,7 +15,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import execution_args
 from hey_my_buddy.buddy.harnesses.claude import native_run as claude_run
 from hey_my_buddy.buddy.harnesses.claude.protocol import ClaudeProtocolError
 from hey_my_buddy.buddy.harnesses.codex import native_run as codex_run
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh_run
 from hey_my_buddy.buddy.harnesses.dsh.protocol import NativeError as DshNativeError
 from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode_run

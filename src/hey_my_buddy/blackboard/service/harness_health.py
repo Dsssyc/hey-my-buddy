@@ -9,8 +9,10 @@ from pathlib import Path
 import threading
 
 from ...paths import is_absolute_path
-from ..store.db import canonical_json, utc_now
-from ...errors import BoardError
+from ...json_codec import canonical_json
+from ..store.db import utc_now
+from ...errors import BoardError, CodexProtocolError
+from ...protocol.billing import UNKNOWN, fact
 from ...protocol.reasons import reason as make_reason
 from ...protocol.harness_names import HARNESS_NAMES as HARNESSES
 
@@ -70,6 +72,15 @@ def read_health(connection, harness):
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
     return {**record, 'permissions': permissions,
             'permissionsVerifiedVersion': PERMISSIONS_VERIFIED_VERSIONS[harness]}
+
+
+def for_provider(connection, harness: str, provider: str) -> dict:
+    """Only native metadata for this exact buddy may establish a label."""
+    health = read_health(connection, harness)
+    row = health.get("billingByProvider") or {}
+    if isinstance(row, dict) and isinstance(row.get(provider), dict):
+        return row[provider]
+    return fact(UNKNOWN, "unverified", health.get("checkedAt") or "")
 
 
 class HarnessHealth:
@@ -339,7 +350,6 @@ class HarnessHealth:
                 return
             db.execute('INSERT INTO harness_account_reads(harness,checked_at) VALUES(?,?) '
                        'ON CONFLICT(harness) DO UPDATE SET checked_at=excluded.checked_at', ('codex', now))
-        from ...buddy.harnesses.codex.protocol import CodexProtocolError
         billing = failure = None
         try:
             from ...buddy.harnesses.codex.account_probe import read
@@ -377,7 +387,6 @@ class HarnessHealth:
                 observed_at = utc_now()
                 billing_read = billing is not None
                 if billing is None:
-                    from ...protocol.billing import fact
                     billing = fact('unknown', 'codex/account-read', observed_at)
                 provider = billing.get('provider', 'unknown')
                 billing = {key: value for key, value in billing.items() if key != 'provider'}

@@ -21,17 +21,17 @@ from pathlib import Path
 from support import FIXTURE_CATALOG, BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks.inquiry import (
     observe,
 )
 
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, MAX_JOURNAL_BYTES
-from hey_my_buddy.buddy.harnesses.live import (
+from hey_my_buddy.protocol.live import (
     LiveCapabilities, LiveJournal, LiveObservation, LiveReply, LiveSnapshot, _journal_states,
 )
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy.paths import native_path
 

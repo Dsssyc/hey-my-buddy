@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ....errors import BoardError
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
-from ...roles.turn_io import canonical_json
+from ....json_codec import canonical_json
 from ..snapshot_mount import ObservedSnapshotCalls
 
 HARNESS = "codex"

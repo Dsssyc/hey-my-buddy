@@ -16,7 +16,7 @@ from buddy.harnesses.test_c_two_live import (
     QUEUED_REPLY, decode_reply, endpoint, inquiry_request,
 )
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt, verify_receipt
-from hey_my_buddy.buddy.harnesses import live as lv
+from hey_my_buddy.protocol import live as lv
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError

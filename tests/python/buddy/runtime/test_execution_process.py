@@ -23,7 +23,7 @@ from hey_my_buddy.protocol.execution import read_execution_endpoint
 from hey_my_buddy.protocol.process_identity import boot_id, _creation_time
 from hey_my_buddy.protocol import process_identity
 from hey_my_buddy.buddy.runtime import command
-from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
+from hey_my_buddy.protocol.live import LiveRequest, InquiryPayload
 from hey_my_buddy.paths import native_path
 
 
@@ -94,8 +94,8 @@ class ExecutionEndpointTests(unittest.TestCase):
     def test_harness_prepare_preflight_replays_the_same_command_across_ipc_tear_down(self):
         # A same-contract hot swap tears the old daemon down mid-call; the
         # idempotent preflight must replay its exact commandId, not fail.
-        from hey_my_buddy.blackboard.service import harness_health
         from hey_my_buddy.buddy.harnesses import runtime_selection
+        from hey_my_buddy.protocol import harness_names
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
             spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
@@ -117,7 +117,7 @@ class ExecutionEndpointTests(unittest.TestCase):
 
             client.call.side_effect = harness_prepare
             waits = []
-            with mock.patch.object(harness_health, "HARNESSES", {"dsh"}), \
+            with mock.patch.object(harness_names, "HARNESS_NAMES", {"dsh"}), \
                  mock.patch.object(runtime_selection, "bound") as bound, \
                  mock.patch.object(execution.control, "wait",
                                    side_effect=lambda seconds: waits.append(seconds)), \

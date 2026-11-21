@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from ..errors import BoardError
+
 ADAPTER_CAPABILITIES = {
     "command": ("command", "cancel", "artifacts", "deadline", "argv"),
     "decision": ("decision",),
@@ -207,6 +209,22 @@ def select_input_limit(harness: str, observed_version: str | None) -> InputLimit
 def adapter_capabilities(name: str) -> tuple[str, ...]:
     return (*ADAPTER_CAPABILITIES[name],
             *(f"permission:{level}" for level in PERMISSION_LEVELS.get(name, {})))
+
+
+def require_permission(buddy: dict | None, access: str) -> None:
+    """Reject an explicit Worker route that cannot run at the requested access.
+
+    An unresolved route is checked after selection.
+    """
+    if buddy is None:
+        return
+    name = buddy["harness"]
+    capability = f"permission:{access}"
+    if name in ADAPTER_CAPABILITIES and capability in adapter_capabilities(name):
+        return
+    raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not support the requested Worker permission",
+                     harness=name, access=access, requiredCapability=capability,
+                     missingCapabilities=[capability])
 
 
 def buddy_capabilities(harness: str, stored: list[str]) -> list[str]:

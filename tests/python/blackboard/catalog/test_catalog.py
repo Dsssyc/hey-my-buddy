@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.catalog import catalog
-from hey_my_buddy.buddy.harnesses.registry import capability_report, require_permission
+from hey_my_buddy.buddy.harnesses.registry import capability_report
+from hey_my_buddy.protocol.capabilities import require_permission
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError

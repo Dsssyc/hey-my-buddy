@@ -19,7 +19,7 @@ from ...protocol.input_failure import INPUT_REJECTED, input_failure, is_input_to
 from ...protocol.input_limit import check_prompt_input
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.c_two_live import CTwoLiveEndpoint
-from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
+from ...protocol.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.runtime_selection import environment_for, selected
 from ..harnesses.run_contract import (

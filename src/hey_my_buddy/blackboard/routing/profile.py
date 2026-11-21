@@ -9,7 +9,7 @@ from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...protocol import profile as files, schemas
 from ...protocol.owned_process import WorkingDirectoryRejected
-from ..store.db import canonical_json
+from ...json_codec import canonical_json
 from . import profile_data, router
 
 

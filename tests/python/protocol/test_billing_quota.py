@@ -56,7 +56,7 @@ class BillingTests(BoardTestCase):
         board = self.board()
         board.call("model_catalog_refresh", {})
         with board.store.db.read() as db:
-            from hey_my_buddy.protocol.billing import for_provider
+            from hey_my_buddy.blackboard.service.harness_health import for_provider
             self.assertEqual(for_provider(db, "dsh", "deepseek-official")["kind"], "metered")
         native = deepcopy(FIXTURE_CATALOG)
         provider = native["providers"][0]
@@ -65,7 +65,7 @@ class BillingTests(BoardTestCase):
         self.catalog_fixture(native)
         board.call("model_catalog_refresh", {})
         with board.store.db.read() as db:
-            from hey_my_buddy.protocol.billing import for_provider
+            from hey_my_buddy.blackboard.service.harness_health import for_provider
             self.assertEqual(for_provider(db, "zcode", "zhipu")["kind"], "subscription")
             self.assertEqual(for_provider(db, "zcode", "other")["kind"], "unknown")
 

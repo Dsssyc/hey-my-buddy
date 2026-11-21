@@ -59,7 +59,7 @@ class RouterPromptTests(DecisionTestCase):
         self.assertEqual("".join(pages), task)
         with board.store.db.read() as connection:
             dispatch = router_sequence.dispatch(connection, selected["runId"])
-        from hey_my_buddy.blackboard.store.db import sha256_text
+        from hey_my_buddy.json_codec import sha256_text
         self.assertEqual(document["inputSha256"], sha256_text(canonical_json(dispatch["document"])))
 
     def test_historical_protocol_19_dispatch_remains_readable_without_a_snapshot_file(self):

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from hey_my_buddy.blackboard.routing import router, router_sequence
 from hey_my_buddy.protocol import router_selection
 from hey_my_buddy.protocol import schemas
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from protocol.fixtures import mock_readonly
 from support import BoardTestCase

@@ -14,11 +14,11 @@ from types import SimpleNamespace
 
 from hey_my_buddy.buddy.harnesses.codex.native_run import _Classifier, _RunFacts, _checkpoint, execution_deadline
 from hey_my_buddy.buddy.harnesses.codex.protocol import (
-    CodexProtocolError,
     Connection,
     TurnEvidence,
     attempt_token_usage,
 )
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths,
@@ -28,7 +28,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     RunRequest,
     RunValue,
 )
-from hey_my_buddy.buddy.roles.turn_io import checkpoint_resumable, input_hash, validated_checkpoint
+from hey_my_buddy.protocol.turn_checkpoint import checkpoint_resumable, input_hash, validated_checkpoint
 from hey_my_buddy.errors import BoardError
 
 

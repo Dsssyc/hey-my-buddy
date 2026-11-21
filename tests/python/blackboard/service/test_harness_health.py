@@ -1022,7 +1022,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
 
     def test_ordinary_account_read_failure_records_its_reason_without_success_event(self):
         from hey_my_buddy.errors import BoardError
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         for error, reason in ((BoardError('ACCOUNT_QUERY_DENIED', 'fixture query denied'), 'ACCOUNT_QUERY_DENIED'),
                               (CodexProtocolError('native-rpc-error', 'fixture RPC denied'), 'native-rpc-error'),
                               (OSError('fixture read transport failed'), 'HARNESS_ACCOUNT_READ_FAILED')):
@@ -1050,7 +1050,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertNotIn('accountReadFailure', recovered)
 
     def test_account_wait_expiry_keeps_health_and_billing_then_retries(self):
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         billing = {'kind': 'metered', 'provider': 'openai', 'source': 'codex/account-read', 'observedAt': _stamp(0)}
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=billing):
             first = self.health.refresh('codex', force=True)
@@ -1107,7 +1107,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
     def test_confirmed_stop_with_account_data_failure_restores_health_and_records_failure(self):
         from hey_my_buddy.errors import BoardError
         from hey_my_buddy.buddy.harnesses.codex import account_probe
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         with patch.object(account_probe, 'read', side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'unknown stop')):
             self.assertNotEqual(self.health.refresh('codex', force=True)['status'], 'ready')
         with self.board.db.write() as db:

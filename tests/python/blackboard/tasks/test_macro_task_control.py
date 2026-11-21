@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from console.test_console import ConsoleTestCase
 from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
 from support import macro_summaries
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.errors import BoardError
 
 

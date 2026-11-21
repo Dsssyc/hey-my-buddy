@@ -24,7 +24,7 @@ from . import micro_task, projects, storage, worker_sessions
 from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE
 from .macro_task_deletion_progress import collect_skipped
 from ..service.harness_health import read_health
-from ..store.db import canonical_json
+from ...json_codec import canonical_json
 
 
 _TARGET_PATTERN = re.compile(r'(?:macro-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})\Z')

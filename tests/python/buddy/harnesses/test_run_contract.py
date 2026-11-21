@@ -195,7 +195,7 @@ class CodecRoundtripTests(unittest.TestCase):
                 self.assertEqual("permission:web" in buddy_capabilities(harness, []), "web" in declared)
 
     def test_undeclared_web_permission_is_refused(self):
-        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import require_permission
         from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
         for harness, declared in PERMISSION_LEVELS.items():
             if "web" in declared:
@@ -229,7 +229,7 @@ class CodecRoundtripTests(unittest.TestCase):
 
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
-        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import require_permission
         request = edited(full_request(Path(tempfile.gettempdir()).resolve()), harness="codex",
                          permission="full")
         require_permission({"harness": "codex"}, "full")
@@ -239,7 +239,7 @@ class CodecRoundtripTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
 
     def test_undeclared_full_worker_permission_is_refused(self):
-        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import require_permission
         from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
         with mock.patch.dict(PERMISSION_LEVELS, {"claude": {
                 level: declaration for level, declaration in PERMISSION_LEVELS["claude"].items()

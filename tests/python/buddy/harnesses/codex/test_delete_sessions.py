@@ -11,7 +11,7 @@ from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses.base import Adapter
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.codex import native_run
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.roles.run_execution import delete_sessions
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path

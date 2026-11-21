@@ -22,10 +22,11 @@ from unittest import mock
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 from private_acl import assert_private_path
 
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_files import read_text
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
-from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
+from hey_my_buddy.buddy.roles import controller, run_execution
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
@@ -578,7 +579,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(flag_value(argv, "--permission-prompt-tool"), "stdio")
         self.assertEqual(flag_value(argv, "--permission-mode"), "acceptEdits")
         from hey_my_buddy.buddy.harnesses.registry import worker_format
-        self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(worker_format("claude").schema))
+        self.assertEqual(flag_value(argv, "--json-schema"), canonical_json(worker_format("claude").schema))
         control = self.control(context)
         settings_path = Path(control["nativeRoot"], "settings.json")
         settings = json.loads(native_path(settings_path).read_text(encoding="utf-8"))

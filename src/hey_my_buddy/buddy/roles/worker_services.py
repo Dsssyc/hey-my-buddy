@@ -44,7 +44,7 @@ from ...protocol.session_reader import (
     PRIOR_SESSION_TOOL_NAMES, PriorSessionError, call_prior_session_tool, prior_session_tool_specs,
 )
 from ...protocol.turn_output import TURN_OUTPUT_VERSION, validate_outcome
-from .turn_io import canonical_json
+from ...json_codec import canonical_json
 from .prompts import worker_prompt
 from ..harnesses.session_receipts import (
     MAX_ANSWER_BYTES,

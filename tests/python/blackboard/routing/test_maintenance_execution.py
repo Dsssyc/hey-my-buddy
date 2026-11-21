@@ -14,7 +14,7 @@ from hey_my_buddy.blackboard.routing import maintenance_data, router
 from hey_my_buddy.blackboard.routing.maintenance import Scheduler
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination

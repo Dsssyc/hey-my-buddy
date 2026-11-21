@@ -47,7 +47,7 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError
 
@@ -80,7 +80,7 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
     """Use the actual owner and its in-process endpoint."""
     from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
-    from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+    from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
     endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness])
     # DSH creates its owner when the native turn starts; its endpoint must not
     # acquire a competing fixture consumer before that owner exists.
@@ -115,13 +115,13 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
 
 
 def fixture_request(endpoint, request, *, timeout_ms):
-    from hey_my_buddy.buddy.harnesses.live import LiveReply
+    from hey_my_buddy.protocol.live import LiveReply
     return LiveReply.model_validate_json(endpoint.request_local(
         request, timeout_ms=timeout_ms, deadline_monotonic=time.monotonic() + timeout_ms / 1000))
 
 
 def fixture_observe(endpoint, **kwargs):
-    from hey_my_buddy.buddy.harnesses.live import LiveSnapshot
+    from hey_my_buddy.protocol.live import LiveSnapshot
     if endpoint.fixture_bridge is not None:
         endpoint.fixture_bridge._publish()
     return LiveSnapshot.model_validate_json(endpoint.observe_local(**kwargs))
@@ -833,7 +833,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_native_events_reach_the_activity_callback_with_original_counts_and_order(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
@@ -876,7 +876,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
@@ -920,7 +920,7 @@ class WorkerSeamTests(MockNativeCase):
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
@@ -1278,7 +1278,7 @@ class ProducerContractTests(NativeRunCase):
 
     def test_activity_publisher_uses_real_normalization_order_and_throttle(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import ActivityPublisher
         request = self.fast_request("fixture")
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
@@ -1320,7 +1320,7 @@ class ProducerContractTests(NativeRunCase):
         bridge.activate("sess-live")
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveCapabilities, LiveRequest
         self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "realtime")
         reply = fixture_request(channel, LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
                                             payload=InquiryPayload(question_id="i-1",
@@ -1347,7 +1347,7 @@ class ProducerContractTests(NativeRunCase):
         # — replays through the channel with the verified answer text, not a
         # null where the structured answer object stood.
         import hashlib as _hashlib
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
@@ -1617,7 +1617,7 @@ class ProducerContractTests(NativeRunCase):
                          (True, None, 1, ()))
 
     def test_the_observation_reads_the_real_bridge_view_with_its_own_bounds(self):
-        from hey_my_buddy.buddy.harnesses.live import LiveObservation
+        from hey_my_buddy.protocol.live import LiveObservation
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
@@ -1725,7 +1725,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertTrue(entry.at)
 
     def test_a_refused_ask_carries_the_transport_fact_and_the_specific_code(self):
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",

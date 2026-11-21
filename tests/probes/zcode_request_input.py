@@ -50,7 +50,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from hey_my_buddy.buddy.roles.turn_io import canonical_json  # noqa: E402
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.harnesses.zcode.config import cli_command, load_runtime_preferences, provider_paths  # noqa: E402
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection, NativeError  # noqa: E402
 from hey_my_buddy.private_dirs import open_regular_fd  # noqa: E402

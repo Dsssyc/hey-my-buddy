@@ -37,7 +37,7 @@ class EvaluationStore:
                 for row in all_buddies
                 if row["available"] or row["buddy_id"] in configured_ids
             ]
-            from ...protocol.billing import for_provider
+            from ..service.harness_health import for_provider
             from ..routing.quota_routing import cooling
             for buddy in buddies:
                 buddy["billing"] = for_provider(connection, buddy["harness"], buddy["provider"])

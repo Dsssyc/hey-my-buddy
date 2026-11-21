@@ -22,9 +22,9 @@ import unittest
 from unittest import mock
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.run_contract import RunResult
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.paths import native_path
 
@@ -47,7 +47,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         fields = {"version": 1,
                   **{key: context.turn_input[key]
                      for key in ("taskId", "attemptId", "generation", "turnId")},
-                  "inputSha256": turn_io.input_hash(context.turn_input),
+                  "inputSha256": input_hash(context.turn_input),
                   "nativeTurnStarted": True, "nativeTurnStatus": status,
                   "bindingSaved": True, "eventSeq": 2,
                   "sessionId": result_fields["nativeIdentity"]["sessionId"],

@@ -13,7 +13,8 @@ from admission import admit_execution
 from support import BoardTestCase
 
 from hey_my_buddy.buddy.harnesses.codex.native_run import _NativeInquiry, prepare_inquiry_services
-from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtocolError, TurnEvidence
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, TurnEvidence
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.roles.worker_services import ANSWER_SCHEMA
 

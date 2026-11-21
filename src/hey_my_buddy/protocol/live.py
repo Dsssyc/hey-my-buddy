@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Optional
 
-from ...protocol.internal_models import (
+from .internal_models import (
     FrozenJson,
     Identifier,
     InternalModel,
@@ -15,9 +15,9 @@ from ...protocol.internal_models import (
     check_text,
     fail,
 )
-from ...protocol.inquiry import MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS
-from .run_contract import RunIdentity
-from .session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRIES as MAX_INQUIRIES_PER_RUN, MAX_QUESTION_BYTES
+from .inquiry import MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS
+from .run_identity import RunIdentity
+from .schemas import MAX_ANSWER_BYTES, MAX_INQUIRIES_PER_RUN, MAX_QUESTION_BYTES
 from pydantic import Field, model_validator
 
 #: The suggested whole-frame bound across runs; it holds every bounded

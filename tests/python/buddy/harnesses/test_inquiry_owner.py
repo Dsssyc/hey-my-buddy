@@ -17,7 +17,7 @@ from unittest import mock
 from hey_my_buddy import locking
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import inquiry_bridge as ib
-from hey_my_buddy.buddy.harnesses import live as lv
+from hey_my_buddy.protocol import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.harnesses.dsh.protocol import NativeError, RootTurnEvidence

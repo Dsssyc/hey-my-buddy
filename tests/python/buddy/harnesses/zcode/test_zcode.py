@@ -13,7 +13,7 @@ from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixtur
 import c_two as cc
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest, LiveSnapshot
+from hey_my_buddy.protocol.live import InquiryPayload, LiveReply, LiveRequest, LiveSnapshot
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.paths import native_path

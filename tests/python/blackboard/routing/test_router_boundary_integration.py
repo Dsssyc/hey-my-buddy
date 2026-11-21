@@ -11,7 +11,7 @@ from unittest.mock import patch
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 from hey_my_buddy.blackboard.routing.router_boundary_data import _candidate_problem, _continuation_context, router_trials, routing_boundary

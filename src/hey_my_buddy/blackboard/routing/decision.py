@@ -27,7 +27,7 @@ from . import evidence, router, router_failover, router_sequence, selection_poli
 from ...protocol import router_selection, tool_evidence
 from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason, reason_from_json
-from ..store.db import canonical_json, sha256_text
+from ...json_codec import canonical_json, sha256_text
 from ...errors import BoardError
 
 DECISION_ADAPTER = "decision"
@@ -413,7 +413,7 @@ class DecisionCoordinator:
                     "kind": kind,
                     "status": status,
                     "taskId": task_id,
-                    **router.routing_facts({**request, **facts}),
+                    **router_selection.routing_facts({**request, **facts}),
                     **({"routerCalled": False} if facts.get("routerCalled") is False else {}),
                 },
             )
@@ -1490,7 +1490,7 @@ class DecisionCoordinator:
             # False only for a recorded program selection; a record predating that
             # path stays null rather than claiming a Router ran.
             "routerCalled": facts.get("routerCalled"),
-            **router.routing_facts({**request, **facts}, actor=actor),
+            **router_selection.routing_facts({**request, **facts}, actor=actor),
             "usage": (output or {}).get("usage"),
             "nativeIdentity": (output or {}).get("nativeIdentity"),
             "stopEvidence": (output or {}).get("stopEvidence"),

@@ -1,7 +1,7 @@
 """Read the same digest-bound routing data the execution receives."""
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.private_files import publish_snapshot, read_snapshot
-from hey_my_buddy.blackboard.store.db import sha256_text
+from hey_my_buddy.json_codec import sha256_text
 from hey_my_buddy.protocol import router_selection
 
 

@@ -44,7 +44,9 @@ from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt,
 )
-from .turn_io import input_hash, private_json, canonical_json
+from ...protocol.turn_checkpoint import checkpoint_resumable, input_hash, validated_checkpoint
+from .turn_io import private_json
+from ...json_codec import canonical_json
 
 WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
@@ -438,7 +440,7 @@ def worker_request(control: dict, module):
     mount_prior = (mode == "reconstructed-new-session" and bool(prior_sessions)
                    and not (control["harness"] == "claude" and permission == "web"))
     if format is None:
-        from ..harnesses.live import EXISTING_CAPABILITIES
+        from ...protocol.live import EXISTING_CAPABILITIES
         checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
         tools = worker_services.session_tools(delegation_authority=delegation_authority, checkpoint=checkpoint,
                                               prior_sessions=mount_prior)
@@ -858,7 +860,7 @@ class WorkerRunExecutor:
         if verdict is not None:
             payload["wrapUpDelivered"] = verdict["wrapUpDelivered"]
             payload["graceExpired"] = verdict["graceExpired"]
-        checkpoint = turn_io.validated_checkpoint(payload, context.turn_input) if shutdown else None
+        checkpoint = validated_checkpoint(payload, context.turn_input) if shutdown else None
         if checkpoint is None:
             payload.pop("nativeCheckpoint", None)
             if any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
@@ -918,7 +920,7 @@ class WorkerRunExecutor:
             "resumable": bool(facts.get("bindingPresent", True) and shutdown
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
-                                   and turn_io.checkpoint_resumable(payload, checkpoint)
+                                   and checkpoint_resumable(payload, checkpoint)
                                    or paused_interruption and facts.get("bindingPresent") is True))}
         if self.receipt_options.capture_session_from_turn:
             payload["nativeSession"]["sessionIdSource"] = (

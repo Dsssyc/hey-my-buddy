@@ -50,13 +50,3 @@ def dsh_provider(provider: object, observed_at: str) -> dict:
     provider identity's funding is not established."""
     return fact("metered" if provider == "deepseek-official" else UNKNOWN,
                 "dsh/provider-identity", observed_at)
-
-
-def for_provider(connection, harness: str, provider: str) -> dict:
-    """Only native metadata for this exact buddy may establish a label."""
-    from ..blackboard.service.harness_health import read_health
-    health = read_health(connection, harness)
-    row = health.get("billingByProvider") or {}
-    if isinstance(row, dict) and isinstance(row.get(provider), dict):
-        return row[provider]
-    return fact(UNKNOWN, "unverified", health.get("checkedAt") or "")

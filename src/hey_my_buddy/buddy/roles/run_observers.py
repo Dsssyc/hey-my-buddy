@@ -30,7 +30,7 @@ from typing import Mapping
 from ...errors import BoardError
 from ...protocol.router_selection import FORMAT_ERROR_CODES, validate_answer
 from .structured_call import correction_code
-from .turn_io import canonical_json
+from ...json_codec import canonical_json
 from ..harnesses.run_contract import FEEDBACK_CONTINUE, FEEDBACK_STOP, RunFeedback
 
 #: The correction suffix of the fast structured call, verbatim: the correction

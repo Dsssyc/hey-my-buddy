@@ -19,7 +19,7 @@ from hey_my_buddy.buddy.runtime.execution import Execution
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.harnesses.run_contract import RunResult, RunEnd, ResultBuddy, StopEvidence, StopLayer
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt

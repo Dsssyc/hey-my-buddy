@@ -5,6 +5,7 @@ those boundaries. Strict decoding rejects duplicate keys and non-finite values.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from typing import Any
@@ -13,6 +14,10 @@ from typing import Any
 def canonical_json(value: object) -> str:
     """The project's deterministic bounded JSON text for one value."""
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _no_duplicates(items: list[tuple[str, Any]]) -> dict:
@@ -49,4 +54,4 @@ def decode_strict_json(raw: str | bytes) -> Any:
 
 
 
-__all__ = ["canonical_json", "decode_strict_json"]
+__all__ = ["canonical_json", "decode_strict_json", "sha256_text"]

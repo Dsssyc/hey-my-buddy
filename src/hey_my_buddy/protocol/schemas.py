@@ -15,7 +15,7 @@ from typing import Any
 
 from ..paths import is_absolute_path
 from .harness_names import HARNESS_NAMES, ADAPTER_NAMES as ADAPTERS
-from ..blackboard.store.db import canonical_json, sha256_text
+from ..json_codec import canonical_json, sha256_text
 from ..errors import BoardError
 
 FINGERPRINT_VERSION_CURRENT = 2

@@ -16,7 +16,7 @@ from typing import Any, Mapping
 from ...json_codec import canonical_json
 from ...protocol import activity as activity_protocol
 from ...protocol.internal_models import FrozenJson, check_text
-from .live import (
+from ...protocol.live import (
     LIVE_FIELDS, MAX_CLOSE_REASON_BYTES, MAX_INQUIRIES_PER_RUN, MAX_LIVE_FRAME_BYTES,
     InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
     LiveRequest, LiveSnapshot,

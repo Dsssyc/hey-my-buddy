@@ -6,7 +6,7 @@ import time
 import unittest
 
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
-from hey_my_buddy.buddy.harnesses import live as lv
+from hey_my_buddy.protocol import live as lv
 from hey_my_buddy.json_codec import decode_strict_json
 from buddy.harnesses.test_c_two_live import identity, inquiry_request
 

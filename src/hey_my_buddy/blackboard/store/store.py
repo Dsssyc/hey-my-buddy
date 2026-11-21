@@ -30,10 +30,9 @@ from .db import (
     TERMINAL_TASK_STATES,
     TERMINATION_REASONS,
     Database,
-    canonical_json,
-    sha256_text,
     utc_now,
 )
+from ...json_codec import canonical_json, sha256_text
 from ...errors import BoardError
 from .work import autonomous_tasks
 

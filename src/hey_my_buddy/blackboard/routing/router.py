@@ -214,18 +214,6 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     return RouterResolution(None, None, None, facts, tuple(inspections), problem)
 
 
-def routing_facts(request: dict, *, actor: dict | None = None, include_wait: bool = True) -> dict:
-    facts = {key: request.get(key) for key in
-             ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-              "routingMode", "routerRetryIntervalSeconds", "routerProblem")}
-    if include_wait:
-        facts["modelResponseWaitSeconds"] = request.get("modelResponseWaitSeconds")
-    if actor is not None:
-        facts.update(routerBuddyId=actor["buddyId"], routerBuddy=actor["buddy"],
-                     routerIndex=actor["routerIndex"])
-    return facts
-
-
 def selection_source(request: dict) -> str:
     """The recorded selection source of one routing request.
 

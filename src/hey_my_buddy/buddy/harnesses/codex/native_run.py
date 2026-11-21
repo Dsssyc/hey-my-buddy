@@ -44,8 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ....errors import BoardError
-from ....json_codec import decode_strict_json
+from ....errors import BoardError, CodexProtocolError
+from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.reasons import reason as make_reason
 from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
@@ -59,7 +59,7 @@ from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
 from ....paths import native_path
-from ...roles.turn_io import canonical_json, private_json
+from ...roles.turn_io import private_json
 from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
@@ -121,7 +121,6 @@ from .config import (
     native_provider,
 )
 from .protocol import (
-    CodexProtocolError,
     Connection,
     TurnEvidence,
     attempt_token_usage,

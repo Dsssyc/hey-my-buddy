@@ -31,7 +31,7 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.controller import worker_executor
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import attempt_root
 from hey_my_buddy.paths import native_path
 

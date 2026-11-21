@@ -20,7 +20,8 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtocolError
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection
+from hey_my_buddy.errors import CodexProtocolError
 
 
 CHECKOUT = Path(__file__).resolve().parents[2]

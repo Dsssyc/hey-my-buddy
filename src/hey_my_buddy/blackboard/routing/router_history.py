@@ -14,7 +14,8 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from ..store.db import canonical_json, utc_now
+from ...json_codec import canonical_json
+from ..store.db import utc_now
 from ...errors import BoardError
 
 OUTCOMES = ("answered", "no_answer")

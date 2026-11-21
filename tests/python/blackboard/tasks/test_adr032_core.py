@@ -7,7 +7,7 @@ from unittest import mock
 
 from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 
 
 class CoreContractTests(WorkflowTestCase):

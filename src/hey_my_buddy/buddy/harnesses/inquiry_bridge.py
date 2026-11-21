@@ -20,7 +20,7 @@ from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BY
 from ...errors import BoardError
 from ...json_codec import canonical_json
 from ...timestamps import utc_now as _now
-from .live import (
+from ...protocol.live import (
     LiveJournal,
     LiveObservation,
     LiveReply,

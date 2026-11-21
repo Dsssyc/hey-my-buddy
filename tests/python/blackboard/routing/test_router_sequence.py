@@ -14,7 +14,8 @@ import unittest
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.routing import router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import Database, canonical_json
+from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 
 T0 = "2026-01-01T00:00:00.000Z"

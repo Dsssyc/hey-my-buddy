@@ -29,7 +29,7 @@ from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.buddy.runtime.execution import BUDGET, ModelResponseWait
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles.turn_io import private_json
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import directory_mode
 
 HARNESSES = ('codex', 'claude', 'dsh', 'zcode')

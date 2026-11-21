@@ -74,7 +74,7 @@ def _freeze_review_run(harness, context, request, *, mutation, stopped, shutdown
         RunResult)
     from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
     from hey_my_buddy.buddy.roles import run_execution
-    from hey_my_buddy.buddy.roles.turn_io import canonical_json
+    from hey_my_buddy.json_codec import canonical_json
     from hey_my_buddy.private_files import publish_bytes
     from hey_my_buddy.private_dirs import context_root, ensure_private_dir
 

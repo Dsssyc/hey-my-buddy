@@ -46,7 +46,7 @@ from ..harnesses.base import AdapterOutcome
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Text, fail
-from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
+from ...protocol.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
 from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, is_retryable, REFUSED
@@ -642,7 +642,7 @@ class Execution:
     def _execute_guarded(
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
-        from ...blackboard.service.harness_health import HARNESSES
+        from ...protocol.harness_names import HARNESS_NAMES
         from ..harnesses.runtime_selection import bound
 
         name = spec['adapter']
@@ -653,7 +653,7 @@ class Execution:
         holder['preflightControl'] = control
         control.start()
         try:
-            if name not in HARNESSES:
+            if name not in HARNESS_NAMES:
                 return self._execute_selected(claim, task, spec, attempt, directory, holder)
             history = []
             record = None
@@ -745,7 +745,7 @@ class Execution:
                 shutdown_confirmed=True, stop_initiator=(view or {}).get('stopInitiator'))}, directory)
 
     def _review_unavailable(self, claim, directory, history, code):
-        from ...blackboard.routing.router import routing_facts
+        from ...protocol.router_selection import routing_facts
         return self.receipt(claim, {'status': 'failed', 'result': {
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',

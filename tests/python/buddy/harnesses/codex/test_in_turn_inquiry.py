@@ -13,7 +13,8 @@ from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.native_run import (
     _NativeInquiry, RunServices, prepare_inquiry_services, run,
 )
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, TurnEvidence
+from hey_my_buddy.errors import CodexProtocolError
+from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE, RunContinuation
 from hey_my_buddy.buddy.roles.worker_services import ANSWER_SCHEMA

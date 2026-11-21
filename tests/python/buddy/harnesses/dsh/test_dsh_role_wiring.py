@@ -22,13 +22,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
+from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam, worker_format
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.harnesses.run_contract import (
     RunResult)
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor, worker_stop
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -259,7 +260,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(request.identity, handle.role_run_identity)
         self.assertEqual(request.permission, "write")
         self.assertNotIn("frozenAccount", request.to_payload())
-        self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
+        self.assertEqual(request.identity.input_sha256, input_hash(context.turn_input))
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"], result.value.parsed.value)
         provenance = turn["provenance"]
@@ -283,7 +284,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
     def test_an_answered_host_question_flows_through_the_micro_task_turn(self):
         import threading
         import time as time_module
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveReply, LiveRequest
         context = self.context()
         self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")

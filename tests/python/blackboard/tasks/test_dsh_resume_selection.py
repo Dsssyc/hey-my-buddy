@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase

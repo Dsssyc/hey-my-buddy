@@ -5,7 +5,7 @@ from unittest.mock import patch
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing import router_sequence
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from support import enable_fixture_buddy, macro_summaries
 

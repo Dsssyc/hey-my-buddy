@@ -21,7 +21,7 @@ from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.catalog import buddy_state
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"

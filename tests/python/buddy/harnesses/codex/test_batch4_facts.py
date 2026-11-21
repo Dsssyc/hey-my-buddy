@@ -11,7 +11,8 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.controller import STRICT_RESULT_BYTES
-from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtocolError, TurnEvidence
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, TurnEvidence
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )

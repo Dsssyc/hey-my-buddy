@@ -156,23 +156,6 @@ def capability_report() -> dict:
     return report
 
 
-def require_permission(buddy: dict | None, access: str) -> None:
-    """Reject an explicit Worker route that cannot run at the requested access.
-
-    An unresolved route is checked after selection.
-    """
-    if buddy is None:
-        return
-    name = buddy["harness"]
-    capability = f"permission:{access}"
-    native = adapters().get(name)
-    if native is not None and capability in native.capabilities:
-        return
-    raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not support the requested Worker permission",
-                     harness=name, access=access, requiredCapability=capability,
-                     missingCapabilities=[capability])
-
-
 def local_capabilities() -> list[str]:
     """Capabilities declared by the available execution adapters."""
     values = set()
@@ -201,6 +184,5 @@ __all__ = [
     "capability_report",
     "local_capabilities",
     "native_operation",
-    "require_permission",
     "run_seam",
 ]

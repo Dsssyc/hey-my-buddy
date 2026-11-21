@@ -14,7 +14,7 @@ from unittest import mock
 from blackboard.tasks.test_workflow_real import BUDDY
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError

@@ -10,7 +10,7 @@ from .protocol import Connection
 from .config import INIT_CLIENT
 from ....protocol.owned_process import owned_popen
 from ....protocol.billing import codex_account, fact
-from ....blackboard.store.db import utc_now
+from ....timestamps import utc_now
 from ..discovery import native_environment
 from ....errors import BoardError
 
