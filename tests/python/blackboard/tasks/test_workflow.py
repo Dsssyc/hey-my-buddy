@@ -12,6 +12,7 @@ from admission import admit_board, admit_store
 import json
 import sqlite3
 import os
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from support import BoardTestCase, FakeClock, enable_fixture_buddy
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.cli import cli_views
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 
 NONCE = "n" * 16
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -940,6 +942,103 @@ class LateCancellationTests(WorkflowTestCase):
         self.assertEqual(view["state"], "cancelled")
         self.assertEqual(view["currentTurn"]["state"], "failed")
         self.assertFalse(any(row["kind"] in ("output", "partial-output") for row in view["artifacts"]))
+
+class PriorSessionClaimTests(WorkflowTestCase):
+    def test_admission_freezes_only_this_run_prior_attempts(self):
+        board = self.board()
+        run = self.submit(board, create_macro={"title": "Session history", "goal": "Continue the work"})
+        run_id = run["runId"]
+        initial = self.claim(board, run_id=run_id)
+        first = initial["claim"]
+        self.assertEqual(first["turn"]["priorSessions"], [])
+        first_path = Path(first["sessionRecordPath"])
+        first_path.parent.mkdir(parents=True, exist_ok=True)
+        first_path.touch()
+        self.finish_turn(board, initial, disposition="attention")
+        other = self.submit(board, macroTaskId=run["macroTaskId"], request_id="other", kind="worktree")
+        other_claim = self.claim(board, run_id=other["runId"])
+        Path(other_claim["claim"]["sessionRecordPath"]).touch()
+        self.finish_turn(board, other_claim)
+
+        view = board.call("workflow_get", {"runId": run_id})
+        self.continue_run(board, view)
+        store = board.store
+        first_attempt_id = first["attempt"]["attemptId"]
+        other_buddy = {"harness": "codex", "provider": "openai", "model": "gpt-5.4", "effort": "high"}
+        # Exercise historical forms together without manufacturing additional
+        # live executions or relying on a harness to fail at a specific point.
+        with store.db.write() as connection:
+            attempt = dict(connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (first_attempt_id,)).fetchone())
+            turn = dict(connection.execute("SELECT * FROM workflow_turns WHERE attempt_id=?", (first_attempt_id,)).fetchone())
+            for index, state, mode in (
+                (2, "interrupted", "available"), (3, "failed", "stopped"),
+                (4, "rejected", "available"), (5, "failed", "unintegrated"),
+                (6, "failed", "missing"), (7, "failed", "ungrouped"),
+            ):
+                attempt_id, turn_id = f"prior-{index}", f"turn-{index}"
+                adapter = "command" if mode == "unintegrated" else other_buddy["harness"]
+                group = None if mode == "ungrouped" else attempt["session_group_id"]
+                path = first_path.with_name(attempt_id + ".jsonl")
+                result = None
+                if mode == "available":
+                    path.touch()
+                if mode == "stopped":
+                    result = json.dumps({"result": {"sessionRecordFailure": {
+                        "code": "session-record-write-failed", "params": {"message": str(path)},
+                    }}})
+                connection.execute(
+                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
+                    " adapter,session_group_id,result_json,result_form,started_at,finished_at,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (attempt_id, run_id, index, "fixture", "finished", adapter, group, result,
+                     "current-report-v2" if result else None, attempt["started_at"], attempt["finished_at"],
+                     attempt["created_at"], attempt["updated_at"]),
+                )
+                turn_input = json.loads(turn["input_json"])
+                turn_input.update(attemptId=attempt_id, turnId=turn_id, generation=index)
+                turn_input["context"]["buddy"] = other_buddy
+                connection.execute(
+                    "INSERT INTO workflow_turns(turn_id,run_id,attempt_id,generation,turn_index,resume_mode,"
+                    " input_json,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (turn_id, run_id, attempt_id, index, index, turn["resume_mode"], json.dumps(turn_input),
+                     turn["workspace_id"], turn["workspace_manifest_sha256"], turn["access"],
+                     turn["expected_seconds"], state, turn["created_at"], turn["updated_at"]),
+                )
+
+        admitted = self.claim(board, run_id=run_id)["claim"]
+        manifest = admitted["turn"]["priorSessions"]
+        self.assertEqual(
+            [(item["attemptId"], item["turnState"], item["unavailableReason"], item["recordAvailable"]) for item in manifest],
+            [("prior-7", "failed", "not-recorded", False), ("prior-6", "failed", "not-recorded", False),
+             ("prior-5", "failed", "not-integrated", False), ("prior-3", "failed", "stopped", False),
+             ("prior-2", "interrupted", None, True), (first_attempt_id, "returned", None, True)],
+        )
+        interrupted, returned = manifest[-2:]
+        self.assertEqual({key: interrupted[key] for key in other_buddy}, other_buddy)
+        self.assertEqual({key: returned[key] for key in BUDDY}, BUDDY)
+        self.assertEqual(returned["disposition"], "attention")
+        self.assertEqual(returned["turnId"], first["turn"]["turnId"])
+        self.assertEqual(returned["recordPath"], str(first_path))
+        self.assertEqual(manifest[3]["stopped"], {"code": "session-record-write-failed"})
+        self.assertTrue(all(item["recordPath"] is None for item in manifest[:4]))
+
+        context = ExecutionContext(run_id, admitted["attempt"]["attemptId"], admitted["attempt"]["generation"],
+                                   {}, board.directory, {}, {}, turn=admitted["turn"])
+        self.assertEqual(context.prior_sessions, manifest)
+        context.prior_sessions.clear()
+        first_path.unlink()
+        self.assertEqual(context.prior_sessions, manifest)
+        self.assertTrue(context.prior_sessions[-1]["recordAvailable"])
+        with store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions VALUES(?, 'macro-task', ?)", ("deletion", run["macroTaskId"]),
+            )
+            deleted = store.workflow.prior_sessions_for_turn(connection, {"run_id": run_id}, context.attempt_id)
+        self.assertEqual([item["attemptId"] for item in deleted], [item["attemptId"] for item in manifest])
+        self.assertTrue(all(not item["recordAvailable"] and item["recordPath"] is None
+                            and item["unavailableReason"] == "deleted" for item in deleted))
+
 
 class ContinuationWorkspaceTests(WorkflowTestCase):
     def test_continuation_prepares_a_new_manifest_from_the_sealed_output(self):

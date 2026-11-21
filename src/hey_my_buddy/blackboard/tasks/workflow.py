@@ -32,8 +32,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from ...paths import is_absolute_path
+from ...paths import is_absolute_path, native_path
 from ...protocol import schemas
+from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -4755,6 +4756,61 @@ class WorkflowCoordinator:
                 "nativeSession": {"harness": "dsh", "sessionId": session_id,
                                   "storageOwner": "hey-my-buddy-micro-task", "resumable": True}}
 
+    def prior_sessions_for_turn(self, connection, run_row, current_attempt_id: str) -> list[dict]:
+        """Freeze the prior-attempt allowlist for this execution's private startup."""
+        run_id = run_row["run_id"]
+        group_id = macro_tasks.group_for_task(connection, run_id)
+        deleting = connection.execute(
+            "SELECT 1 FROM macro_task_deletions WHERE target_id=?", (group_id,),
+        ).fetchone() is not None
+        rows = connection.execute(
+            """SELECT t.turn_id, t.turn_index, t.state, t.input_json, a.attempt_id,
+                      COALESCE(a.model_harness, a.adapter) AS harness, a.session_group_id,
+                      a.result_json, a.started_at, a.finished_at
+                 FROM workflow_turns t JOIN attempts a ON a.attempt_id = t.attempt_id
+                WHERE t.run_id = ? AND t.attempt_id != ? AND t.state != 'rejected'
+                ORDER BY t.turn_index DESC""",
+            (run_id, current_attempt_id),
+        )
+        sessions = []
+        for row in rows:
+            result = self.result_payload(json.loads(row["result_json"]) if row["result_json"] is not None else None)
+            stopped = result.get("sessionRecordFailure")
+            buddy = turn_buddy(row["input_json"])
+            path = None
+            if deleting:
+                unavailable = "deleted"
+            elif row["session_group_id"] is None:
+                unavailable = "not-recorded"
+            elif row["harness"] not in PERMISSION_LEVELS:
+                unavailable = "not-integrated"
+            else:
+                record = private_dirs.session_record_path(self.board.directory, row["session_group_id"], row["attempt_id"])
+                if native_path(record).exists():
+                    path = str(record)
+                    unavailable = None
+                else:
+                    unavailable = "stopped" if stopped is not None else "not-recorded"
+            sessions.append({
+                "turnIndex": row["turn_index"],
+                "turnId": row["turn_id"],
+                "attemptId": row["attempt_id"],
+                "turnState": row["state"],
+                "disposition": result["turn"]["outcome"]["disposition"] if row["state"] == "returned" else None,
+                "harness": row["harness"],
+                "provider": buddy["provider"],
+                "model": buddy["model"],
+                "effort": buddy["effort"],
+                "startedAt": row["started_at"],
+                "finishedAt": row["finished_at"],
+                "recordAvailable": path is not None,
+                "unavailableReason": unavailable,
+                "recordPath": path,
+                # Filesystem diagnostics may contain private paths.
+                "stopped": {"code": stopped["code"]} if stopped is not None else None,
+            })
+        return sessions
+
     def begin_turn(self, connection, *, task, attempt_id: str, generation: int, spec: dict, now: str,
                    stash_facts: dict | None = None) -> dict | None:
         """Create the durable turn and its scoped credential inside the claim transaction."""
@@ -4951,6 +5007,7 @@ class WorkflowCoordinator:
             "resumeMode": resume_mode,
             "inputSha256": sha256_text(input_json),
             "input": turn_input,
+            "priorSessions": self.prior_sessions_for_turn(connection, run_row, attempt_id),
             "credential": credential,
             "runId": run_row["run_id"],
         }

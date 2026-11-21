@@ -62,6 +62,11 @@ class ExecutionContext:
     def turn_id(self) -> str | None:
         return self.turn["turnId"] if self.turn is not None else None
 
+    @property
+    def prior_sessions(self) -> list[dict]:
+        """The service-frozen allowlist for historical session reads."""
+        return list(self.turn.get("priorSessions") or ()) if self.turn is not None else []
+
     def task_file(self) -> Path:
         return self.directory / "task.txt"
 
