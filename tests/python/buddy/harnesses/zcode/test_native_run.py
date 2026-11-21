@@ -1247,6 +1247,21 @@ class NoToolReverseRequestTests(unittest.TestCase):
                     self.assertEqual(unsupported[0]["kind"], "unsupported-native-request")
                     self.assertEqual(unsupported[0]["method"], "interaction/requestProviderRuntimeHeaders")
                     self.assertIn("at", unsupported[0])
+        for no_tools in (False, True):
+            with self.subTest(official_mcp_auth_no_tools=no_tools):
+                denied = []
+                unsupported = []
+                connection.no_tools = no_tools
+                connection.attention = denied.append
+                connection.on_unsupported = unsupported.append
+                connection.send = mock.Mock()
+                connection.messages.put({"id": 8, "method": "interaction/requestOfficialMcpAuthHeaders",
+                                         "params": {"mcpKey": "sites", "pluginId": "zcode-site@zcode-plugins-official"}})
+                connection.pump()
+                self.assertEqual(connection.send.call_args.args[0]["error"]["code"], -32601)
+                self.assertEqual(denied, [])
+                self.assertEqual(unsupported[0]["kind"], "unsupported-native-request")
+                self.assertEqual(unsupported[0]["method"], "interaction/requestOfficialMcpAuthHeaders")
 
 
 class ProducerContractTests(NativeRunCase):

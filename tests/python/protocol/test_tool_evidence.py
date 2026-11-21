@@ -673,6 +673,39 @@ class JudgeToolEvidenceTests(unittest.TestCase):
                 package = collect(events, binding=binding)
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR), expected)
 
+    def test_codex_none_allows_code_mode_dispatch_only_when_session_service_mounted(self):
+        binding = {**BINDING, "harness": "codex"}
+        dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
+        query = settled_events("other", call_id="q1", tool="query_task")
+        verified = {(canonical_json(IDENTITY), "q1")}
+        # Mounted snapshot service: complete exec + verified snapshot query passes.
+        mounted = collect(dispatch + query, binding=binding,
+                          tools=("query_task",), verified=verified)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(mounted, "none", state_dir=STATE_DIR))
+        # Unmounted pure none: exec remains strictly forbidden.
+        unmounted = collect(dispatch, binding=binding)
+        self.assertEqual(tool_evidence.judge_tool_evidence(unmounted, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # Non-Codex harnesses never get the Codex code-mode dispatcher allowance.
+        other_harness = collect(dispatch + query, binding=BINDING,
+                                tools=("query_task",), verified=verified)
+        self.assertEqual(tool_evidence.judge_tool_evidence(other_harness, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # Nested forbidden or unverified calls inside exec still fail closed.
+        for label, extra, expected in (
+            ("unverified-query", query, tool_evidence.TOOLS_FORBIDDEN),
+            ("command", settled_events("execute", call_id="nested", tool="commandExecution"),
+             tool_evidence.TOOLS_FORBIDDEN),
+            ("web", settled_events("fetch", call_id="nested", tool="webSearch"),
+             tool_evidence.TOOLS_FORBIDDEN),
+            ("unsettled-exec", [], tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
+        ):
+            with self.subTest(label=label):
+                events = (dispatch[:1] + query) if label == "unsettled-exec" else (dispatch + extra)
+                pkg = collect(events, binding=binding, tools=("query_task",),
+                              verified=verified if label == "unsettled-exec" else ())
+                self.assertEqual(tool_evidence.judge_tool_evidence(pkg, "none", state_dir=STATE_DIR), expected)
+
     def test_every_other_category_is_forbidden_at_read_level(self):
         for category in ("edit", "delete", "move", "switch_mode", "think", "other"):
             with self.subTest(category=category):

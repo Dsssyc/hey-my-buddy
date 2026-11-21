@@ -91,6 +91,13 @@ for line in sys.stdin:
               'params':{'sessionId':f's-{session}','scope':'runtime-materialization'}})
         reply = json.loads(sys.stdin.readline())
         Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']), encoding='utf-8', newline='\\n')
+        if case.startswith('snapshot-'):
+            send({'method':'session/lifecycle/changed','params':{'sessionId':f's-{session}','state':'starting','generation':1,'revision':1,'lastError':None}})
+            send({'id':f'official-auth-{session}','method':'interaction/requestOfficialMcpAuthHeaders',
+                  'params':{'mcpKey':'sites','pluginId':'zcode-site@zcode-plugins-official'}})
+            auth_reply = json.loads(sys.stdin.readline())
+            assert auth_reply['error']['code'] == -32601
+            send({'method':'session/lifecycle/changed','params':{'sessionId':f's-{session}','state':'ready','generation':1,'revision':2,'lastError':None}})
         if case == 'preference-correct' and session == 1:
             settings = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/setting.json'
             settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}), encoding='utf-8', newline='\\n')

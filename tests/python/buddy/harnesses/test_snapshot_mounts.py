@@ -58,17 +58,42 @@ class CodexSnapshotTests(codex.SeamCase):
         self.assertNotIn(request.input_text, trace["turns"][1]["input"][0]["text"])
 
 
-    def test_code_mode_dynamic_calls_verify_in_read_without_raw_function_frames(self):
+    def test_code_mode_dynamic_calls_verify_in_none_and_read_without_raw_function_frames(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence, read_tool_calls
         codex.select_fixture(os.environ, self.base, "codex", codex.FAST_FIXTURE)
-        os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "read-trace.json")
-        request = mount_snapshot(self.request(permission="read", output_schema=codex.FAST_SCHEMA, prompt="Pick a buddy"))
-        self.set_case("snapshot-exec")
-        result = codex.run(request, observer=lambda _facts: codex.FEEDBACK_CONTINUE,
-                           services=None, cancelled=lambda: False)
-        assert_snapshot_run(self, request, result, rounds=1)
-        self.assertTrue(result.tool_evidence.value["streamComplete"])
-        self.assertEqual(result.tool_evidence.value["toolSummary"],
-                         [{"toolName": "query_task", "calls": 2, "failed": 1, "unknown": 0}])
+        for scope in ("none", "read"):
+            with self.subTest(scope=scope):
+                os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / f"{scope}-trace.json")
+                request = mount_snapshot(self.request(permission=scope, output_schema=codex.FAST_SCHEMA, prompt="Pick a buddy"))
+                self.set_case("snapshot-exec")
+                observer = FastCorrection(codex.FAST_SCHEMA, request.input_text, session_preserved=True).observer \
+                    if scope == "none" else (lambda _facts: codex.FEEDBACK_CONTINUE)
+                result = codex.run(request, observer=observer, services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                evidence = result.tool_evidence.value
+                state = Path(request.private_state.state_dir)
+                self.assertTrue(evidence["streamComplete"])
+                self.assertEqual(evidence["toolCalls"], 3)
+                self.assertIsNone(judge_tool_evidence(evidence, scope, state_dir=state))
+                calls = list(read_tool_calls(evidence, state_dir=state))
+                query_calls = [call for call in calls if call["facts"] == [{"toolName": "query_task", "category": "other"}]]
+                self.assertEqual(len(query_calls), 2)
+                self.assertTrue(all(call["sessionServiceVerified"] for call in query_calls))
+                self.assertEqual({call["outcome"] for call in query_calls}, {"success", "failure"})
+                self.assertEqual(evidence["toolSummary"], [
+                    {"toolName": "exec", "calls": 1, "failed": 0, "unknown": 1},
+                    {"toolName": "query_task", "calls": 2, "failed": 1, "unknown": 0},
+                ])
+
+    def test_code_mode_nested_command_stops_fast_snapshot_run_immediately(self):
+        codex.select_fixture(os.environ, self.base, "codex", codex.FAST_FIXTURE)
+        os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "rogue-trace.json")
+        request = mount_snapshot(self.request(permission="none", output_schema=codex.FAST_SCHEMA, prompt="Pick a buddy"))
+        self.set_case("snapshot-exec-rogue")
+        correction = FastCorrection(codex.FAST_SCHEMA, request.input_text, session_preserved=True)
+        result = codex.run(request, observer=correction.observer, services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.reason_code, "observer-interrupt", result.end.message)
+        self.assertEqual(correction.stop_reason, "no-tool-violation")
 
 
 class DshSnapshotTests(dsh.NativeRunCase):
@@ -116,6 +141,8 @@ class ZcodeSnapshotTests(zcode.NativeRunCase):
                 else:
                     self.assertEqual(result.value.raw, '{"choice":"a"}')
                 self.assertEqual(result.usage.value["nativeRecords"], 2)
+                self.assertIsNone(result.native_evidence)
+                self.assertTrue(any(ref.kind == "unsupported-native-requests" for ref in result.evidence_refs))
 
     def test_snapshot_observers_stop_on_the_first_unexplained_frame(self):
         for scope, code in (("none", "no-tool-violation"), ("read", "router-tools-forbidden")):

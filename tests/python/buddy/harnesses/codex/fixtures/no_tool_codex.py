@@ -81,7 +81,7 @@ def main():
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
                        "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
-            if case in ("snapshot", "snapshot-exec"):
+            if case in ("snapshot", "snapshot-exec", "snapshot-exec-rogue"):
                 receipt.update(cwd=params["cwd"], sandbox={"type": "readOnly", "networkAccess": True})
             if case == "missing-model":
                 del receipt["model"]
@@ -141,19 +141,24 @@ def main():
             if case == "foreign-thread-started":
                 send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
-            if case in ("snapshot", "snapshot-exec", "router-facts"):
+            if case in ("snapshot", "snapshot-exec", "snapshot-exec-rogue", "router-facts"):
                 tool_name = "query_compare" if case == "router-facts" else "query_task"
                 assert tool_name in {tool["name"] for tool in dynamic_tools}
                 queries = (("page", {"limit": 5}), ("error", {"offset": 999}))
                 if case == "router-facts":
                     queries = (("page", {"limit": 1}),)
+                code_mode = case in ("snapshot-exec", "snapshot-exec-rogue")
+                if code_mode:
+                    event("rawResponseItem/completed", turn_id, item={
+                        "type": "custom_tool_call", "name": "exec", "call_id": f"exec-wrap-{turns}",
+                        "input": f"await tools.{tool_name}({{}})"})
                 for call_id, args in queries:
                     item = {"type": "dynamicToolCall", "id": call_id}
                     # Code-mode exec emits the typed name without a raw function pair.
-                    if case == "snapshot-exec":
+                    if code_mode:
                         item.update(tool=tool_name, status="inProgress")
                     event("item/started", turn_id, item=item)
-                    if case != "snapshot-exec":
+                    if not code_mode:
                         event("rawResponseItem/completed", turn_id, item={
                             "type": "function_call", "name": tool_name, "call_id": call_id})
                     send({"id": "tool-" + call_id, "method": "item/tool/call", "params": {
@@ -164,9 +169,16 @@ def main():
                     event("item/completed", turn_id, item={
                         **item, **reply,
                         "status": "completed" if reply["success"] else "failed"})
-                    if case != "snapshot-exec":
+                    if not code_mode:
                         event("rawResponseItem/completed", turn_id, item={
                             "type": "function_call_output", "call_id": call_id})
+                if case == "snapshot-exec-rogue":
+                    event("item/started", turn_id, item={
+                        "type": "commandExecution", "id": "rogue-cmd", "command": "pwd"})
+                if code_mode:
+                    event("rawResponseItem/completed", turn_id, item={
+                        "type": "custom_tool_call_output", "call_id": f"exec-wrap-{turns}",
+                        "output": "done"})
             if case.startswith("protocol-"):
                 for method, item in item_frames(case.removeprefix("protocol-")):
                     event(method, turn_id, item=item)

@@ -29,7 +29,7 @@
      - Codex 驱动与 `protocol/tool_evidence.py` 的 `_consistent_call_facts` 为本次挂载的 `dynamicToolCall` 补齐精确的 typed/raw 一致性配对（仅限本次挂载查询工具名，不放行泛化的 `other` 类）。
    - **`ToolEventEvidence` 升至版本 4（历史版本 3 封存保持原样可读）**：
      - 包头新增事实字段 `sessionServiceTools`（本次执行实际登记的完整查询工具名列表；未挂载时为 `[]`，含画像面多调用聚合器），每条调用事实增加 `sessionServiceVerified: bool`（仅当上述双向核对成立且属于根回合完整起止调用时为 `true`）；`toolCalls` 与 `toolSummary` 如实保留全部工具调用计数。
-     - `judge_tool_evidence` 在 `none` 档下仅放行 `sessionServiceVerified == true` 且工具名属于 `sessionServiceTools` 的调用（对已匹配账本的私有查询失败调用同样按已归属查询处理而非外部工具违规，但不推进任何已读覆盖）；任何原生工具、用户外部 MCP（含同名碰撞工具）、未核验调用、孤立/迟到/外来根或事件流不完整一律判为 `router-tools-forbidden` 或 `router-tool-evidence-unverified` 并作废本次答案。在 `read` 档下除 `read`、`search`、`execute`、`fetch` 外同样放行已核验的私有查询调用；Claude Code 经验证的 `StructuredOutput` 交付豁免维持不变。
+     - `judge_tool_evidence` 在 `none` 档下仅放行 `sessionServiceVerified == true` 且工具名属于 `sessionServiceTools` 的调用（对已匹配账本的私有查询失败调用同样按已归属查询处理而非外部工具违规，但不推进任何已读覆盖）；任何原生工具、用户外部 MCP（含同名碰撞工具）、未核验调用、孤立/迟到/外来根或事件流不完整一律判为 `router-tools-forbidden` 或 `router-tool-evidence-unverified` 并作废本次答案。在 `read` 档下除 `read`、`search`、`execute`、`fetch` 外同样放行已核验的私有查询调用；Claude Code 经验证的 `StructuredOutput` 交付豁免维持不变。（2026-11-20 补记）Codex 在挂载只读快照服务的 `none` 档下沿用 `web` 档的既有规则，放行完整且一致的受限 JavaScript 分发器 `exec` 根调用（`facts` 严格仅含 `{"toolName": "exec", "category": "execute"}`），因为 GPT-6 `code_mode_only` 模型须经该无 OS/网络 API 的分发器调用挂载的 `dynamicTools`；其内部派发的每个工具调用仍各自发出独立原生事件并按 `none` 档逐条裁决，未挂载快照服务的纯 `none` 档继续拒收 `exec`。
    - **驱动挂载与观察器解耦**：四家驱动将“只读快照查询服务挂载”与“Worker 完成/问询交付挂载”分离（不再以 `services is not None` 等同于 Worker 交付路径）；`FastCorrection`、`MaintenanceCorrection` 与 `ReviewObserver` 不再在首个已核验查询工具调用处中止，同时仍对不可解释的 tool marker、被拒原生交互与未归属/越界工具调用保持敏感并如实上抛，交由最终 `judge_tool_evidence` 裁决。
 
 ### 二、冻结快照按轮次交接、有界查询与维护面终判提交

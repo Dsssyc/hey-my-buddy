@@ -584,7 +584,8 @@ class NoToolProtocol:
             if method in ("session/event", "state.updated"):
                 raise NativeError("invalid-protocol", "native lifecycle notification has no identity parameters")
             return
-        if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample'):
+        if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples',
+                      'process/resourceSample', 'session/lifecycle/changed'):
             return
         if method == "session/event":
             kind = params.get("type")

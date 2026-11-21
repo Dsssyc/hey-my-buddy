@@ -98,6 +98,7 @@ class CodexToolEventProjector:
         self.session_tools = frozenset(session_tools)
         self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
         self._session_starts: set[tuple[str, str]] = set()
+        self._dispatcher_starts: set[tuple[str, str]] = set()
         self._snapshot_requests: dict[tuple[str, str], tuple[str, object]] = {}
         self._dynamic_phases: dict[tuple[str, str], dict] = {}
         self._dynamic_tools: dict[tuple[str, str], str] = {}
@@ -110,8 +111,8 @@ class CodexToolEventProjector:
 
     @property
     def session_tool_calls(self) -> int:
-        """Observed starts of mounted snapshot service calls, verbatim."""
-        return len(self._session_starts | self._dynamic_phases.keys())
+        """Observed starts of mounted snapshot calls and Codex's JS dispatcher."""
+        return len(self._session_starts | self._dynamic_phases.keys() | self._dispatcher_starts)
 
     def observe_root(self, session_id: str, turn_id: str) -> None:
         """Record one root turn identity exactly as its native receipt carried it."""
@@ -155,8 +156,11 @@ class CodexToolEventProjector:
         if item.get("type") == "function_call":
             return (isinstance(item.get("name"), str) and item["name"] in self.session_tools
                     and item.get("namespace") in (None, "functions"))
-        return item.get("type") == "function_call_output" and (
-            key in self._snapshot_requests or key in self._session_starts)
+        if item.get("type") == "function_call_output":
+            return key in self._snapshot_requests or key in self._session_starts
+        if item.get("type") == "custom_tool_call":
+            return item.get("name") == "exec" and item.get("namespace") in (None, "functions")
+        return item.get("type") == "custom_tool_call_output" and key in self._dispatcher_starts
 
     def finish(self, stream_complete: bool, *, verified_session_calls=()) -> dict:
         """Close the stream and return the ``toolEvidence`` package.
@@ -278,6 +282,10 @@ class CodexToolEventProjector:
                     # A registered bare name on another native tool carrier
                     # cannot supply the raw half of a dynamic query call.
                     self._incomplete(params, tool_name=name, phase="start")
+            elif (self.session_tools and raw_type == "custom_tool_call" and name == "exec"
+                  and item.get("namespace") in (None, "functions")
+                  and identity is not None and isinstance(call_id, str) and call_id):
+                self._dispatcher_starts.add((canonical_json(identity), call_id))
         elif raw_type in RAW_TOOL_OUTPUTS:
             self._output(params, item, raw_type)
         else:

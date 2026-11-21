@@ -642,11 +642,11 @@ def _consistent_call_facts(harness: str, facts: set, session_tools: frozenset[st
     return False
 
 
-def _allowed_codex_web_call(call: dict) -> bool:
-    """Recognize Codex CLI 0.164.0's restricted JavaScript dispatcher.
+def _allowed_codex_code_mode_call(call: dict) -> bool:
+    """Recognize Codex CLI's restricted V8 JavaScript dispatcher.
 
-    Nested tool calls have their own native events and must pass this judge
-    separately. Web searches use the single normalized fetch category.
+    Nested tool calls emit their own native events and must pass this judge
+    separately, both in web runs and in mounted-snapshot no-tool runs.
     """
     return (call["categories"] == ["execute"]
             and call["facts"] == [{"toolName": "exec", "category": "execute"}])
@@ -686,12 +686,14 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
             malformed |= call["malformed"]
             phases = set(call["phases"])
             categories = set(call["categories"])
-            codex_web_call = (harness == "codex" and permission == "web"
-                              and _allowed_codex_web_call(call))
+            codex_dispatcher = (harness == "codex"
+                                and (permission == "web" or (permission == "none" and bool(session_tools)))
+                                and _allowed_codex_code_mode_call(call))
             session_call = permission != "web" and call.get("sessionServiceVerified", False)
-            if not session_call and (permission == "none"
-                                     or _is_session_service_call(call, session_tools)
-                                     or call["consistent"] and not (categories <= allowed or codex_web_call)):
+            if not session_call and not codex_dispatcher and (
+                    permission == "none"
+                    or _is_session_service_call(call, session_tools)
+                    or call["consistent"] and not (categories <= allowed)):
                 forbidden = True
             root = bool(call["nativeIdentity"]) and call["nativeIdentity"] in evidence["nativeIdentity"]
             if call["belongsToRoot"] != root:
