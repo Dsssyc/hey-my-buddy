@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.protocol.process_handle import ProcessHandle
+from hey_my_buddy import harness_locations
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
 from hey_my_buddy.protocol.process_start import process_start
@@ -37,8 +38,8 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.enterContext(patch.object(
             discovery, "_native_command",
             side_effect=lambda path: [sys.executable, str(path)]))
-        self.enterContext(patch.object(discovery, "_registry_paths", return_value=[]))
-        self.enterContext(patch.object(discovery, "_app_paths", return_value=[]))
+        self.enterContext(patch.object(harness_locations, "_registry_paths", return_value=[]))
+        self.enterContext(patch.object(harness_locations, "_app_paths", return_value=[]))
 
     def test_controller_keeps_credential_private_from_native_harness(self):
         source = {"HMB_STATE_DIR": "/private/board",
@@ -63,9 +64,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 home = Path(directory)
                 cli = self.plain_file(home / "claude", "import sys\nprint('claude 2.1.0' if sys.argv[1:] == ['--version'] else "
                                       + repr(json.dumps(account)) + ")\n")
-                with patch.object(discovery, "_home", return_value=home), \
-                     patch.object(discovery, "_common_dirs", return_value=[]), \
-                     patch.object(discovery, "_app_paths", return_value=[]):
+                with patch.object(harness_locations, "_home", return_value=home), \
+                     patch.object(harness_locations, "_common_dirs", return_value=[]), \
+                     patch.object(harness_locations, "_app_paths", return_value=[]):
                     result = discovery.discover("claude", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 self.assertEqual(result["status"], "ready")
                 self.assertEqual(set(result["billingByProvider"]), {provider})
@@ -87,14 +88,14 @@ class HarnessDiscoveryTests(unittest.TestCase):
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
             record.write_text("v24.1.0", encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
             ):
-                snapshot = discovery.candidate_snapshot("codex", manual_path=str(cli),
+                snapshot = harness_locations.candidate_snapshot("codex", manual_path=str(cli),
                                                         environment={"PATH": str(bin_dir), "OPENAI_API_KEY": "secret"})
             self.assertEqual(snapshot["candidates"][0]["source"], "manual")
-            self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery.file_fingerprint(cli))
-            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record, record=True))
+            self.assertEqual(snapshot["candidates"][0]["fingerprint"], harness_locations.file_fingerprint(cli))
+            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], harness_locations.file_fingerprint(record, record=True))
             self.assertNotIn("secret", str(snapshot))
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
 
@@ -105,13 +106,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
             bin_dir.mkdir()
             for name in ('codex', 'node'):
                 (bin_dir / self.candidate_name(name)).write_text('fixture', encoding="utf-8", newline="\n")
-            with patch.object(discovery, '_home', return_value=home), \
-                 patch.object(discovery, '_manager_records', return_value=([], [])), \
-                 patch.object(discovery, '_common_dirs', return_value=[]), \
-                 patch.object(discovery, '_app_paths', return_value=[]), \
+            with patch.object(harness_locations, '_home', return_value=home), \
+                 patch.object(harness_locations, '_manager_records', return_value=([], [])), \
+                 patch.object(harness_locations, '_common_dirs', return_value=[]), \
+                 patch.object(harness_locations, '_app_paths', return_value=[]), \
                  patch.object(Path, 'open', side_effect=AssertionError('Position scans must not read candidate bytes')):
-                snapshot = discovery.candidate_snapshot('codex', environment={'PATH': str(bin_dir)})
-                self.assertTrue(discovery.location_fingerprint(snapshot))
+                snapshot = harness_locations.candidate_snapshot('codex', environment={'PATH': str(bin_dir)})
+                self.assertTrue(harness_locations.location_fingerprint(snapshot))
             fingerprints = [item['fingerprint'] for item in snapshot['candidates'] if item['exists']]
             fingerprints += [item['fingerprint'] for item in snapshot['nodeCandidates'] if item['fingerprint']]
             self.assertTrue(fingerprints)
@@ -129,9 +130,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                                 (home / ".fnm/aliases/default", "v25.0.0")):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(value, encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("codex", manual_path=str(bad), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["source"], "fnm")
@@ -155,9 +156,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                  patch.object(discovery, "probe", side_effect=lambda command, *_args, **_kwargs:
                               (None, b'v24.1.0' if str(node) in command and
                                str(launcher) not in command else b'zcode 3.0.0')) as probe, \
-                 patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+                 patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["command"], [str(node), str(launcher)])
@@ -167,17 +168,17 @@ class HarnessDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             cli = self.plain_file(home / "codex", "import sys\nprint(\"codex 1.0.0\" if sys.argv[1:] == [\"--version\"] else \"Not logged in private-account\")\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "login-required")
             self.assertFalse(result["available"])
             self.assertNotIn("private-account", str(result))
             self.plain_file(cli, "print(\"secret\" * 10000)\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertIn(result["reason"]["code"], ("harness.output-limit", "harness.shutdown-unverified"))
             self.assertEqual(result["status"], "unhealthy")
@@ -199,9 +200,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                     return patch.object(OwnedJob, "active", autospec=True, side_effect=unobserved_job)
                 return patch.object(ProcessHandle, "shutdown_confirmed", return_value=False)
 
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]), \
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]), \
                  withheld_stop_evidence(windows=os.name == "nt") as observation:
                 uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(uncertain["reason"]["code"], "harness.shutdown-unverified")
@@ -229,9 +230,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                      patch.object(owned_process.subprocess, "Popen", return_value=fixture.process), \
                      patch.object(process_identity, "native_process_journal_active", return_value=False), \
                      patch.object(process_identity, "begin_native_process_spawn", return_value=None), \
-                     patch.object(discovery, "_home", return_value=home), \
-                     patch.object(discovery, "_common_dirs", return_value=[]), \
-                     patch.object(discovery, "_app_paths", return_value=[]), \
+                     patch.object(harness_locations, "_home", return_value=home), \
+                     patch.object(harness_locations, "_common_dirs", return_value=[]), \
+                     patch.object(harness_locations, "_app_paths", return_value=[]), \
                      withheld_stop_evidence(windows=True) as observation:
                     uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""},
                                                    state_dir=Path(os.environ["HMB_STATE_DIR"]))
@@ -251,17 +252,17 @@ class HarnessDiscoveryTests(unittest.TestCase):
             record.parent.mkdir(parents=True)
             record.write_text("v22.0.0", encoding="utf-8", newline="\n")
             initial = record.stat()
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
-                first = discovery.candidate_snapshot("node", environment={"PATH": ""})
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
+                first = harness_locations.candidate_snapshot("node", environment={"PATH": ""})
                 record.write_text("v24.0.0", encoding="utf-8", newline="\n")
                 os.utime(record, ns=(initial.st_atime_ns, initial.st_mtime_ns))
                 self.assertEqual((record.stat().st_size, record.stat().st_mtime_ns),
                                  (initial.st_size, initial.st_mtime_ns))
-                second = discovery.candidate_snapshot("node", environment={"PATH": ""})
-            self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
-            self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+                second = harness_locations.candidate_snapshot("node", environment={"PATH": ""})
+            self.assertNotEqual(harness_locations._scan_hash(first), harness_locations._scan_hash(second))
+            self.assertNotEqual(harness_locations.location_fingerprint(first), harness_locations.location_fingerprint(second))
 
     def test_large_manager_record_uses_one_read_for_version_and_full_content_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -280,7 +281,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 return read_bytes(path)
 
             with patch.object(Path, 'read_bytes', read):
-                records, roots = discovery._manager_records(home)
+                records, roots = harness_locations._manager_records(home)
             self.assertEqual(reads, [record])
             self.assertIn(('nvm', installed), roots)
             fingerprint = next(item['fingerprint'] for item in records if item['path'] == str(record))
@@ -290,7 +291,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             changed = content[:-4] + b'two\n'
             record.write_bytes(changed)
             os.utime(record, ns=(before.st_atime_ns, before.st_mtime_ns))
-            current = discovery.file_fingerprint(record, record=True)
+            current = harness_locations.file_fingerprint(record, record=True)
             self.assertEqual((current['size'], current['mtimeNs']),
                              (fingerprint['size'], fingerprint['mtimeNs']))
             self.assertEqual(current['sha256'], hashlib.sha256(changed).hexdigest())
@@ -303,12 +304,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             a.mkdir()
             b.mkdir()
             empty.mkdir()
-            with patch.object(discovery, '_home', return_value=home), \
-                 patch.object(discovery, '_common_dirs', return_value=[]), \
-                 patch.object(discovery, '_app_paths', return_value=[]), \
-                 patch.object(discovery, '_registry_paths', return_value=[]):
+            with patch.object(harness_locations, '_home', return_value=home), \
+                 patch.object(harness_locations, '_common_dirs', return_value=[]), \
+                 patch.object(harness_locations, '_app_paths', return_value=[]), \
+                 patch.object(harness_locations, '_registry_paths', return_value=[]):
                 def fingerprint(*paths):
-                    return discovery.location_fingerprint(discovery.candidate_snapshot(
+                    return harness_locations.location_fingerprint(harness_locations.candidate_snapshot(
                         'codex', environment={'PATH': os.pathsep.join(map(str, paths))}))
 
                 missing = fingerprint(a, b)
@@ -335,18 +336,18 @@ class HarnessDiscoveryTests(unittest.TestCase):
             cli.parent.mkdir()
             cli.write_text('fixture', encoding="utf-8", newline="\n")
             paths = [str(home / f'empty-{index}') for index in range(discovery._MAX_CANDIDATES + 1)]
-            with patch.object(discovery, '_home', return_value=home), \
-                 patch.object(discovery, '_common_dirs', return_value=[]), \
-                 patch.object(discovery, '_app_paths', return_value=[]):
-                first = discovery.candidate_snapshot('codex', environment={'PATH': str(cli.parent)})
-                second = discovery.candidate_snapshot('codex', environment={
+            with patch.object(harness_locations, '_home', return_value=home), \
+                 patch.object(harness_locations, '_common_dirs', return_value=[]), \
+                 patch.object(harness_locations, '_app_paths', return_value=[]):
+                first = harness_locations.candidate_snapshot('codex', environment={'PATH': str(cli.parent)})
+                second = harness_locations.candidate_snapshot('codex', environment={
                     'PATH': os.pathsep.join([*paths, str(cli.parent)])})
                 with patch.object(discovery, '_candidate_handshake', return_value={
                         'path': str(cli), 'source': 'path', 'status': 'ready', 'reason': None,
                         'command': [str(cli)], 'version': '1.0', 'fingerprint': {}}) as handshake:
                     result = discovery.discover('codex', environment={
                         'PATH': os.pathsep.join([*paths, str(cli.parent)])}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            self.assertEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+            self.assertEqual(harness_locations.location_fingerprint(first), harness_locations.location_fingerprint(second))
             self.assertGreater(len(second['candidates']), discovery._MAX_CANDIDATES)
             handshake.assert_called_once()
             self.assertEqual(result['status'], 'ready')
@@ -359,23 +360,23 @@ class HarnessDiscoveryTests(unittest.TestCase):
             cli.parent.mkdir()
             cli.write_text("#!/usr/bin/env node\n", encoding="utf-8", newline="\n")
             node.write_text("node-one", encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
-                first = discovery.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
+                first = harness_locations.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
                 node.write_text("node-two-with-new-size", encoding="utf-8", newline="\n")
-                second = discovery.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
-            self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
-            self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+                second = harness_locations.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
+            self.assertNotEqual(harness_locations._scan_hash(first), harness_locations._scan_hash(second))
+            self.assertNotEqual(harness_locations.location_fingerprint(first), harness_locations.location_fingerprint(second))
 
     def test_claude_login_check_and_dsh_missing_without_native_cli(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             claude = self.plain_file(home / "claude", "import sys\nprint(\"claude 2.1.0\" if sys.argv[1:] == [\"--version\"] else \'{\"loggedIn\":true,\"apiProvider\":\"anthropic\"}\')\n")
             node = self.plain_file(home / "bin" / self.candidate_name("node"), "import sys\nprint(\"v24.2.0\" if sys.argv[1:] == [\"--version\"] else \"checked\")\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[node.parent]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[node.parent]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 claude_result = discovery.discover("claude", manual_path=str(claude), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 dsh_result = discovery.discover("dsh", environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 node_result = discovery.discover("node", manual_path=str(node), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
@@ -388,9 +389,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             dsh = self.plain_file(home / "dsh", 'print("dsh 1.2.0")\n')
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("dsh", manual_path=str(dsh), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["executable"], str(dsh))
@@ -416,9 +417,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 "PATH": "", "HOME": str(root), "USERPROFILE": str(root), "DSH_HOME": str(daily),
                 "HTTPS_PROXY": "https://proxy.invalid", "SSL_CERT_FILE": str(root / "ca.pem"),
                 "OPENAI_API_KEY": "fixture-secret"}
-            with patch.object(discovery, "_home", return_value=root), \
-                 patch.object(discovery, "_common_dirs", return_value=[]), \
-                 patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=root), \
+                 patch.object(harness_locations, "_common_dirs", return_value=[]), \
+                 patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("dsh", manual_path=str(cli), environment=environment, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "1.2.0")
@@ -484,11 +485,11 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 location.write_text("stub", encoding="utf-8", newline="\n")
             direct_node = home / ".fnm/node-versions/v24.3.0/installation" / self.candidate_name('node')
             direct_node.write_text("stub", encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
-                snapshot = discovery.candidate_snapshot("codex", environment={"PATH": ""})
-                node_snapshot = discovery.candidate_snapshot("node", environment={"PATH": ""})
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
+                snapshot = harness_locations.candidate_snapshot("codex", environment={"PATH": ""})
+                node_snapshot = harness_locations.candidate_snapshot("node", environment={"PATH": ""})
             found = [item["path"] for item in snapshot["candidates"] if item["exists"]]
             self.assertTrue(all(str(path) in found for path in locations))
             nvm = [path for path in found if ".nvm" in Path(path).parts]
@@ -497,10 +498,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertIn(str(home / ".nvm/alias/lts/iron"),
                           [item["path"] for item in snapshot["managerRecords"]])
             (home / ".nvm/alias/default").write_text("node", encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
-                generic = discovery.candidate_snapshot("codex", environment={"PATH": ""})
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
+                generic = harness_locations.candidate_snapshot("codex", environment={"PATH": ""})
             self.assertIn(str(locations[1]), [item["path"] for item in generic["candidates"]])
 
     @unittest.skipIf(os.name == "nt", "Symlink creation needs extra Windows privileges")
@@ -515,7 +516,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             (alias / "current").symlink_to(target)
             installed = home / ".nvm/versions/node/v24.2.1/bin"
             installed.mkdir(parents=True)
-            records, roots = discovery._manager_records(home)
+            records, roots = harness_locations._manager_records(home)
         self.assertIn(str(alias / "current"), [item["path"] for item in records])
         self.assertIn(("nvm", installed), roots)
 
@@ -528,7 +529,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             return {**item, "status": "unhealthy", "reason": discovery._probe_reason("probe-failed"),
                     "command": [], "version": None}
 
-        with patch.object(discovery, "candidate_snapshot", return_value=snapshot), \
+        with patch.object(harness_locations, "candidate_snapshot", return_value=snapshot), \
              patch.object(discovery, "_candidate_handshake", side_effect=handshake) as probe:
             result = discovery.discover("codex", environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(probe.call_count, discovery._MAX_CANDIDATES)
@@ -540,9 +541,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
             cli = self.plain_file(home / "manual/zcode", 'print("release next: private detail")\n')
             marker = home / "lower-ran"
             lower = self.plain_file(home / "common" / self.candidate_name('zcode'), f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran", encoding="utf-8", newline="\\n")\nprint("v9.0.0")\n')
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[lower.parent]
-            ), patch.object(discovery, "_app_paths", return_value=[]):
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[lower.parent]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]):
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "unknown")
@@ -567,9 +568,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 stop_observation = patch.object(OwnedJob, "terminate", observe_job_stop)
             else:
                 stop_observation = patch.object(discovery.os, "kill", wraps=os.kill)
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]), patch.object(
                 discovery, "_SCAN_TIMEOUT", 0.4
             ), stop_observation as observed_stop:
                 started = time.monotonic()
@@ -595,9 +596,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
             home = Path(directory)
             manual = self.plain_file(home / "manual/zcode", "import time\ntime.sleep(10)\n")
             lower = self.plain_file(home / "common" / self.candidate_name('zcode'), "import time\ntime.sleep(10)\n")
-            with patch.object(discovery, "_home", return_value=home), patch.object(
-                discovery, "_common_dirs", return_value=[lower.parent]
-            ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
+            with patch.object(harness_locations, "_home", return_value=home), patch.object(
+                harness_locations, "_common_dirs", return_value=[lower.parent]
+            ), patch.object(harness_locations, "_app_paths", return_value=[]), patch.object(
                 discovery, "_TIMEOUT", 0.25
             ), patch.object(discovery, "_SCAN_TIMEOUT", 0.45):
                 started = time.monotonic()
@@ -614,9 +615,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
             launcher = self.plain_file(root / 'codex.js', 'print("fixture")\n')
             node = self.plain_file(root / self.candidate_name('node'), 'print("fixture")\n')
             candidate = {'path': str(launcher), 'source': 'manual', 'exists': True,
-                         'fingerprint': discovery.file_fingerprint(launcher)}
+                         'fingerprint': harness_locations.file_fingerprint(launcher)}
             with patch.object(discovery, '_launch_command', _REAL_LAUNCH_COMMAND), \
-                 patch.object(discovery, '_variants', return_value=[node]), \
+                 patch.object(harness_locations, '_variants', return_value=[node]), \
                  patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
                  patch.object(discovery, '_discover', return_value={'status': 'unknown', 'available': False,
                                                                   'reason': {'code': 'harness.scan-timeout', 'params': {'operation': 'probe'}}}):
@@ -648,10 +649,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "claude.ps1").write_text("Write-Output never-run", encoding="utf-8", newline="\n")
-            with patch.object(discovery, "_home", return_value=root), \
-                 patch.object(discovery, "_common_dirs", return_value=[]), \
-                 patch.object(discovery, "_app_paths", return_value=[]):
-                snapshot = discovery.candidate_snapshot("claude", environment={"PATH": str(root)})
+            with patch.object(harness_locations, "_home", return_value=root), \
+                 patch.object(harness_locations, "_common_dirs", return_value=[]), \
+                 patch.object(harness_locations, "_app_paths", return_value=[]):
+                snapshot = harness_locations.candidate_snapshot("claude", environment={"PATH": str(root)})
         self.assertNotIn(str(root / "claude.ps1"),
                          [candidate["path"] for candidate in snapshot["candidates"]])
 
@@ -700,30 +701,30 @@ class HarnessDiscoveryTests(unittest.TestCase):
 class WindowsEntryBoundaryTests(unittest.TestCase):
     def test_fixed_windows_candidates_ignore_pathext_and_scripts(self):
         directory = Path('/fixture/bin')
-        with patch.object(discovery, 'os', SimpleNamespace(name='nt')):
+        with patch.object(harness_locations, 'os', SimpleNamespace(name='nt')):
             expected = [directory / 'codex.exe', directory / 'codex.cmd']
             for pathext in ('', '.BAT;.COM;.PS1;.JS;.CMD;.EXE', '.EXE;.CMD'):
                 with self.subTest(pathext=pathext), patch.dict(os.environ, {'PATHEXT': pathext}):
-                    self.assertEqual(discovery._variants(directory, 'codex'), expected)
+                    self.assertEqual(harness_locations._variants(directory, 'codex'), expected)
             with patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(discovery._variants(directory, 'codex'), expected)
+                self.assertEqual(harness_locations._variants(directory, 'codex'), expected)
         with tempfile.TemporaryDirectory() as root:
             for name in ('codex.ps1', 'codex.bat', 'codex.com', 'codex'):
                 (Path(root) / name).write_text('ignored', encoding="utf-8", newline="\n")
-            with patch.object(discovery, '_variants',
+            with patch.object(harness_locations, '_variants',
                               side_effect=lambda directory, name: [directory / (name + '.exe'),
                                                                     directory / (name + '.cmd')]):
-                self.assertFalse(discovery.has_candidate(Path(root)))
+                self.assertFalse(harness_locations.has_candidate(Path(root)))
 
     def test_windows_common_dirs_follow_environment_roots(self):
         home = Path('/private/home')
         env = {'APPDATA': '/different/Roaming', 'LOCALAPPDATA': '/different/Local',
                'ProgramFiles': '/programs', 'PATH': '/irrelevant'}
-        with patch.object(discovery, 'os', SimpleNamespace(name='nt')):
-            self.assertEqual(discovery._common_dirs(home, env), [
+        with patch.object(harness_locations, 'os', SimpleNamespace(name='nt')):
+            self.assertEqual(harness_locations._common_dirs(home, env), [
                 Path('/different/Roaming/npm'), Path('/different/Local/Programs/nodejs'),
                 Path('/programs/nodejs'), home / '.local/bin'])
-            self.assertEqual(discovery._common_dirs(home, {}), [home / '.local/bin'])
+            self.assertEqual(harness_locations._common_dirs(home, {}), [home / '.local/bin'])
 
     def test_windows_node_and_manual_scripts_require_native_exe(self):
         root = Path('/fixture/bin')
@@ -741,7 +742,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                 entry = root / name
                 entry.write_text('do not execute', encoding="utf-8", newline="\n")
                 candidate = {'path': str(entry), 'source': 'manual', 'exists': True,
-                             'fingerprint': discovery.file_fingerprint(entry)}
+                             'fingerprint': harness_locations.file_fingerprint(entry)}
                 with self.subTest(name=name), \
                      patch.object(discovery, 'os', SimpleNamespace(name='nt')), \
                      patch.object(discovery, 'probe') as probe, \
@@ -764,16 +765,16 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             root = Path(directory)
             shim = root / 'codex.cmd'
             shim.write_text('first shim', encoding="utf-8", newline="\n")
-            with patch.object(discovery, '_home', return_value=root), \
-                 patch.object(discovery, '_manager_records', return_value=([], [])), \
-                 patch.object(discovery, '_common_dirs', return_value=[]), \
-                 patch.object(discovery, '_app_paths', return_value=[]), \
-                 patch.object(discovery, '_registry_paths', return_value=[]), \
-                 patch.object(discovery, '_read_record', side_effect=AssertionError('snapshot must only stat')):
-                first = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
+            with patch.object(harness_locations, '_home', return_value=root), \
+                 patch.object(harness_locations, '_manager_records', return_value=([], [])), \
+                 patch.object(harness_locations, '_common_dirs', return_value=[]), \
+                 patch.object(harness_locations, '_app_paths', return_value=[]), \
+                 patch.object(harness_locations, '_registry_paths', return_value=[]), \
+                 patch.object(harness_locations, '_read_record', side_effect=AssertionError('snapshot must only stat')):
+                first = harness_locations.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
                 shim.write_text('changed shim with a different size', encoding="utf-8", newline="\n")
-                second = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
-            self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+                second = harness_locations.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
+            self.assertNotEqual(harness_locations.location_fingerprint(first), harness_locations.location_fingerprint(second))
 
     def test_windows_shim_prefers_adjacent_native_node_then_path_node(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -836,9 +837,9 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             def ExpandEnvironmentStrings(value):
                 return value.replace('%APPDATA%', '/actual/Roaming')
 
-        with patch.object(discovery, 'os', SimpleNamespace(name='nt', pathsep=os.pathsep)), \
+        with patch.object(harness_locations, 'os', SimpleNamespace(name='nt', pathsep=os.pathsep)), \
              patch.dict(sys.modules, {'winreg': Registry}):
-            self.assertEqual(discovery._registry_paths(), ['/actual/Roaming/npm',
+            self.assertEqual(harness_locations._registry_paths(), ['/actual/Roaming/npm',
                                                           '%APPDATA%/literal'])
 
     def test_native_path_prefix_is_only_executed_program(self):
@@ -915,7 +916,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                         discovery._script_launch(shim)
             shim.write_text('@python "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
             candidate = {'path': str(shim), 'source': 'manual', 'exists': True,
-                         'fingerprint': discovery.file_fingerprint(shim)}
+                         'fingerprint': harness_locations.file_fingerprint(shim)}
             with patch.object(discovery, 'probe') as probe, \
                  patch.object(discovery, '_node_for') as node_for:
                 rejected = discovery._candidate_handshake('codex', candidate, {'PATH': ''},
@@ -929,12 +930,12 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
 class RegisteredAppDiscoveryTests(unittest.TestCase):
     def test_every_registered_harness_declares_cli_and_all_platforms(self):
         from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
-        from hey_my_buddy.buddy.harnesses.discovery_spec import AppEntry
+        from hey_my_buddy.harness_locations import AppEntry
 
-        self.assertEqual(set(RUN_SEAMS), set(discovery.HARNESS_NAMES))
+        self.assertEqual(set(RUN_SEAMS), set(harness_locations.DISCOVERY_SPECS))
         for name in RUN_SEAMS:
             with self.subTest(harness=name):
-                spec = discovery._discovery_spec(name)
+                spec = harness_locations.discovery_spec(name)
                 self.assertTrue(spec.command)
                 self.assertEqual(set(spec.apps), {"darwin", "win32", "linux"})
                 for platform, entry in spec.apps.items():
@@ -945,7 +946,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
                         self.assertTrue(entry.cli_path)
 
     def test_macos_recognizes_bundle_id_at_top_level_in_both_roots(self):
-        entry = discovery._discovery_spec("codex").apps["darwin"]
+        entry = harness_locations.discovery_spec("codex").apps["darwin"]
         with tempfile.TemporaryDirectory() as directory:
             roots = (Path(directory) / "system", Path(directory) / "user")
             expected = []
@@ -962,12 +963,12 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
                 broken.mkdir(parents=True)
                 (broken / "Info.plist").write_bytes(b"<plist><broken>")
                 (root / "Missing.app").mkdir()
-            self.assertEqual(discovery._mac_app_paths(entry, roots), expected)
-            self.assertEqual(discovery._mac_app_paths(entry, (Path(directory) / "absent",)), [])
-            with patch.object(discovery.sys, "platform", "darwin"), \
-                 patch.object(discovery, "_mac_app_paths", return_value=expected) as scan, \
-                 patch.object(discovery, "_home", return_value=roots[1].parent):
-                self.assertEqual(discovery._app_paths("codex"), expected)
+            self.assertEqual(harness_locations._mac_app_paths(entry, roots), expected)
+            self.assertEqual(harness_locations._mac_app_paths(entry, (Path(directory) / "absent",)), [])
+            with patch.object(harness_locations.sys, "platform", "darwin"), \
+                 patch.object(harness_locations, "_mac_app_paths", return_value=expected) as scan, \
+                 patch.object(harness_locations, "_home", return_value=roots[1].parent):
+                self.assertEqual(harness_locations._app_paths("codex"), expected)
             scan.assert_called_once_with(entry, (Path("/Applications"), roots[1].parent / "Applications"))
 
     @staticmethod
@@ -995,23 +996,23 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
             EnumKey=lambda _handle, index: children[index], calls=calls)
 
     def test_windows_uninstall_reads_both_hives_and_registry_views(self):
-        entry = discovery._discovery_spec("dsh").apps["win32"]
+        entry = harness_locations.discovery_spec("dsh").apps["win32"]
         key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{entry.identity}"
         with tempfile.TemporaryDirectory() as directory:
             locations = [Path(directory) / str(index) for index in range(4)]
             identities = [(hive, key, 1 | view) for hive in ("user", "machine") for view in (256, 512)]
             registry = self.registry({identity: {"InstallLocation": str(path)}
                                       for identity, path in zip(identities, locations)})
-            self.assertEqual(discovery._windows_app_paths(entry, registry),
+            self.assertEqual(harness_locations._windows_app_paths(entry, registry),
                              [path / entry.cli_path for path in locations])
             self.assertEqual(registry.calls, identities)
-        self.assertEqual(discovery._windows_app_paths(entry, self.registry({})), [])
+        self.assertEqual(harness_locations._windows_app_paths(entry, self.registry({})), [])
         registry = self.registry({identities[0]: {"InstallLocation": ""},
                                   identities[1]: {"InstallLocation": 42}})
-        self.assertEqual(discovery._windows_app_paths(entry, registry), [])
+        self.assertEqual(harness_locations._windows_app_paths(entry, registry), [])
 
     def test_windows_msix_matches_exact_family_in_current_user_repository(self):
-        entry = discovery._discovery_spec("codex").apps["win32"]
+        entry = harness_locations.discovery_spec("codex").apps["win32"]
         key = (r"Software\Classes\Local Settings\Software\Microsoft\Windows"
                r"\CurrentVersion\AppModel\Repository\Packages")
         name = "OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0"
@@ -1023,22 +1024,22 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
                                       ("user", key + "\\" + name, 1): {"PackageRootFolder": str(location)}},
                                      children)
             expected = [location / entry.cli_path]
-            self.assertEqual(discovery._windows_app_paths(entry, registry), expected)
+            self.assertEqual(harness_locations._windows_app_paths(entry, registry), expected)
             self.assertEqual(registry.calls, [("user", key, 1), ("user", key + "\\" + name, 1)])
-            with patch.object(discovery.sys, "platform", "win32"), \
+            with patch.object(harness_locations.sys, "platform", "win32"), \
                  patch.dict(sys.modules, {"winreg": registry}):
-                self.assertEqual(discovery._app_paths("codex"), expected)
-        self.assertEqual(discovery._windows_app_paths(entry, self.registry({})), [])
+                self.assertEqual(harness_locations._app_paths("codex"), expected)
+        self.assertEqual(harness_locations._windows_app_paths(entry, self.registry({})), [])
         registry = self.registry({("user", key, 1): {}}, (name,))
-        self.assertEqual(discovery._windows_app_paths(entry, registry), [])
+        self.assertEqual(harness_locations._windows_app_paths(entry, registry), [])
 
     def test_explicit_absence_and_node_do_not_query_the_system(self):
-        with patch.object(discovery, "_mac_app_paths") as mac, \
-             patch.object(discovery, "_windows_app_paths") as windows:
+        with patch.object(harness_locations, "_mac_app_paths") as mac, \
+             patch.object(harness_locations, "_windows_app_paths") as windows:
             for platform in ("darwin", "win32", "linux"):
-                with patch.object(discovery.sys, "platform", platform):
-                    self.assertEqual(discovery._app_paths("claude"), [])
-                    self.assertEqual(discovery._app_paths("node"), [])
+                with patch.object(harness_locations.sys, "platform", platform):
+                    self.assertEqual(harness_locations._app_paths("claude"), [])
+                    self.assertEqual(harness_locations._app_paths("node"), [])
             mac.assert_not_called()
             windows.assert_not_called()
 
@@ -1048,13 +1049,13 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
             manual, manager, common, registry, caller, app = [root / part for part in
                                                             ("manual", "manager", "common", "registry", "caller", "app")]
             filename = HarnessDiscoveryTests.candidate_name("codex")
-            with patch.object(discovery, "_home", return_value=root), \
-                 patch.object(discovery, "_manager_records", return_value=([], [("nvm", manager)])), \
-                 patch.object(discovery, "_common_dirs", return_value=[common]), \
-                 patch.object(discovery, "_registry_paths", return_value=[str(registry)]), \
-                 patch.object(discovery, "_app_paths", side_effect=lambda name:
+            with patch.object(harness_locations, "_home", return_value=root), \
+                 patch.object(harness_locations, "_manager_records", return_value=([], [("nvm", manager)])), \
+                 patch.object(harness_locations, "_common_dirs", return_value=[common]), \
+                 patch.object(harness_locations, "_registry_paths", return_value=[str(registry)]), \
+                 patch.object(harness_locations, "_app_paths", side_effect=lambda name:
                               [caller / filename, app / filename] if name == "codex" else []):
-                snapshot = discovery.candidate_snapshot("codex", manual_path=str(manual / filename),
+                snapshot = harness_locations.candidate_snapshot("codex", manual_path=str(manual / filename),
                                                         environment={"PATH": str(caller)})
             candidates = snapshot["candidates"]
             sources = list(dict.fromkeys(item["source"] for item in candidates))
@@ -1065,7 +1066,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
 
 class ProbeStopEvidenceTests(unittest.TestCase):
     def test_snapshot_failure_proves_no_probe_created(self):
-        with patch.object(discovery, 'candidate_snapshot', side_effect=ValueError('fixture snapshot failed')), \
+        with patch.object(harness_locations, 'candidate_snapshot', side_effect=ValueError('fixture snapshot failed')), \
              patch.object(discovery, 'probe') as probe:
             with self.assertRaises(ValueError) as caught:
                 discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
@@ -1109,7 +1110,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             with self.subTest(stopped=stopped):
                 error = ValueError('fixture probe failed')
                 error.discovery_shutdown_confirmed = stopped
-                with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
+                with patch.object(harness_locations, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
                      patch.object(discovery, '_candidate_handshake', side_effect=error):
                     with self.assertRaises(ValueError) as caught:
                         discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
@@ -1125,8 +1126,8 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             self.assertEqual(result['reason']['code'], 'harness.shutdown-unverified')
 
     def test_adjacent_node_unverified_stop_cannot_fall_through(self):
-        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
-             patch.object(discovery, 'file_fingerprint', return_value={}), \
+        with patch.object(harness_locations, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(harness_locations, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_native_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'probe', return_value=('shutdown-unverified', b'')), \
              patch.object(discovery, '_discover') as scan:
@@ -1136,8 +1137,8 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         scan.assert_not_called()
 
     def test_node_scan_unverified_stop_overrides_previous_failure(self):
-        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
-             patch.object(discovery, 'file_fingerprint', return_value={}), \
+        with patch.object(harness_locations, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(harness_locations, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_native_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
              patch.object(discovery, '_discover', return_value={'available': False, 'status': 'unhealthy',
@@ -1169,9 +1170,9 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                  patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):
                 with self.assertRaises(ValueError) as caught:
                     if scan:
-                        with patch.object(discovery, '_home', return_value=Path(directory)), \
-                             patch.object(discovery, '_common_dirs', return_value=[]), \
-                             patch.object(discovery, '_app_paths', return_value=[]):
+                        with patch.object(harness_locations, '_home', return_value=Path(directory)), \
+                             patch.object(harness_locations, '_common_dirs', return_value=[]), \
+                             patch.object(harness_locations, '_app_paths', return_value=[]):
                             discovery.discover('zcode', manual_path=str(cli), environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                     else:
                         discovery.probe([sys.executable, str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
@@ -1203,8 +1204,8 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             with self.subTest(stopped=stopped):
                 error = ValueError('fixture node probe failed')
                 error.discovery_shutdown_confirmed = stopped
-                with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
-                     patch.object(discovery, 'file_fingerprint', return_value={}), \
+                with patch.object(harness_locations, '_variants', return_value=[Path('/fixture/node')]), \
+                     patch.object(harness_locations, 'file_fingerprint', return_value={}), \
                      patch.object(discovery, '_native_command', return_value=['/fixture/node']), \
                      patch.object(discovery, 'probe', side_effect=error):
                     with self.assertRaises(ValueError) as caught:
@@ -1252,22 +1253,22 @@ class ProbeStopEvidenceTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'Windows selects a fixed adjacent node.exe without _variants')
     def test_node_early_failure_proves_no_probe_created(self):
-        with patch.object(discovery, '_variants', side_effect=ValueError('fixture node input failed')):
+        with patch.object(harness_locations, '_variants', side_effect=ValueError('fixture node input failed')):
             with self.assertRaises(ValueError) as caught:
                 discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
 
     def test_scan_unknown_candidate_failure_keeps_unconfirmed_stop(self):
         candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
-        with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
+        with patch.object(harness_locations, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
              patch.object(discovery, '_candidate_handshake', side_effect=ValueError('fixture unknown stop')):
             with self.assertRaises(ValueError) as caught:
                 discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_node_unknown_probe_failure_keeps_unconfirmed_stop(self):
-        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
-             patch.object(discovery, 'file_fingerprint', return_value={}), \
+        with patch.object(harness_locations, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(harness_locations, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_native_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown stop')):
             with self.assertRaises(ValueError) as caught:
@@ -1275,8 +1276,8 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_node_environment_failure_proves_no_probe_created(self):
-        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
-             patch.object(discovery, 'file_fingerprint', return_value={}), \
+        with patch.object(harness_locations, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(harness_locations, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_native_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'native_environment', side_effect=ValueError('fixture environment failed')), \
              patch.object(discovery, 'probe') as probe:

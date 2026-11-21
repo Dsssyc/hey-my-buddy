@@ -21,7 +21,7 @@ from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ...protocol.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
-from ..harnesses.runtime_selection import environment_for, selected
+from ...harness_selection import environment_for, selected
 from ..harnesses.run_contract import (
     FrozenJson, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
     ResumeCheckpoint, RunBudget, RunContinuation,
@@ -81,7 +81,7 @@ def _profile_execute(control, handle, module, started):
     """Correct a profile in fresh native sessions, each with its own start wait."""
     from ...protocol.capabilities import select_input_limit
     from ...protocol.input_limit import check_prompt_input
-    from ..harnesses.runtime_selection import environment_for, selected
+    from ...harness_selection import environment_for, selected
     from ...protocol import tool_evidence, usage
 
     total_calls = 0

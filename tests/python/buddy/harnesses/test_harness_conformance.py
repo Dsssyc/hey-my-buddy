@@ -25,7 +25,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.service.harness_health import HARNESSES as HEALTH_HARNESSES
 from hey_my_buddy.blackboard.store.db import HARNESS_SCHEMA
-from hey_my_buddy.buddy.harnesses import discovery
+from hey_my_buddy import harness_locations
 from hey_my_buddy.buddy.harnesses.discovery import native_environment
 from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
 from hey_my_buddy.buddy.harnesses.registry import (
@@ -93,7 +93,7 @@ def _unregistered_name():
     """A generated negative name, proven absent from every registered set."""
     taken = (set(HARNESS_NAMES) | {"command", "decision", "node"} | set(RUN_SEAMS)
              | set(ADAPTER_CAPABILITIES) | set(CODING_HARNESSES) | set(PRIVATE_STATE_ADAPTERS)
-             | set(EXISTING_CAPABILITIES) | set(discovery.HARNESS_NAMES) | set(HEALTH_HARNESSES))
+             | set(EXISTING_CAPABILITIES) | set(harness_locations.DISCOVERY_SPECS) | set(HEALTH_HARNESSES))
     name = "conformance-unregistered"
     while name in taken:
         name += "-x"
@@ -280,10 +280,10 @@ class HarnessConformanceTests(unittest.TestCase):
                                  f"{name}'s inquiry capability and delivery mode disagree")
 
     def test_catalog_and_discovery_entry_points_exist(self):
-        self.assertEqual(set(discovery.HARNESS_NAMES), set(HARNESS_NAMES))
+        self.assertEqual(set(harness_locations.DISCOVERY_SPECS), set(HARNESS_NAMES))
         for name in HARNESS_NAMES:
             with self.subTest(harness=name):
-                self.assertTrue(discovery._discovery_spec(name).command)
+                self.assertTrue(harness_locations.discovery_spec(name).command)
                 instance = built_in_adapters()[name]
                 self.assertTrue(instance.model_discovery,
                                 f"{name} does not declare model discovery")

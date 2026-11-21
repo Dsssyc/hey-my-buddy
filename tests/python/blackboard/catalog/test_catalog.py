@@ -142,7 +142,7 @@ class CatalogTests(unittest.TestCase):
         stored = {"reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={
                 "codex": adapter(), "dsh": adapter(), "command": adapter()}), \
-             patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected",
+             patch("hey_my_buddy.harness_selection.selected",
                    side_effect=lambda name: stored if name == "dsh" else None):
             report = capability_report()
         self.assertEqual(report["codex"]["reason"],

@@ -44,7 +44,7 @@ class DshAdapter:
         but unhealthy selection is still refused; nothing here sends a prompt
         or a model call.
         """
-        from ..runtime_selection import environment_for, selected
+        from ....harness_selection import environment_for, selected
         record = selected("dsh")
         if record is not None:
             if record.get("status") == "ready" and record.get("command"):

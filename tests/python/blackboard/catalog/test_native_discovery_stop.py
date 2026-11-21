@@ -11,7 +11,7 @@ from unittest.mock import patch
 from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.harness_selection import bound
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses import controller, discovery, version
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle

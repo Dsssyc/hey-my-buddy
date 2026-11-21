@@ -137,7 +137,7 @@ from .tool_evidence import (
 )
 from .session_content import CodexSessionProjector
 from ..session_record import SessionRecord
-from ..runtime_selection import environment_for
+from ....harness_selection import environment_for
 
 _NATIVE_STDERR_FILE = "native.stderr.log"
 #: The checkpoint's retained root assistant message bound, in serialized bytes.
@@ -498,7 +498,7 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     """Preparation phase: private evidence roots and native environment."""
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
-    from ..runtime_selection import environment_for
+    from ....harness_selection import environment_for
     incoming = dict(environment_for())
     try:
         command, environment = launch(incoming)

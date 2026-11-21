@@ -104,7 +104,7 @@ class DecisionCoordinator:
     def _adapter_available(self) -> tuple[bool, str | None]:
         from ...buddy.roles.router import DecisionAdapter
         from ..service.harness_health import HARNESSES, read_health
-        from ...buddy.harnesses.runtime_selection import bound
+        from ...harness_selection import bound
         with self.board.db.read() as db:
             records = [read_health(db, name) for name in HARNESSES]
         with bound(records):

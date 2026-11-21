@@ -131,7 +131,7 @@ from .protocol import (
     total_cost_usd,
 )
 from .tool_evidence import ReadOnlyToolEvidence
-from ..runtime_selection import environment_for
+from ....harness_selection import environment_for
 from ..session_record import SessionRecord
 from .session_content import ClaudeSessionProjector
 

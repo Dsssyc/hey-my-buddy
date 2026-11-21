@@ -643,7 +643,7 @@ class Execution:
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
         from ...protocol.harness_names import HARNESS_NAMES
-        from ..harnesses.runtime_selection import bound
+        from ...harness_selection import bound
 
         name = spec['adapter']
         review = name == 'decision' and claim['decisionInput']['routingMode'] == 'review'

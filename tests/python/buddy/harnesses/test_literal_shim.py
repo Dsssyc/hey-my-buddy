@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from fake_executable import make_fake_executable
+from hey_my_buddy import harness_locations, harness_selection
 from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
 from hey_my_buddy.buddy.harnesses.dsh.acp import launch
 from hey_my_buddy.buddy.harnesses.dsh import native_run
@@ -38,7 +39,7 @@ class LiteralShimTests(unittest.TestCase):
 
     def candidate(self):
         return {'path': str(self.shim), 'source': 'manual', 'exists': True,
-                'fingerprint': discovery.file_fingerprint(self.shim)}
+                'fingerprint': harness_locations.file_fingerprint(self.shim)}
 
     def record(self, harness='dsh', command=None):
         return {'harness': harness, 'status': 'ready', 'executable': str(self.shim),
@@ -135,17 +136,17 @@ class LiteralShimTests(unittest.TestCase):
         records = {name: self.record(name) for name in ('dsh', 'claude', 'codex', 'zcode')}
         selection = self.root / 'selection.json'
         selection.write_text(json.dumps(records), encoding='utf-8')
-        source = {runtime_selection.RECORD_FILE: str(selection), 'PATH': ''}
+        source = {harness_selection.RECORD_FILE: str(selection), 'PATH': ''}
         for harness in records:
             with self.subTest(harness=harness):
                 _command, result = runtime_selection.launch_with_environment(harness, source)
                 self.assertEqual(result['ELECTRON_RUN_AS_NODE'], '1')
-                self.assertNotIn(runtime_selection.RECORD_FILE, result)
-        with runtime_selection.bound(list(records.values()), environment=source):
+                self.assertNotIn(harness_selection.RECORD_FILE, result)
+        with harness_selection.bound(list(records.values()), environment=source):
             self.assertEqual(claude.launch(source)[1]['ELECTRON_RUN_AS_NODE'], '1')
             self.assertEqual(codex.launch(source)[1]['ELECTRON_RUN_AS_NODE'], '1')
             controller = runtime_selection.controller_environment(self.root, source)
-        saved = json.loads(Path(controller[runtime_selection.RECORD_FILE]).read_text(encoding='utf-8'))
+        saved = json.loads(Path(controller[harness_selection.RECORD_FILE]).read_text(encoding='utf-8'))
         self.assertEqual(saved, records)  # no new stored field
 
     def test_development_overrides_share_the_parser_and_environment_for_all_harnesses(self):
@@ -166,7 +167,7 @@ class LiteralShimTests(unittest.TestCase):
     def test_dsh_runtime_forwards_literal_environment_to_the_acp_launcher(self):
         root = self.root / 'turn'
         root.mkdir()
-        with runtime_selection.bound([self.record()]),\
+        with harness_selection.bound([self.record()]),\
              mock.patch.object(native_run.AcpClient, 'start') as start:
             native_run._launch_agent(cwd=str(root), invocation_root=root,
                                      sessions_root=root / 'sessions', scope_rows=[],
@@ -193,7 +194,7 @@ class LiteralShimTests(unittest.TestCase):
         capture.unlink()
         root = self.root / 'launch'
         root.mkdir()
-        with runtime_selection.bound([self.record(command=result['command'])]):
+        with harness_selection.bound([self.record(command=result['command'])]):
             command, extra = runtime_selection.launch_for('dsh', {})
         process, handle = launch(command, private_root=root, source_environment={'PATH': ''}, launch_environment=extra)
         process.communicate(timeout=10)

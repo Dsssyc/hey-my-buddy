@@ -30,7 +30,7 @@ def _later(seconds):
 
 
 def _snapshot(name, manual, environment=None):
-    from ...buddy.harnesses.discovery import candidate_snapshot
+    from ...harness_locations import candidate_snapshot
     return candidate_snapshot(name, manual_path=manual, environment=environment)
 
 
@@ -98,7 +98,7 @@ class HarnessHealth:
         """PATH is an ephemeral low-priority hint, never a stored environment."""
         if not isinstance(path, str) or len(path) > 32768:
             return
-        from ...buddy.harnesses.discovery import has_candidate
+        from ...harness_locations import has_candidate
         parts = dict.fromkeys(part for part in path.split(os.pathsep) if part and is_absolute_path(part))
         with self._path_hint_lock:
             hints = list(self._path_hints)
@@ -186,7 +186,7 @@ class HarnessHealth:
             stale_catalog_due = self._stale_catalog(name, now) if not force and not preflight else False
             environment = self.environment()
             snapshot = _snapshot(name, old['manualPath'], environment)
-            from ...buddy.harnesses.discovery import location_fingerprint
+            from ...harness_locations import location_fingerprint
             signature = location_fingerprint(snapshot)
             unchanged = old.get('locationFingerprint') == signature
             if (not force and unchanged and (old.get('expiresAt') or '') > now

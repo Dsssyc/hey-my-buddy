@@ -648,8 +648,8 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
     caller_context = copy_context()
     handle.thread = threading.Thread(target=lambda: caller_context.run(run),
                                      name="hmb-inline-" + identity.invocation_id)
-    from ..harnesses import runtime_selection
-    caller_context.run(runtime_selection._environment.set, environment)
+    from ... import harness_selection
+    caller_context.run(harness_selection._environment.set, environment)
     handle.thread.start()
     return handle
 

@@ -136,7 +136,7 @@ def adapter(name: str) -> Adapter | ZcodeAdapter:
 
 def capability_report() -> dict:
     from ...protocol.reasons import reason as make_reason
-    from .runtime_selection import selected
+    from ...harness_selection import selected
     report = {}
     for name, instance in adapters().items():
         usable, _diagnostic = instance.available()

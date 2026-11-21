@@ -42,7 +42,7 @@ from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_format
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.harness_selection import bound
 from hey_my_buddy.protocol import owned_process as windows_process
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 from hey_my_buddy.buddy.harnesses.run_contract import (

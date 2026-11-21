@@ -118,7 +118,7 @@ class NativeConfigTests(NativeConfigCase):
         self.assertEqual(provider_access_types(self.builtin, self.personal), {"fixture-account": "unknown"})
 
     def test_availability_and_preparation_do_not_read_provider_files(self):
-        with mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value={
+        with mock.patch("hey_my_buddy.harness_selection.selected", return_value={
                 "harness": "zcode", "status": "ready", "command": [sys.executable, str(self.fake)]}), \
              mock.patch.object(Path, "read_text", side_effect=AssertionError("provider read")):
             self.assertEqual(ZcodeAdapter().available(), (True, None))

@@ -92,8 +92,8 @@ class CandidatePrepareTests(BoardTestCase):
             turn={"turnId": "turn-1", "input": identity})
 
     def prepare(self, executor: WorkerRunExecutor, context: ExecutionContext) -> None:
-        from hey_my_buddy.buddy.harnesses import runtime_selection
-        with mock.patch.object(runtime_selection, "selected", return_value=dict(READY_SELECTION)):
+        from hey_my_buddy import harness_selection
+        with mock.patch.object(harness_selection, "selected", return_value=dict(READY_SELECTION)):
             executor.prepare(context)
 
     def control(self, context: ExecutionContext) -> dict:

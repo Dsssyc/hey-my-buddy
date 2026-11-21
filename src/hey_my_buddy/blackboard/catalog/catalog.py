@@ -350,7 +350,7 @@ def discover(*, directory: Path, harnesses: list[dict]) -> dict:
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
-        from ...buddy.harnesses.runtime_selection import bound
+        from ...harness_selection import bound
         selected_health = next(item for item in harnesses if item['harness'] == name)
         try:
             environment = dict(os.environ)

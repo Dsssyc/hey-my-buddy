@@ -683,11 +683,11 @@ class ConsoleDaemonTests(ConsoleTestCase):
         # The decoy still executes and records the harness that tried discovery.
         (guard / "sitecustomize.py").write_text(
             "import subprocess\n"
-            "from hey_my_buddy.buddy.harnesses import discovery\n"
+            "from hey_my_buddy import harness_locations\n"
             "def reject(harness, **kwargs):\n"
             f"    subprocess.run([{str(decoy)!r}, harness], check=False)\n"
             "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
-            "discovery.candidate_snapshot = reject\n", encoding="utf-8", newline="\n"
+            "harness_locations.candidate_snapshot = reject\n", encoding="utf-8", newline="\n"
         )
         environment = self.child_environment({
             "PYTHONPATH": os.pathsep.join((str(guard), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", ""))),

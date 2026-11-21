@@ -81,7 +81,7 @@ class ClaudeFixtureCase(unittest.TestCase):
         complete = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'complete'}]}}
         clock = [10.0]
         with mock.patch.dict(os.environ, self.environment, clear=True), \
-             mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+             mock.patch("hey_my_buddy.harness_selection.selected", return_value=None), \
              mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
              mock.patch.object(claude_module, '_probe_native_metadata', side_effect=[unknown, complete]) as probe, \
              mock.patch.object(claude_module.time, 'monotonic', side_effect=lambda: clock[0]):
@@ -126,7 +126,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
             raise BoardError("HARNESS_UNAVAILABLE", "fixture unauthenticated")
 
         with mock.patch.dict(os.environ, self.environment, clear=True), \
-                mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+                mock.patch("hey_my_buddy.harness_selection.selected", return_value=None), \
                 mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
                 mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
                 ThreadPoolExecutor(max_workers=8) as pool:

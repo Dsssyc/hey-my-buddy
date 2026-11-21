@@ -107,7 +107,7 @@ class ProfileRuntimeTests(unittest.TestCase):
             with mock.patch.object(execution_module, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
                  mock.patch.object(inline_run, "_inline_live", live), \
                  mock.patch.object(inline_run, "run_harness", side_effect=run), \
-                 mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", side_effect=selected), \
+                 mock.patch("hey_my_buddy.harness_selection.selected", side_effect=selected), \
                  mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input", return_value=SimpleNamespace(blocked=False)), \
                  mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
                 handle.model_response_wait.begin()
@@ -280,7 +280,7 @@ class ProfileRuntimeTests(unittest.TestCase):
                 with mock.patch.object(execution_module, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
                      mock.patch.object(inline_run, "_inline_live", live), \
                      mock.patch.object(inline_run, "run_harness", side_effect=run), \
-                     mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", side_effect=slow_selected), \
+                     mock.patch("hey_my_buddy.harness_selection.selected", side_effect=slow_selected), \
                      mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
                                 return_value=SimpleNamespace(blocked=False)), \
                      mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
@@ -322,7 +322,7 @@ class ProfileRuntimeTests(unittest.TestCase):
 
             with mock.patch.object(inline_run, "_inline_live", live), \
                  mock.patch.object(inline_run, "run_harness", side_effect=run), \
-                 mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", side_effect=selected), \
+                 mock.patch("hey_my_buddy.harness_selection.selected", side_effect=selected), \
                  mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
                             return_value=SimpleNamespace(blocked=False)), \
                  mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
@@ -391,7 +391,7 @@ class ProfileRuntimeTests(unittest.TestCase):
                 token = run_execution._profile_publisher.set(publish)
                 try:
                     with mock.patch.object(inline_run, "run_harness", side_effect=run), \
-                         mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+                         mock.patch("hey_my_buddy.harness_selection.selected", return_value=None), \
                          mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
                                     return_value=SimpleNamespace(blocked=False)), \
                          mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):

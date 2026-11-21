@@ -6,7 +6,7 @@ from pathlib import Path
 
 from hey_my_buddy.blackboard.service.daemon import Daemon, main
 from hey_my_buddy.blackboard.service.harness_health import HARNESSES
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.harness_selection import bound
 
 original = Daemon.service
 

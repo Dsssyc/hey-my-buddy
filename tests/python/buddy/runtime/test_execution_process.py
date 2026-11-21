@@ -94,7 +94,7 @@ class ExecutionEndpointTests(unittest.TestCase):
     def test_harness_prepare_preflight_replays_the_same_command_across_ipc_tear_down(self):
         # A same-contract hot swap tears the old daemon down mid-call; the
         # idempotent preflight must replay its exact commandId, not fail.
-        from hey_my_buddy.buddy.harnesses import runtime_selection
+        from hey_my_buddy import harness_selection
         from hey_my_buddy.protocol import harness_names
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
@@ -118,7 +118,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             client.call.side_effect = harness_prepare
             waits = []
             with mock.patch.object(harness_names, "HARNESS_NAMES", {"dsh"}), \
-                 mock.patch.object(runtime_selection, "bound") as bound, \
+                 mock.patch.object(harness_selection, "bound") as bound, \
                  mock.patch.object(execution.control, "wait",
                                    side_effect=lambda seconds: waits.append(seconds)), \
                  mock.patch.object(execution, "_execute_selected",
@@ -135,7 +135,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             bound.assert_called_once()
 
     def test_forced_preflight_replays_only_before_dispatch(self):
-        from hey_my_buddy.buddy.harnesses import runtime_selection
+        from hey_my_buddy import harness_selection
 
         spec = {'adapter': 'codex'}
         claim = {'task': {'taskId': 'task', 'spec': spec},
@@ -151,7 +151,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 if unknown:
                     replies.append({'harness': {'status': 'unknown', 'revision': 2}})
                 client.call.side_effect = [*replies, failure, {'harness': {'status': 'ready', 'revision': 3}}]
-                with mock.patch.object(runtime_selection, 'bound'), \
+                with mock.patch.object(harness_selection, 'bound'), \
                      mock.patch.object(execution.control, 'wait') as wait, \
                      mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
                     if phase == 'dispatch_uncertain' and not unknown:
@@ -214,7 +214,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 with mock.patch.object(transport, '_read_endpoint', return_value=endpoint), \
                      mock.patch.object(transport.private_dirs, 'linked', return_value=True), \
                      mock.patch.object(transport, '_request', side_effect=request), \
-                     mock.patch.object(runtime_selection, 'bound'), \
+                     mock.patch.object(harness_selection, 'bound'), \
                      mock.patch.object(execution.control, 'wait') as wait, \
                      mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
                     if fail_on == 'ping':
