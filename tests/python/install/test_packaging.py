@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -196,7 +197,7 @@ class SkillBuildTests(unittest.TestCase):
         text = (self.skill / "SKILL.md").read_text(encoding="utf-8")
         head = text.split("\n---\n", 1)[0]
         self.assertIn("\nname: hey-my-buddy", head)
-        version = re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8")).group(1)
+        version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         self.assertIn(f'version: "{version}"', head)
         marker = json.loads((self.skill / "skill.json").read_text(encoding="utf-8"))
         self.assertEqual((marker["name"], marker["version"], marker["contract"]), ("hey-my-buddy", version, CONTRACT_VERSION))

@@ -6,6 +6,7 @@ from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import threading
@@ -42,9 +43,14 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             software_version = tomllib.loads(project.read_text(encoding="utf-8"))["project"]["version"]
             synthetic_version = f'{contract_version.rsplit(".", 1)[0]}.{patch_number}'
             project_text = project.read_text(encoding="utf-8")
-            old_project = f'version = "{software_version}"'
-            self.assertEqual(project_text.count(old_project), 1)
-            project.write_text(project_text.replace(old_project, f'version = "{synthetic_version}"', 1), encoding="utf-8", newline="\n")
+            updated_project, replacements = re.subn(
+                rf'(?m)^version = "{re.escape(software_version)}"$',
+                f'version = "{synthetic_version}"',
+                project_text,
+            )
+            self.assertEqual(replacements, 1)
+            self.assertEqual(tomllib.loads(updated_project)["project"]["version"], synthetic_version)
+            project.write_text(updated_project, encoding="utf-8", newline="\n")
             lock = destination / "uv.lock"
             lock_text = lock.read_text(encoding="utf-8")
             old_package = f'name = "hey-my-buddy"\nversion = "{software_version}"'
