@@ -91,6 +91,11 @@ export type ProviderCooling = z.infer<typeof providerCoolingSchema>;
  */
 type CatalogStatus = "available" | "pending" | "unavailable";
 
+const buddyRemovalSchema = z.discriminatedUnion("allowed", [
+  z.object({ allowed: z.literal(true) }),
+  z.object({ allowed: z.literal(false), reason }),
+]).nullish();
+
 export type Buddy = {
   billing?: BillingFact;
   providerCooling?: ProviderCooling | null;
@@ -110,6 +115,7 @@ export type Buddy = {
   source: string;
   unavailableReason?: Reason | null;
   unavailableContent?: string | null;
+  removal?: z.infer<typeof buddyRemovalSchema>;
   /**
    * Model-identity (harness/provider/model) catalog state, shared by every
    * effort of the model service.
@@ -238,7 +244,7 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-export type ProviderRejection = { code: "quota-exceeded" | "rate-limited" | "overloaded"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
+export type ProviderRejection = { code: "quota-exceeded" | "rate-limited" | "overloaded" | "content-policy"; message?: string | null; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
 
 export const blockingTaskSchema = z.object({ runId: z.string(), title: z.string().nullable(), macroTaskId: z.string().nullable() }).nullable().optional();
 export type BlockingTask = z.infer<typeof blockingTaskSchema>;
@@ -442,9 +448,12 @@ export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
 
 // Only these snapshot fields were checked at the read boundary. The schema
 // validates; the API returns the original representation, including unknowns.
+export const buddyReadSchema = z.custom<Buddy>(value =>
+  buddyRemovalSchema.safeParse((value as Buddy | null | undefined)?.removal).success);
+
 export const snapshotReadSchema = z.object({
   csrfToken: z.string(), runtimeIdentity: nonblankString, eventCursor: safeCount, configuration: configurationSchema.nullable(),
-  buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
+  buddies: z.array(buddyReadSchema), preferences: preferencesSchema,
   models: z.array(modelSchema),
   modelCorrespondences: z.array(modelCorrespondenceSchema),
   modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),

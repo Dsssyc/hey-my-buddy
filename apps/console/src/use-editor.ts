@@ -13,7 +13,7 @@ import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SA
 import type { AuthorityLatch } from "./console-session";
 import {
   changeCount as countChanges, configurationChanged as configurationDiffers,
-  draftDiffers, historyView, makeDraft, publication,
+  draftDiffers, dropRemovedBuddies, historyView, makeDraft, publication,
   rebaseDraft, withHistory,
 } from "./draft";
 import type { HistoryEntries, UserPolicyPublication } from "./draft";
@@ -314,6 +314,17 @@ export function useEditor(
     return;
   }
 
+  function dropRemoved(result: Parameters<typeof dropRemovedBuddies>[1]) {
+    const current = draftRef.current;
+    const base = baselineRef.current;
+    if (!current || !base) return;
+    const next = dropRemovedBuddies(current, result);
+    draftRef.current = next;
+    setDraft(next);
+    setBaselineValue(dropRemovedBuddies(base, result));
+    setAliasRefusal(previous => previous && result.removedBuddyIds.includes(previous.buddyId) ? null : previous);
+  }
+
   function rebase(next: Snapshot) {
     const current = draftRef.current;
     const base = baselineRef.current;
@@ -341,7 +352,7 @@ export function useEditor(
     busy, setAuxiliaryBusy, uncertain, confirming, dirty, changeCount,
     configurationDirty, blocking, attention,
     aliasRefusal, error, notice: noticeCopy ? { text: noticeCopy, fading: noticeFading } : null, blocked, saveBlockedReason,
-    update, save, discard, reloadLatest, rebase, adoptHistory,
+    update, save, discard, reloadLatest, rebase, adoptHistory, dropRemoved,
   };
 }
 export type Editor = ReturnType<typeof useEditor>;

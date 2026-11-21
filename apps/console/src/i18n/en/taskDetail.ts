@@ -109,7 +109,8 @@ export default {
     part: { role: "Role", task: "Task", hostInput: "Host input", context: "Context", delivery: "Delivery", format: "Format" },
     sent: "Native request sent", responded: "Model started responding", yes: "Yes", no: "No",
   },
-  providerRejection: { "overloaded": "Model service overloaded", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
+  providerMessage: "Provider message",
+  providerRejection: { "content-policy": "Rejected by provider content policy", "overloaded": "Model service overloaded", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {
     diff: "Diff", base: "Base",
     id: "Artifact ID", sha: "SHA-256", note: "Note",

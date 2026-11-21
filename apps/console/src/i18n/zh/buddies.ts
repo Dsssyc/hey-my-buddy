@@ -33,6 +33,21 @@ export default {
     unset: "未指定 Router",
     unusable: "Router 不可用",
   },
+  removal: {
+    buddy: "移除",
+    model: "移除全部档位",
+    confirmBuddy: "移除 {{name}} 的 {{effort}} 档位？",
+    confirmModel: "移除 {{name}} 的全部 {{n}} 个档位？",
+    settings: "这些档位的别名与偏好设置也会移除。",
+    history: "历史评价样本、总结和过往微任务记录会保留。若原生目录重新列出该模型，可再次发现它。",
+    cancel: "取消",
+    busy: "正在处理目录或设置，请稍候。",
+    refused: "当前连接或授权无法移除 buddy。",
+    successBuddy: "已移除 1 个档位。",
+    successModel: "已移除 {{n}} 个档位。",
+    failed: "移除失败。",
+    invalidReply: "移除响应不完整。",
+  },
   /** One clear choice and three buddy preference modes. */
   preference: {
     unset: "不设",

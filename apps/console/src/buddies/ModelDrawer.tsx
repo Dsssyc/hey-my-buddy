@@ -6,6 +6,7 @@ import { cn } from "cn";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Segmented, SegmentedItem } from "@/components/ui/segmented";
@@ -20,6 +21,7 @@ import {
 } from "../console-data";
 import { setConcurrencyLimit, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
+import type { Reason } from "../reason";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { modelServiceKey } from "../console-data";
@@ -37,8 +39,23 @@ export function buddyRowId(buddyId: string): string {
   return `buddy-${buddyId}`;
 }
 
-function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigate }: {
+function RemoveButton({ model, blockers, lock, onClick }: {
+  model?: boolean; blockers: Reason[]; lock: string; onClick: (trigger: HTMLButtonElement) => void;
+}) {
+  const { t } = useTranslation("buddies");
+  const disabled = blockers.length > 0 || !!lock;
+  return <Hint text={blockers.length ? <ReasonMessages reasons={blockers} /> : lock}
+    description={blockers.length ? reasonTexts(blockers, t).join(" · ") : undefined}>
+    <Button variant="outline" size="sm" aria-disabled={disabled || undefined}
+      onClick={event => { if (!disabled) onClick(event.currentTarget); }}>
+      {t(model ? "removal.model" : "removal.buddy")}
+    </Button>
+  </Hint>;
+}
+
+function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigate, removalLock, onRemove }: {
   chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor; modelAvailable: boolean; onNavigate: (location: BuddyLocation) => void;
+  removalLock: string; onRemove: (trigger: HTMLButtonElement) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -107,6 +124,9 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
         </Hint>
       </div>
     </div>
+    {buddy.removal && <div className="mt-3 flex justify-end">
+      <RemoveButton lock={removalLock} blockers={buddy.removal.allowed ? [] : [buddy.removal.reason]} onClick={onRemove} />
+    </div>}
   </div>;
 }
 
@@ -138,10 +158,11 @@ function EffortRow({ chip, selected, onSelect, editor }: {
 }
 
 /** A model's shared settings and one selected buddy, unfolded below its row. */
-export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onNavigate }: {
+export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onNavigate, removalLock, onRemove }: {
   row: ModelRow; harnessState?: string; data: ConsoleView; recorded: Snapshot; editor: Editor;
   selectedBuddyId: string; onSelectBuddy: (id: string) => void;
   onNavigate: (location: BuddyLocation) => void;
+  removalLock: string; onRemove: (chip: BuddyChip | null, trigger: HTMLButtonElement) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -159,6 +180,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   }, [selectedBuddyId]);
   const { modelService, key } = row;
   const member = modelService.buddies[0];
+  const removeModel = row.chips.length > 1 && row.chips.every(chip => chip.buddy.removal);
+  const modelBlockers = row.chips.flatMap(({ buddy }) =>
+    buddy.removal?.allowed === false ? [buddy.removal.reason] : []);
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
   const raised = row.limit > publishedLimit;
@@ -211,6 +235,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
               }} /></Hint>
           </div>
         </div>
+        {removeModel && <div className="ml-auto">
+          <RemoveButton model lock={removalLock} blockers={modelBlockers} onClick={trigger => onRemove(null, trigger)} />
+        </div>}
       </div>
       {limitInvalid && <p id={`${id}-range`} className="mt-2 text-xs text-fail" role="alert">{t("pane.range")}</p>}
       {raised && <div className="mt-3 max-w-2xl"><ConcurrencyNotice id={`${id}-concurrency-notice`} /></div>}
@@ -230,7 +257,8 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
         </ScrollArea>
       </div>
       <div key={selectedBuddyId} className={panel.switched ? "panel-enter min-w-0" : "min-w-0"}>
-        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate} />
+        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate}
+          removalLock={removalLock} onRemove={trigger => onRemove(selected, trigger)} />
       </div>
     </div>
   </section>;

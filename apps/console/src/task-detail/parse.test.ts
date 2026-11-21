@@ -355,6 +355,22 @@ describe("the task view", () => {
     expect(() => parseTask(task({ state: "failed", providerRejection: { code: "blocked" } }), "m1")).toThrow(ApiError);
   });
 
+  it.each([["  Provider text\nSecond line  ", "Provider text\nSecond line"], ["   ", undefined], [undefined, undefined]])(
+    "reads content-policy evidence from both task and turn records (%j)", (message, expected) => {
+      const providerRejection = { code: "content-policy" as const, message };
+      const parsed = parseWorkflow(reply({ turns: [{ ...turn, state: "failed", providerRejection }] }), "m1").turns[0];
+      const ending = parseTask(task({ state: "failed", providerRejection }), "m1").attempt!.ending;
+      expect(parsed.providerRejection).toEqual({ code: "content-policy", ...(expected ? { message: expected } : {}) });
+      expect(ending?.rejectionCode).toBe("content-policy");
+      expect(ending?.rejectionMessage).toBe(expected);
+    },
+  );
+
+  it("still rejects an unknown provider code in turn records", () => {
+    const payload = reply({ turns: [{ ...turn, providerRejection: { code: "unrecognized" } }] });
+    expect(() => parseWorkflow(payload, "m1")).toThrow(/turn.providerRejection/);
+  });
+
   it("keeps the basis a usage states", () => {
     const view = parseTask(task({ selectedAttempt: attempt({ tokenUsage: { ...usage, inputBasis: "excludes-cached", inputTokens: 100 } }) }), "m1");
     expect(view.attempt!.tokenUsage).toMatchObject({ inputBasis: "excludes-cached", inputTokens: 100, cachedInputTokens: 15000 });

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, validPreferences } from "./api";
 import { isModelServiceConcurrencyEntry, modelServiceKey } from "./console-data";
-import { modelSchema, modelCorrespondenceSchema } from "./types";
+import { buddyReadSchema, modelSchema, modelCorrespondenceSchema } from "./types";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
@@ -25,6 +25,7 @@ function parseBuddyPage(value: unknown): BuddyPage {
   const page = value as BuddyPage | null;
   const valid = !!page
     && Array.isArray(page.buddies)
+    && page.buddies.every(row => buddyReadSchema.safeParse(row).success)
     && validPreferences(page.preferences)
     && Array.isArray(page.models)
     && page.models.every(row => modelSchema.safeParse(row).success)
@@ -107,7 +108,7 @@ type BuddyHistoryFilters = {
 export function historySourceKey(snapshot: Snapshot): string {
   return JSON.stringify({
     eventCursor: snapshot.eventCursor,
-    buddies: snapshot.buddies.map(({ buddyId, available, enabled }) => [buddyId, available, enabled]),
+    buddies: snapshot.buddies.map(({ buddyId, available, enabled, removal }) => [buddyId, available, enabled, removal]),
     preferences: snapshot.preferences,
     models: snapshot.models,
     modelCorrespondences: snapshot.modelCorrespondences,

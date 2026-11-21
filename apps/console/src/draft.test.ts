@@ -4,6 +4,7 @@ import {
   changeCount,
   configurationChanged,
   draftDiffers,
+  dropRemovedBuddies,
   makeDraft,
   modelServiceConcurrencyChanges,
   preferenceChanges,
@@ -56,6 +57,32 @@ const snapshot = {
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
+
+  it("discards removed settings before rebase and retains edits to surviving buddies and services", () => {
+    const retiredService = { ...flashModelService, model: retired.model };
+    const baseline = makeDraft({
+      ...snapshot,
+      buddies: [flash, retired],
+      preferences: [{ buddyId: retired.buddyId, mode: "prefer", note: "old" }],
+      modelServiceConcurrency: [...snapshot.modelServiceConcurrency, { ...retiredService, limit: 3, active: 0 }],
+    });
+    let draft: Draft = { ...baseline, buddies: baseline.buddies.map(buddy => ({ ...buddy, alias: `draft-${buddy.buddyId}` })) };
+    draft = setPreference(draft, retired.buddyId, "exclude", "retire");
+    draft = setPreference(draft, flash.buddyId, "prefer", "keep");
+    draft = setConcurrencyLimit(setConcurrencyLimit(draft, retiredService, 5), flashModelService, 4);
+    draft = stageModelCorrespondence(draft, { ...retiredService, action: "undo", correspondenceId: "retired-mapping" });
+    const reply = { removedBuddyIds: [retired.buddyId], removedModelServices: [retiredService] };
+
+    const before = dropRemovedBuddies(baseline, reply);
+    const { conflicts, draft: rebased, baseline: fresh } = rebaseDraft(dropRemovedBuddies(draft, reply), before, snapshot);
+    expect(conflicts).toEqual([]);
+    expect(publication(fresh, rebased, "publish")).toEqual({
+      commandId: "publish",
+      buddySettings: [{ buddyId: flash.buddyId, alias: "draft-flash-off" }],
+      preferenceChanges: [{ buddyId: flash.buddyId, mode: "prefer", note: "keep" }],
+      modelServiceConcurrency: [{ ...flashModelService, limit: 4 }],
+    });
+  });
 
   it("keeps the server snapshot unchanged while editing", () => {
     const draft = makeDraft(snapshot);

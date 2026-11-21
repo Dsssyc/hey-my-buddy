@@ -108,7 +108,8 @@ export default {
     part: { role: "角色", task: "任务", hostInput: "Host 输入", context: "上下文", delivery: "交付", format: "格式" },
     sent: "已发送原生请求", responded: "模型开始作答", yes: "是", no: "否",
   },
-  providerRejection: { "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
+  providerMessage: "提供方说明",
+  providerRejection: { "content-policy": "内容策略拒绝", "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {
     diff: "差异", base: "起点",
     id: "产物 ID", sha: "SHA-256", note: "标注",

@@ -183,6 +183,28 @@ describe("the selected model", () => {
   });
 });
 
+describe("removal eligibility", () => {
+  it("offers no removal for available, pending, or harness-offline buddies", async () => {
+    const state = snapshot({ buddies: [
+      buddy(sonnet, "medium", { enabled: true }),
+      buddy(sonnet, "high", { catalogStatus: "pending" }),
+      buddy(sol, "medium", { available: false, unavailableReason: { code: "harness.probe-failed", params: {} } }),
+    ] });
+    state.harnesses[1] = { ...state.harnesses[1], status: "login-required" };
+    const user = userEvent.setup();
+    const f = fixture(state, { buddy_list: () => page(state.buddies, state) });
+    open(f);
+    await listed(1, 3);
+    await selectModel(user, SONNET, "Claude Code");
+    expect(within(pane()).queryByRole("button", { name: /^移除/ })).toBeNull();
+    await user.click(effortCell("high"));
+    expect(within(pane()).queryByRole("button", { name: /^移除/ })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用/ }));
+    await selectModel(user, SOL, "Codex");
+    expect(within(pane()).queryByRole("button", { name: /^移除/ })).toBeNull();
+  });
+});
+
 describe("a buddy's own preference", () => {
   it("keeps the model row free of preference controls and retains a buddy control", async () => {
     const f = fixture();

@@ -25,6 +25,35 @@ describe("opening the detail of a micro task", () => {
     } finally { await act(async () => { await i18n.changeLanguage("zh"); }); }
   });
 
+  it.each([
+    ["zh", "内容策略拒绝", "提供方说明", "Original provider explanation.\nSecond line <literal>."],
+    ["en", "Rejected by provider content policy", "Provider message", undefined],
+  ] as const)("shows a failed content-policy turn in %s", async (language, label, section, message) => {
+    await act(async () => { await i18n.changeLanguage(language); });
+    try {
+      const data = timeline({ rows: [row({ state: "failed", status: "failed" })] });
+      Object.assign(data.spans.find(item => item.spanId === "e2")!, { state: "failed", resultStatus: "failed", error: message });
+      const providerRejection = { code: "content-policy" as const, message };
+      const record = workflow({ state: "failed" });
+      record.turns[0] = { ...record.turns[0], state: "failed", providerRejection };
+      open({ step: 7, timeline: data, replies: { workflow: record, task: task({ state: "failed",
+        selectedAttempt: { attemptId: "att-2", result: { terminationReason: "harness-error" } },
+        ...(message ? {} : { providerRejection }),
+      }) } });
+      await ready();
+      expect(pane().textContent).toContain(label);
+      expect(pane().textContent).not.toMatch(/已改派|rerouted/i);
+      const details = within(pane()).queryByRole("group", { name: section });
+      if (message) {
+        expect(details?.querySelector("p")?.textContent).toBe(message);
+        expect(pane().textContent?.split(message)).toHaveLength(2);
+      } else expect(details).toBeNull();
+    } finally {
+      cleanup();
+      await act(async () => { await i18n.changeLanguage("zh"); });
+    }
+  });
+
   it("offers overview and session only for routing and execution steps", async () => {
     const f = open({ step: 1 });
     await ready();

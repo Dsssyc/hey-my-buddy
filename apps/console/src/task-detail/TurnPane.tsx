@@ -51,8 +51,11 @@ export function TurnPane({ step, ctx, tabs, session }: { step: Step; ctx: Contex
   const running = step.outcome === "running";
   const confirming = confirmingStop(attempt);
   const failed = step.outcome === "failed";
-  const rejected = turn?.state === "rejected";
-  const rejectionCode = turn?.providerRejection?.code;
+  const ending = attempt?.ending;
+  const rejectionCode = turn?.providerRejection?.code ?? ending?.rejectionCode ?? null;
+  const contentPolicy = rejectionCode === "content-policy";
+  const rejected = turn?.state === "rejected" && !contentPolicy;
+  const rejectionMessage = turn?.providerRejection?.message ?? ending?.rejectionMessage;
   const inputFailure = turn?.inputFailure ?? result?.inputFailure ?? (attempt ? ctx.view.inputFailure : undefined);
   const unknown = step.outcome === "unknown";
   const reminders = { overdue: attempt?.overdue === true, possiblyStuck: attempt?.possiblyStuck === true };
@@ -69,9 +72,9 @@ export function TurnPane({ step, ctx, tabs, session }: { step: Step; ctx: Contex
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
   const notes = [attempt?.releaseReason ? <ReasonMessage reason={attempt.releaseReason} /> : null,
-    attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
-    failed && span.error ? span.error : null].filter(Boolean);
-  const note = inputFailure ? t(`inputFailure.stage.${inputFailure.stage}`)
+    ending ? endingText({ ...ending, rejectionCode }, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
+    failed && !contentPolicy && span.error ? span.error : null].filter(Boolean);
+  const note = inputFailure && !contentPolicy ? t(`inputFailure.stage.${inputFailure.stage}`)
     : rejected && rejectionCode ? [t(`providerRejection.${rejectionCode}`), t("turn.rerouted")].join(" · ")
     : notes.length ? <Joined items={notes} /> : undefined;
   return <Pane tabs={tabs} footer={running && !confirming ? <LiveActivity footer activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined} title={session ? null :
@@ -95,6 +98,9 @@ export function TurnPane({ step, ctx, tabs, session }: { step: Step; ctx: Contex
         {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
       </span>} />
     <ExecutionIssues attempt={attempt} />
+    {contentPolicy && rejectionMessage && <Section name={t("providerMessage")}>
+      <p className="whitespace-pre-wrap wrap-anywhere text-sm text-ink2">{rejectionMessage}</p>
+    </Section>}
     {none && <>
       <Section name={t("delivery.access")}>{turn.access}</Section>
       <Section name={t("delivery.cwd")}><code>{ctx.workflow.cwd ?? ctx.view.task.cwd}</code></Section>
