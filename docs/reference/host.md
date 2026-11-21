@@ -10,11 +10,11 @@ Act on the reply's `outcome`, using the ids it carries:
 
 - `delivered`: read the full `get`, check the Worker's report and the fixed output against the brief, then `accept` the `artifactId` or send it back with `continue`.
 - `waiting-host`: answer its `requestId` with `continue`.
-- `expected-duration` or `native-silence` is a reminder: look at `get`, then wait again.
-- `issue`: a new execution or service issue, given first in `executionIssues` or `serviceIssues`; tell the user when it needs them, then wait again.
+- `expected-duration` or `native-silence` is a reminder: inspect its compact `activity` (or `get`), then wait again.
+- `issue`: a new execution or service issue, given first in `executionIssues` or `serviceIssues` alongside compact `activity` when running; tell the user when it needs them, then wait again.
 - `paused`: the user paused the macro task in the console and its turn was interrupted; the micro task keeps running state and continues on its own when the user resumes it, so wait again. Pausing and resuming decide nothing about the micro task ([ADR-033](../decisions/033-macro-task-pause-resume-end.md)).
-- `wait-timeout` or `unavailable` ends only that wait: wait again for the same `runId`.
-- Any other outcome is a stopped micro task: read the full `get` and act on its `actions`.
+- `wait-timeout` or `unavailable` ends only that wait: `wait-timeout` carries compact `activity` when running; wait again for the same `runId`.
+- Any other outcome is a stopped micro task: read the full `get` and act on its `actions`. If `providerRejection.code` is `content-policy`, do not reroute or switch buddies/providers to bypass the refusal; report the provider's rejection to the user instead.
 
 Each new issue ends a wait once: an issue that stays open does not end the next wait again, its reappearance after it cleared is a new issue, and an issue that cleared before any wait saw it is not reported. Other replies can carry the open issues too. `EXECUTION_UNKNOWN` says the service cannot verify an execution's process: tell the user and keep waiting on the same `runId`, since unknown never means stopped.
 
