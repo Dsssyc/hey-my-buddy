@@ -1,18 +1,23 @@
 import i18n from "i18next";
 import { useCopyState } from "../i18n/use-copy-state";
 import { useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ConsoleApi } from "../api";
-import { errorText } from "../api";
+import { ApiError, errorText } from "../api";
 import { harnessName } from "../buddy-display";
 import { modelServiceKey, modelServices } from "../console-data";
 import { historyView } from "../draft";
+import { AliasTag } from "../components/AliasTag";
+import { ReasonMessage } from "../i18n/ReasonMessage";
+import { isReason } from "../reason";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { MAX_HISTORY_BUDDIES, BUDDY_PAGE_SIZE, historySourceKey, useBuddyHistory } from "../use-buddy-history";
@@ -20,13 +25,21 @@ import { useViewPreference } from "../view-preferences";
 import { HarnessHeader } from "./HarnessHeader";
 import { ModelDrawer, buddyRowId } from "./ModelDrawer";
 import { ModelLine } from "./ModelLine";
-import { harnessBlocks, harnessStateText, listedModels } from "./models";
-import type { ModelRow } from "./models";
+import { harnessBlocks, harnessStateText, listedModels, modelIdentity } from "./models";
+import type { BuddyChip, ModelRow } from "./models";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation } from "./navigation";
 import type { useHarnessActions } from "./use-harness-actions";
 
 const liveT = i18n.getFixedT(null, "buddies");
+const removalResultSchema = z.object({
+  removedBuddyIds: z.array(z.string()).min(1),
+  removedModelServices: z.array(z.object({ harness: z.string(), provider: z.string(), model: z.string() })),
+  duplicate: z.boolean(),
+});
+
+type Removal = { row: ModelRow; chip: BuddyChip | null; commandId?: string };
+
 
 /**
  * One directory, grouped by harness, with a harness sidebar and one model drawer.
@@ -52,6 +65,10 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const handledLocation = useRef<string | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useCopyState(), [note, setNote] = useCopyState();
   const [refused, setRefused] = useState(false);
+  const [removal, setRemoval] = useState<Removal | null>(null);
+  const [removalError, setRemovalError] = useState<{ failure: unknown } | null>(null);
+  const removalTrigger = useRef<HTMLButtonElement | null>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const sourceKey = historySourceKey(snapshot);
   const history = useBuddyHistory(api, snapshot.csrfToken, sourceKey,
     { query, harness: "", enabled: active && showUnavailable, autoOpen: showUnavailable });
@@ -132,6 +149,55 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     onNavigate(next);
   }
   const refusal = !editor.sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("models.refused") : "";
+  const removalLock = !editor.sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("removal.refused")
+    : busy || editor.busy || editor.confirming || actions.busy ? t("removal.busy") : "";
+  const removalChips = removal ? removal.chip ? [removal.chip] : removal.row.chips : [];
+
+  function confirmRemoval(row: ModelRow, chip: BuddyChip | null, trigger: HTMLButtonElement) {
+    removalTrigger.current = trigger;
+    setRemovalError(null);
+    setRemoval({ row, chip });
+  }
+
+  async function remove() {
+    if (!removal || removalLock) return;
+    const commandId = removal.commandId ?? crypto.randomUUID();
+    const buddyIds = removalChips.map(chip => chip.buddy.buddyId);
+    setRemoval({ ...removal, commandId });
+    setBusy(true); editor.setAuxiliaryBusy(true); setRemovalError(null); setError(""); setNote("");
+    try {
+      const reply = await api.command("buddy_remove", { commandId, buddyIds }, snapshot.csrfToken);
+      const parsed = removalResultSchema.safeParse(reply);
+      if (!parsed.success) throw new ApiError("INVALID_RESPONSE", () => liveT("removal.invalidReply"));
+      const result = parsed.data;
+      editor.dropRemoved(result);
+      const row = removal.row;
+      const removed = new Set(result.removedBuddyIds);
+      const firstRemaining = row.chips.find(chip => !removed.has(chip.buddy.buddyId))?.buddy.buddyId;
+      if (selected === row.key) {
+        if (!firstRemaining) {
+          setSelected(null);
+          setChosen(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => key !== row.key)));
+          const next: BuddyLocation = { view: "models" };
+          handledLocation.current = buddyHash(next);
+          onNavigate(next);
+        } else if (removed.has(chosen[row.key])) {
+          selectBuddy(row.key, firstRemaining);
+        }
+      }
+      const next = await refresh();
+      if (next) editor.rebase(next);
+      removalTrigger.current = null;
+      setRemoval(null);
+      setNote(() => result.removedBuddyIds.length === 1 ? liveT("removal.successBuddy")
+        : liveT("removal.successModel", { n: result.removedBuddyIds.length }));
+    } catch (failure) {
+      setRemovalError({ failure });
+    } finally {
+      setBusy(false); editor.setAuxiliaryBusy(false);
+    }
+  }
+
   async function discover() {
     if (busy) return;
     // A refusal is said only while the action would still be refused.
@@ -159,7 +225,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     className="view-presence flex min-h-0 flex-1 flex-col bg-background">
       <div data-slot="catalogue-toolbar" className="min-h-12 shrink-0 border-b bg-card px-6 py-2 text-ink2">
         <div data-slot="catalogue-controls" className="mx-auto flex max-w-[1040px] min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
-          <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
+          <Input ref={searchInput} type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
             value={query} onChange={event => setQuery(event.target.value)} />
           <div data-slot="catalogue-group" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2 sm:min-w-fit">
             <div data-slot="catalogue-filters" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
@@ -210,7 +276,9 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                     <CollapsibleContent>
                       {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor} onNavigate={onNavigate}
                         harnessState={block.state ? `${block.name} ${harnessStateText(block.state, t)}` : undefined}
-                        selectedBuddyId={chosen[row.key]!} onSelectBuddy={buddyId => selectBuddy(row.key, buddyId)} />}
+                        selectedBuddyId={(row.chips.find(chip => chip.buddy.buddyId === chosen[row.key]) ?? row.chips[0]).buddy.buddyId}
+                        onSelectBuddy={buddyId => selectBuddy(row.key, buddyId)} removalLock={removalLock}
+                        onRemove={(chip, trigger) => confirmRemoval(row, chip, trigger)} />}
                     </CollapsibleContent>
                   </Collapsible>)}
                 </CollapsibleContent>
@@ -223,5 +291,41 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
           </div>}
         </div>
       </ScrollArea>
+      <Dialog open={removal !== null} onOpenChange={open => { if (!open && !busy) setRemoval(null); }}>
+        {removal && <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+          onCloseAutoFocus={event => {
+            event.preventDefault();
+            const trigger = removalTrigger.current;
+            (trigger?.isConnected ? trigger : searchInput.current)?.focus();
+          }}>
+          <DialogTitle className="wrap-anywhere">{removal.chip
+            ? t("removal.confirmBuddy", { name: modelIdentity(removal.row.modelService), effort: removal.chip.effort })
+            : t("removal.confirmModel", { name: modelIdentity(removal.row.modelService), n: removalChips.length })}</DialogTitle>
+          <DialogDescription>{t("removal.settings")} {t("removal.history")}</DialogDescription>
+          <ul className="space-y-1 text-sm">
+            {removalChips.map(({ buddy, effort, preference }) => <li key={buddy.buddyId} className="flex flex-wrap items-baseline gap-x-2">
+              <span>{effort}</span><AliasTag alias={buddy.alias} />
+              {preference && <span className="text-ink2">{t(`preference.${preference}`)}</span>}
+            </li>)}
+          </ul>
+          {removalError && <RemovalError failure={removalError.failure} />}
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setRemoval(null)}>{t("removal.cancel")}</Button>
+            <Hint text={removalLock}>
+              <Button variant="destructive" aria-disabled={!!removalLock || undefined}
+                onClick={() => void remove()}>{t(removal.chip ? "removal.buddy" : "removal.model")}</Button>
+            </Hint>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
   </section>;
+}
+
+function RemovalError({ failure }: { failure: unknown }) {
+  const { t } = useTranslation("buddies");
+  const reason = failure instanceof ApiError && ["BUDDY_IN_USE", "BUDDY_NOT_REMOVABLE"].includes(failure.code)
+    ? failure.details?.reason : null;
+  return <p role="alert" className="wrap-anywhere text-sm text-fail">
+    {t("removal.failed")} {isReason(reason) ? <ReasonMessage reason={reason} /> : errorText(failure)}
+  </p>;
 }

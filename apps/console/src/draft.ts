@@ -39,6 +39,24 @@ export function makeDraft(snapshot: Snapshot): Draft {
   });
 }
 
+/** Discard settings for identities the catalogue command has removed. */
+export function dropRemovedBuddies(
+  draft: Draft,
+  { removedBuddyIds, removedModelServices }: { removedBuddyIds: string[]; removedModelServices: ModelService[] },
+): Draft {
+  const ids = new Set(removedBuddyIds);
+  const keys = new Set(removedModelServices.map(modelServiceKey));
+  const keepsService = (service: ModelService) => !keys.has(modelServiceKey(service));
+  return {
+    ...draft,
+    buddies: draft.buddies.filter(buddy => !ids.has(buddy.buddyId)),
+    preferences: draft.preferences.filter(preference => !ids.has(preference.buddyId)),
+    modelCorrespondences: draft.modelCorrespondences.filter(keepsService),
+    modelCorrespondenceChanges: draft.modelCorrespondenceChanges.filter(keepsService),
+    modelServiceConcurrency: draft.modelServiceConcurrency.filter(keepsService),
+  };
+}
+
 /** Replaces any staged change for this service; one publication has one action per service. */
 export function stageModelCorrespondence(draft: Draft, change: ModelCorrespondenceChange): Draft {
   const key = modelServiceKey(change);

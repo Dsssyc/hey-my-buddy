@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { ConsoleApi } from "./api";
+import { ApiError, type ConsoleApi } from "./api";
 import type { Preference, Buddy, BuddyPage, Snapshot } from "./types";
 import {
   chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, queryModel, search, selectModel,
@@ -37,8 +37,11 @@ function catalog(): Buddy[] {
  * decision buddy. Retired identities are only reachable through the paged
  * `buddy_list` history, exactly like the board exposes them.
  */
-function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
-  const buddies = catalog();
+function fixture(options: {
+  staleDecision?: boolean; stalePin?: boolean; pageSize?: number;
+  removal?: Record<string, Buddy["removal"]>; removalFailure?: ApiError;
+} = {}) {
+  let buddies = catalog().map(buddy => ({ ...buddy, removal: options.removal?.[buddy.buddyId] }));
   const decisionId = options.staleDecision ? retiredMax : flashOff;
   const models = ["deepseek-flash", "retired-model"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null }));
   const correspondences = ["deepseek-flash", "retired-model"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false }));
@@ -98,10 +101,21 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       published.push(params);
       state = { ...state, buddies: state.buddies.map(buddy => {
         const change = params.buddySettings?.find((entry: { buddyId: string }) => entry.buddyId === buddy.buddyId);
-        return change ? { ...buddy, enabled: change.enabled } : buddy;
+        return change ? { ...buddy, ...change } : buddy;
       }) };
       return {};
     }
+    if (operation === "buddy_remove" && options.removal) {
+      if (options.removalFailure) throw options.removalFailure;
+      const ids = new Set<string>(params.buddyIds);
+      buddies = buddies.filter(buddy => !ids.has(buddy.buddyId));
+      const removedModelServices = buddies.some(buddy => buddy.model === retiredModelService.model) ? [] : [retiredModelService];
+      state = { ...state, eventCursor: state.eventCursor + 1,
+        buddies: state.buddies.filter(buddy => !ids.has(buddy.buddyId)),
+        unavailableBuddyCount: buddies.filter(buddy => !buddy.available).length };
+      return { removedBuddyIds: params.buddyIds, removedModelServices, duplicate: false };
+    }
+
     if (operation === "model_catalog_refresh") {
       // A completed program discovery publishes directory facts and a new
       // revision; the bounded snapshot still omits retained identities.
@@ -138,6 +152,91 @@ afterEach(() => {
   vi.restoreAllMocks();
   window.location.hash = "";
   document.documentElement.dataset.theme = "";
+});
+
+describe("removing retained buddies", () => {
+  function open(f: ReturnType<typeof fixture>) {
+    window.location.hash = "#buddies/models";
+    render(<App suppliedApi={f.api} />);
+  }
+
+  it("removes one effort, selects the surviving effort, and keeps unrelated edits publishable", async () => {
+    const f = fixture({ stalePin: true, removal: { [retiredMax]: { allowed: true } } });
+    const user = userEvent.setup();
+    open(f);
+    await openRetired(user);
+    await user.type(within(pane()).getByLabelText("别名"), "old-alias");
+    expect(within(pane()).queryByRole("button", { name: "移除全部档位" })).toBeNull();
+    await selectModel(user, FLASH, "DSH");
+    await user.type(within(pane()).getByLabelText("别名"), "keep-alias");
+    await selectModel(user, RETIRED, "DSH");
+    await user.click(within(pane()).getByRole("button", { name: "移除" }));
+
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText("old-alias")).toBeTruthy();
+    expect(dialog.getByText("固定")).toBeTruthy();
+    expect(dialog.getByText(/历史评价样本、总结和过往微任务记录会保留/)).toBeTruthy();
+    expect(f.operations).not.toContain("buddy_remove");
+    await user.click(dialog.getByRole("button", { name: "移除" }));
+    await screen.findByText("已移除 1 个档位。");
+    expect(f.command).toHaveBeenCalledWith("buddy_remove", { commandId: expect.any(String), buddyIds: [retiredMax] }, "csrf");
+    await waitFor(() => expect(effortCell("low").getAttribute("aria-pressed")).toBe("true"));
+    expect(within(pane()).queryByRole("button", { name: "max" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("设置已保存");
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: flashOff, alias: "keep-alias" }]);
+  });
+
+  it("removes all efforts in one command and clears the drawer location", async () => {
+    const f = fixture({ removal: { [retiredMax]: { allowed: true }, [retiredLow]: { allowed: true } } });
+    const user = userEvent.setup();
+    open(f);
+    await openRetired(user);
+    await user.click(within(pane()).getByRole("button", { name: "移除全部档位" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("heading").textContent).toContain("全部 2 个档位");
+    await user.click(dialog.getByRole("button", { name: "移除全部档位" }));
+    await screen.findByText("已移除 2 个档位。");
+    expect(f.command.mock.calls.filter(([operation]) => operation === "buddy_remove")).toEqual([
+      ["buddy_remove", { commandId: expect.any(String), buddyIds: [retiredLow, retiredMax] }, "csrf"],
+    ]);
+    expect(window.location.hash).toBe("#buddies/models");
+    await waitFor(() => expect(queryModel(RETIRED)).toBeNull());
+    expect(pane()).toBeNull();
+  });
+
+  it("shows the reason on both blocked actions and never opens confirmation", async () => {
+    const reason = { code: "buddy-removal.in-router-list", params: {} };
+    const f = fixture({ removal: { [retiredMax]: { allowed: false, reason }, [retiredLow]: { allowed: true } } });
+    const user = userEvent.setup();
+    open(f);
+    await openRetired(user);
+    for (const name of ["移除", "移除全部档位"]) {
+      const button = within(pane()).getByRole("button", { name });
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(button.getAttribute("aria-description")).toBe(reasonText(reason));
+      await user.click(button);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+    expect(f.operations).not.toContain("buddy_remove");
+  });
+
+  it.each([
+    ["BUDDY_IN_USE", "buddy-removal.has-maintenance-runs", "维护运行记录引用了此 buddy。"],
+    ["BUDDY_NOT_REMOVABLE", "buddy-removal.not-retired", "仅可移除档位已退休或模型已确认消失的 buddy。"],
+  ])("shows the current reason after a %s conflict", async (code, reasonCode, message) => {
+    const f = fixture({ removal: { [retiredMax]: { allowed: true } },
+      removalFailure: new ApiError(code, "Conflict", { reason: { code: reasonCode, params: {} } }) });
+    const user = userEvent.setup();
+    open(f);
+    await openRetired(user);
+    await user.click(within(pane()).getByRole("button", { name: "移除" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("button", { name: "移除" }));
+    expect((await dialog.findByRole("alert")).textContent).toContain(message);
+    await user.click(dialog.getByRole("button", { name: "取消" }));
+    expect(within(pane()).getByRole("button", { name: "移除" })).toBeTruthy();
+  });
 });
 
 describe("unavailable buddies", () => {

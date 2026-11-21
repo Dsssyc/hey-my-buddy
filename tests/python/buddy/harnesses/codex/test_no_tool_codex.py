@@ -179,6 +179,18 @@ class NoToolCodexTests(unittest.TestCase):
                 # The failure receipt states its explicit zero-tool fact; it is
                 # never silently absent on a refused fast call.
 
+    def test_content_policy_error_event_is_reported_without_turn_completion(self):
+        outcome, _, _ = self.run_case("content-policy-error")
+        self.assertEqual(outcome.status, "failed", outcome.result)
+        self.assertIn("providerRejection", outcome.result, outcome.result)
+        rejection = outcome.result["providerRejection"]
+        self.assertIsNotNone(rejection.pop("observedAt"))
+        self.assertEqual(rejection, {
+            "code": "content-policy", "nativeCode": "cyberPolicy",
+            "source": "codex/app-server-turn-error",
+            "resetsAt": None, "rejectionPhase": "before-model",
+            "message": "The provider rejected this request under its content policy."})
+
     def test_projected_facts_survive_rejections_and_corrections_add_roots(self):
         for case, category in (("typed", "execute"), ("collab", "other"),
                                ("raw", "execute"), ("late", "other")):

@@ -18,7 +18,8 @@ def moment(seconds):
 
 
 def failure(*, phase="before-model", reset=None, code="quota-exceeded"):
-    return {"code": code, "nativeCode": "serverOverloaded" if code == "overloaded" else "usageLimitExceeded", "source": "synthetic/turn-error",
+    native_code = {"overloaded": "serverOverloaded", "content-policy": "cyberPolicy"}.get(code, "usageLimitExceeded")
+    return {"code": code, "nativeCode": native_code, "source": "synthetic/turn-error",
             "observedAt": T0, "resetsAt": reset, "rejectionPhase": phase}
 
 
@@ -223,6 +224,18 @@ class CoolingWorkflowTests(WorkflowTestCase):
 
     def test_rate_limit_is_not_a_quota_reroute_or_cooldown(self):
         self.assert_host_failure(code="rate-limited")
+
+    def test_content_policy_stays_with_host_even_with_another_available_buddy(self):
+        run = self.routed()
+        first = self.claim(self.board_, run_id=run["runId"])
+        self.enable(1)
+        settled = self.reject_turn(first, code="content-policy")
+        self.assertFalse(settled["workflow"].get("autoContinued", False))
+        view = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(view["state"], "failed")
+        self.assertEqual(view["routing"]["decisionId"], run["routing"]["decisionId"])
+        self.assertEqual(view["counts"]["turns"], 1)
+        self.assertEqual(view["turns"][0]["providerRejection"], failure(code="content-policy"))
 
     def test_overload_reroutes_before_model_without_provider_cooling(self):
         run = self.routed()

@@ -286,6 +286,12 @@ def main():
                           "turnId": turn_id, "status": {"type": "active"}}})
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
+            if case == "content-policy":
+                turn = {"id": turn_id, "status": "failed", "items": [], "error": {
+                    "message": "  The provider rejected this request under its content policy.  ",
+                    "codexErrorInfo": "cyberPolicy"}}
+                send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
+                continue
             if case.startswith(("quota-before", "quota-activity-", "overload-before", "overload-activity-")):
                 activity = case.removeprefix("quota-activity-").removeprefix("overload-activity-")
                 if activity in ("text", "reasoning", "tool"):

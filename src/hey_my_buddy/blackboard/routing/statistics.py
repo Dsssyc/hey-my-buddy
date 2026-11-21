@@ -16,6 +16,7 @@ from ...protocol.turn_input import turn_buddy
 NEITHER = frozenset({"service-stop", "console-stop", "transport-error",
                      "workspace-error", "unknown-stop", "interrupted"})
 PROVIDER_REJECTIONS = frozenset({"overloaded", "quota-exceeded", "rate-limited"})
+NON_ABILITY_PROVIDER_REJECTIONS = PROVIDER_REJECTIONS | {"content-policy"}
 IDENTITY = ("harness", "provider", "model", "effort")
 KIND = ("harness", "model_id", "effort")
 USAGE_FIELDS = ("inputTokens", "cachedInputTokens", "outputTokens")
@@ -40,6 +41,8 @@ def round_classification(receipt: dict | None) -> str:
         return "neither"
     result = receipt["result"] or {}
     rejection = result.get("providerRejection") or {}
+    if rejection.get("code") == "content-policy":
+        return "neither"
     if result.get("code") == "harness-unavailable" or rejection.get("code") in PROVIDER_REJECTIONS:
         return "infrastructure"
     return "ability"

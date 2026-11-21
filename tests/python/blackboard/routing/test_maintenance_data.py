@@ -819,11 +819,14 @@ class MaintenanceDataTests(WorkflowTestCase):
             packet = build_packet(db)
             self.assertEqual([task["runId"] for task in packet["microTasks"]], [second])
             self.assertEqual(packet["kinds"][0]["citationRunIds"], [second])
-            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.providerRejection.code',"
-                       "'overloaded') WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?)",
-                       (second,))
-            self.assertEqual(pending_count(db), 0)
-            self.assertIsNone(build_packet(db))
+            for code in ("overloaded", "content-policy"):
+                with self.subTest(code=code):
+                    db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.providerRejection.code',?)"
+                               " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?)",
+                               (code, second))
+                    self.assertFalse(pending(db))
+                    self.assertEqual(pending_count(db), 0)
+                    self.assertIsNone(build_packet(db))
 
     def test_packet_order_and_finish_follow_conclusion_time(self):
         first, second = (run["runId"] for run in self.runs)

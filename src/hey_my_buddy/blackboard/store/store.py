@@ -1439,6 +1439,16 @@ class BoardStore:
         )
         if cursor.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
+        if state == "executing":
+            turn = connection.execute(
+                "UPDATE workflow_turns SET state='running', updated_at=? WHERE attempt_id=? AND state='prepared'",
+                (now, attempt["attempt_id"]),
+            )
+            if turn.rowcount > 0:
+                connection.execute(
+                    "UPDATE workflow_runs SET updated_at=? WHERE run_id=? AND current_attempt_id=?",
+                    (now, attempt["task_id"], attempt["attempt_id"]),
+                )
 
     def _inquiry_journal(self, connection, attempt):
         from ...protocol.inquiry_journal import read_inquiry_journal

@@ -39,6 +39,23 @@ describe("the program reason catalog", () => {
     expect(reasonText({ code: "alias.conflict", params: { conflictingBuddy: samples.conflictingBuddy } })).toBe(language === "zh"
       ? "这个别名已被 codex / openai / other / max 使用。" : "This alias is already used by codex / openai / other / max.");
   });
+  it("explains buddy removal blockers in both languages", () => {
+    const cases = [
+      ["in-router-list", "此 buddy 仍在 Router 列表中。", "This buddy is in the Router list."],
+      ["is-maintenance-buddy", "此 buddy 已配置用于维护。", "This buddy is configured for maintenance."],
+      ["is-profile-buddy", "此 buddy 已配置用于模型画像。", "This buddy is configured for profiling."],
+      ["has-maintenance-runs", "维护运行记录引用了此 buddy。", "Maintenance run records reference this buddy."],
+      ["has-profile-runs", "模型画像运行记录引用了此 buddy。", "Profiling run records reference this buddy."],
+    ] as const;
+    for (const [code, chinese, english] of cases) {
+      const reason = { code: `buddy-removal.${code}`, params: {} };
+      setLanguageChoice("zh");
+      expect(reasonText(reason)).toBe(chinese);
+      setLanguageChoice("en");
+      expect(reasonText(reason)).toBe(english);
+    }
+  });
+
   it("names the owning micro task for a helper cascade in both languages", () => {
     const reason = { code: "micro-task.owned-concluded", params: { runId: "root-1" } };
     setLanguageChoice("zh");

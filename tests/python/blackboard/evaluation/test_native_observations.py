@@ -26,6 +26,18 @@ class NativeCoolingTests(BoardTestCase):
         self.assertIsNone(provider_rejection_view({"providerRejection": {"rateLimitType": "five_hour", "resetsAt": 1790467200}}))
         self.assertIsNone(provider_rejection_view({"error": "quota exhausted"}))
 
+    def test_content_policy_is_projected_without_cooling(self):
+        board = self.board()
+        failure = {**denial(), "code": "content-policy", "nativeCode": "cyberPolicy",
+                   "message": "The provider rejected this request under its content policy."}
+        result = {"providerRejection": failure}
+        self.assertEqual(provider_rejection_view(result), failure)
+        attempt = {"adapter": "codex", "model_harness": "codex", "model_provider": "openai",
+                   "started_at": "2026-09-29T09:59:00.000Z"}
+        with board.store.db.write() as db:
+            persist(db, attempt, result, status="failed", shutdown_confirmed=True, now=T0)
+            self.assertIsNone(provider_state(db, "codex", "openai"))
+
     def test_denial_records_provider_cooling_without_usage_or_native_window(self):
         board = self.board()
         attempt = {"attempt_id": "fixture-denial", "adapter": "codex",

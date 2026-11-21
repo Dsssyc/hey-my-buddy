@@ -255,7 +255,8 @@ export type Ending = {
   stoppedBy: "host" | "lead" | "console" | "service" | "unknown" | null;
   actor: Actor | null;
   note: string | null;
-  rejectionCode: "quota-exceeded" | "rate-limited" | "overloaded" | null;
+  rejectionCode: ProviderRejection["code"] | null;
+  rejectionMessage?: string | null;
 };
 
 /** The execution the task view's per-attempt facts are about: the one running, else the last one chosen. */

@@ -61,6 +61,13 @@ def _view(run: dict, *, outcome: str, started: float, wait_seconds: int,
                 'checkout', 'unsealedChanges'):
         if key in run:
             view[key] = run[key]
+    if run.get("providerRejection") is not None:
+        view["providerRejection"] = run["providerRejection"]
+    activity = run.get("activity")
+    if isinstance(activity, dict) and outcome in ("wait-timeout", "expected-duration", "native-silence", "issue", "paused"):
+        view["activity"] = {key: activity[key] for key in (
+            "phase", "observedAt", "lastNativeActivityAt", "lastToolActivityAt", "toolName", "counts", "waitingReason",
+        ) if key in activity}
     if isinstance(run.get('pause'), dict):
         view['pause'] = run['pause']
     selected = run.get("selectedAttempt")

@@ -124,7 +124,8 @@ class ProviderRejectionTests(unittest.TestCase):
                                  ("sessionBudgetExceeded", "quota-exceeded"),
                                  ("workspace_owner_usage_limit_reached", "quota-exceeded"),
                                  ("RATE_LIMIT", "rate-limited"), ("rateLimitExceeded", "rate-limited"),
-                                 ("serverOverloaded", "overloaded"), ("overloaded", "overloaded")):
+                                 ("serverOverloaded", "overloaded"), ("overloaded", "overloaded"),
+                                 ("cyberPolicy", "content-policy"), ("CYBER_POLICY", "content-policy")):
             with self.subTest(native=native):
                 self.assertEqual(usage.classify_provider_rejection_code(native), expected)
                 failure = usage.normalize_provider_rejection({"code": expected, "nativeCode": native, "source": "fixture",
@@ -146,8 +147,35 @@ class ProviderRejectionTests(unittest.TestCase):
                 self.assertEqual(usage.normalize_provider_rejection(failure), failure)
         self.assertEqual(usage.classify_provider_rejection_code("1310"), "unknown")
         self.assertEqual(usage.classify_provider_rejection_code("rate_limited"), "unknown")
-        for text in ("Selected model is at capacity", "API Error: 529 overloaded", "server_error", "503", "529"):
+        for text in ("Selected model is at capacity", "API Error: 529 overloaded", "server_error", "503", "529",
+                     "contentPolicy", "policyViolation"):
             self.assertEqual(usage.classify_provider_rejection_code(text), "unknown")
+
+    def test_content_policy_keeps_only_a_valid_bounded_message(self):
+        rejection = {"code": "content-policy", "nativeCode": "cyberPolicy", "rejectionPhase": "before-model"}
+        message = "提供方拒绝了此请求。"
+        normalized = usage.normalize_provider_rejection({**rejection, "message": f"  {message} \n"})
+        self.assertEqual(normalized["message"], message)
+        self.assertEqual(usage.normalize_provider_rejection(normalized), normalized)
+
+        for invalid in (None, "", " \n", 42, "denied\0here", "denied\ud800"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(usage.normalize_provider_rejection({**rejection, "message": invalid}),
+                                 usage.normalize_provider_rejection(rejection))
+
+        prefix = "界" * 682
+        for suffix in ("界", " 界"):
+            with self.subTest(suffix=suffix):
+                normalized = usage.normalize_provider_rejection({**rejection, "message": prefix + suffix})
+                self.assertEqual(normalized["message"], prefix)
+                self.assertEqual(usage.normalize_provider_rejection(normalized), normalized)
+
+    def test_operational_rejections_omit_messages(self):
+        for code in ("quota-exceeded", "rate-limited", "overloaded"):
+            with self.subTest(code=code):
+                rejection = {"code": code, "nativeCode": code, "rejectionPhase": "before-model"}
+                self.assertEqual(usage.normalize_provider_rejection({**rejection, "message": "provider diagnostic"}),
+                                 usage.normalize_provider_rejection(rejection))
 
     def test_missing_or_invalid_classification_is_refused(self):
         for code in (None, "unknown", "QUOTA", "quota exceeded", False, 0, [], {}):

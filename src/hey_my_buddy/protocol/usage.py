@@ -17,8 +17,8 @@ never turned into zero, and a session-cumulative record is refused instead of be
 counted as this attempt.
 
 A provider rejection keeps its native structured code, observation time, reset time
-and rejection phase. Native codes and sources accept only identifier characters:
-free text is refused or replaced with ``unknown`` instead of being persisted.
+and rejection phase. A content policy rejection can also keep a bounded message.
+Native codes and sources accept only identifier characters.
 
 Every ``normalize_*`` function is idempotent: replaying the same record through it
 again returns the same canonical value and never accumulates a second time.
@@ -56,6 +56,8 @@ MAX_TIMESTAMP = 64
 MAX_WINDOW_NAME = 64
 #: The retained native root assistant text, matching the Codex checkpoint bound.
 MAX_ASSISTANT_MESSAGE_BYTES = 65536
+MAX_REJECTION_MESSAGE_BYTES = 2048
+PROVIDER_REJECTION_CODES = ("quota-exceeded", "rate-limited", "overloaded", "content-policy")
 
 TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -84,6 +86,7 @@ _QUOTA_NATIVE_CODES = frozenset({
 #: Native codes that mean "transiently rate limited" rather than exhausted quota.
 _RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded", "model_rate_limited"})
 _OVERLOAD_NATIVE_CODES = frozenset({"serverOverloaded", "overloaded"})
+_CONTENT_POLICY_NATIVE_CODES = frozenset({"cyberPolicy"})
 
 
 def _is_count(value: Any) -> bool:
@@ -265,6 +268,8 @@ def classify_provider_rejection_code(native_code: str) -> str:
         return "quota-exceeded"
     if folded in {re.sub(r"[_-]", "", code).lower() for code in _RATE_NATIVE_CODES}:
         return "rate-limited"
+    if folded in {re.sub(r"[_-]", "", code).lower() for code in _CONTENT_POLICY_NATIVE_CODES}:
+        return "content-policy"
     return "unknown"
 
 
@@ -279,7 +284,7 @@ def normalize_provider_rejection(value: Any) -> dict | None:
     if not isinstance(value, dict):
         return None
     code = value.get("code")
-    if code not in ("quota-exceeded", "rate-limited", "overloaded"):
+    if code not in PROVIDER_REJECTION_CODES:
         return None
     native_code = identifier(value.get("nativeCode"))
     phase = value.get("rejectionPhase")
@@ -294,6 +299,15 @@ def normalize_provider_rejection(value: Any) -> dict | None:
         "resetsAt": _timestamp(value.get("resetsAt")),
         "rejectionPhase": phase,
     }
+    if code == "content-policy":
+        message = value.get("message")
+        if isinstance(message, str) and "\0" not in message:
+            try:
+                message = truncate_utf8(message.strip(), MAX_REJECTION_MESSAGE_BYTES).rstrip()
+            except UnicodeEncodeError:
+                return failure
+            if message:
+                failure["message"] = message
     return failure
 
 
@@ -377,6 +391,8 @@ __all__ = [
     "INPUT_BASIS_INCLUDES_CACHED",
     "LAST_ASSISTANT_MESSAGE_VERSION",
     "MAX_ASSISTANT_MESSAGE_BYTES",
+    "MAX_REJECTION_MESSAGE_BYTES",
+    "PROVIDER_REJECTION_CODES",
     "TOKEN_USAGE_VERSION",
     "classify_provider_rejection_code",
     "identifier",

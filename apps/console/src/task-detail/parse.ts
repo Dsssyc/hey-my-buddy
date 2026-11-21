@@ -6,7 +6,7 @@ import { blockingTaskSchema } from "../types";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
 import { parseInputFailure } from "./input-failure";
-import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
+import type { ActivityPhase, Actor, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
 import type {
   Activity, Artifact, Attempt, Audit, AuditRequest, Basis, Buddy, CompactRequest, Continuation, CumulativePatch, Ending,
   HostConclusion, Inquiries, Inquiry, InquiryState, Integration, OpenRequest, ResultTurn, Routing, RoutingEntry,
@@ -125,10 +125,18 @@ export function parseTokenUsage(value: unknown): TokenUsage | null {
   return { ...counts, source: row.source, scope: "attempt", inputBasis, ...(completeness ? { completeness } : {}) };
 }
 
+function parseProviderRejection(value: unknown, field: string): ProviderRejection | null {
+  const row = recOrNull(value, field);
+  if (!row) return null;
+  const code = oneOf(row.code, ["quota-exceeded", "rate-limited", "overloaded", "content-policy"] as const, field);
+  const message = strOrNull(row.message, `${field}.message`)?.trim();
+  return { code, ...(message ? { message } : {}) };
+}
+
 function parseTurn(value: unknown): Turn {
   const turn = rec(value, "turn");
   const routing = recOrNull(turn.routing, "turn.routing");
-  const failure = recOrNull(turn.providerRejection, "turn.providerRejection");
+  const failure = parseProviderRejection(turn.providerRejection, "turn.providerRejection");
   return {
     turnId: str(turn.turnId, "turn.turnId"), turnIndex: int(turn.turnIndex, "turn.turnIndex"),
     attemptId: str(turn.attemptId, "turn.attemptId"), expectedSeconds: intOrNull(turn.expectedSeconds, "turn.expectedSeconds"),
@@ -142,7 +150,7 @@ function parseTurn(value: unknown): Turn {
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
     inputFailure: parseInputFailure(turn.inputFailure, "turn.inputFailure"),
-    ...(failure ? { providerRejection: { code: oneOf(failure.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "turn.providerRejection") } } : {}),
+    ...(failure ? { providerRejection: failure } : {}),
   };
 }
 
@@ -536,8 +544,8 @@ function parseAttempt(task: Rec): Attempt | null {
   const active = task.activeAttemptId === attemptId;
   const reminders = rec(attempt.reminders, "task.selectedAttempt.reminders");
   const receipt = recOrNull(attempt.result, "task.selectedAttempt.result");
-  const providerRejection = recOrNull(task.providerRejection, "task.providerRejection");
-  const rejectionCode = providerRejection ? oneOf(providerRejection.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "task.providerRejection") : null;
+  const providerRejection = parseProviderRejection(task.providerRejection, "task.providerRejection");
+  const rejectionCode = providerRejection?.code ?? null;
   const initiator = attempt.stopInitiator ?? task.stopInitiator;
   const cancellation = recOrNull(task.cancellation, "task.cancellation");
   const cancelled = task.state === "cancelled" || task.state === "cancelling" || recOrNull(task.workflow, "task.workflow")?.state === "cancelled";
@@ -548,10 +556,11 @@ function parseAttempt(task: Rec): Attempt | null {
   // Only a person who stopped it is named; the console and the service are the stopper, not a name.
   const named = who && (stoppedBy === "host" || stoppedBy === "lead") && who.role === stoppedBy ? who : null;
   // A run that is over and says no cause is not a normal end: its cause is unknown.
-  const normal = raw === "completed" || (raw === null && !cancelled && !rejectionCode && !["completed", "failed"].includes(task.state as string));
+  const normal = !rejectionCode && (raw === "completed" || (raw === null && !cancelled && !["completed", "failed"].includes(task.state as string)));
   const ending: Ending | null = normal ? null : {
     cause: raw, stoppedBy: cancelled ? stoppedBy : null, actor: cancelled ? named : null,
     note: cancelled && cancellation ? strOrNull(cancellation.note, "task.cancellation.note") : null, rejectionCode,
+    ...(providerRejection?.message ? { rejectionMessage: providerRejection.message } : {}),
   };
   return {
     attemptId, active,

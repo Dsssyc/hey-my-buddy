@@ -1,4 +1,7 @@
 """Provider cooling from structured execution results."""
+from ...protocol.usage import PROVIDER_REJECTION_CODES
+
+
 def persist(connection, attempt, result, *, status, shutdown_confirmed, now):
     """Update provider cooling inside the committed result transaction."""
     from ...protocol.harness_names import HARNESS_NAMES
@@ -17,4 +20,4 @@ def persist(connection, attempt, result, *, status, shutdown_confirmed, now):
 def provider_rejection_view(result):
     """The common harness result already normalized this structured fact."""
     failure = result.get("providerRejection") if isinstance(result, dict) else None
-    return failure if isinstance(failure, dict) and failure.get("code") in ("quota-exceeded", "rate-limited", "overloaded") else None
+    return failure if isinstance(failure, dict) and failure.get("code") in PROVIDER_REJECTION_CODES else None

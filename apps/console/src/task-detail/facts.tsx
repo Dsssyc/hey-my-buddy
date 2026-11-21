@@ -11,7 +11,7 @@ import { formatCoolingTime, formatList } from "../i18n/format";
 import { Paths } from "./parts";
 import type { Basis, Ending } from "./types";
 
-/** Why an execution did not end as it should: the cause, who stopped it and why, a native limit. */
+/** Why an execution did not end as it should: the cause, who stopped it and why, a provider rejection. */
 export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
   const cause = ending.cause === "wrap-up" && ending.stoppedBy === "lead" ? t("termination.wrapUpLead")
     : ending.cause === "console-stop" ? stopActorText("console")
