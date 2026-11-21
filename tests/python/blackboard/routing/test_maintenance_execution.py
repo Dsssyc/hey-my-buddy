@@ -980,7 +980,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def test_ordinary_capacity_blocks_maintenance_until_released(self):
         occupied = self.board_.submit_execution(
             requestId="capacity-holder", task="A model-free occupied slot", adapter="command",
-            argv=["true"], cwd=str(self.workdir("capacity")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("capacity")), expectedSeconds=1800)["task"]["runId"]
         blocker = admit_board(self.board_, {"nonce": "c" * 32, "taskId": occupied})["claim"]
         self.assertIsNotNone(blocker)
         self.configure()

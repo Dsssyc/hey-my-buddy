@@ -28,7 +28,8 @@ class InquiryResultImportTests(BoardTestCase):
     def exercise_final_answer(self, sampled_state: str) -> None:
         board = self.board()
         task = board.submit_execution(requestId=f"inquiry-result-{sampled_state}", task="fixture work",
-                                      cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+                                      cwd=str(self.workdir()), adapter="command", argv=["true"],
+                                      expectedSeconds=1800)["task"]
         attempt = admit_execution(board.client(), NONCE, task_id=task["runId"])["claim"]["attempt"]
         task_id, attempt_id = task["runId"], attempt["attemptId"]
         identity = {"taskId": task_id, "attemptId": attempt_id,

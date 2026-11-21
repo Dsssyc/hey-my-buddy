@@ -52,7 +52,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     current_task = failover.FailoverTests.current_task
     next_claim = failover.FailoverTests.next_claim
     def request(self, *, request_id="pick-1", task="fix the parser"):
-        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task})
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task,
+                                                           "expectedSeconds": 1800})
 
     def tasks(self, *, state=None):
         with self.board_.store.db.read() as db:

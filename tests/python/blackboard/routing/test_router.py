@@ -114,7 +114,7 @@ class RouterPublicationTests(WorkflowTestCase):
         delivered = board.call('workflow_get', {'runId': submitted['runId']})
         self.accept_run(board, delivered)
         request = board.store.decisions.request_select({'requestId': 'route-after-sample',
-                                                   'task': 'choose a capable buddy'})
+                                                   'task': 'choose a capable buddy', 'expectedSeconds': 1800})
         decision = board.call('selection_get', {'decisionId': request['decisionId'],
                                                 'includeAudit': True})['decision']
         candidate = next(item for item in decision['input']['buddies'] if item['buddyId'] == BUDDY_ID)
@@ -129,7 +129,8 @@ class RouterPublicationTests(WorkflowTestCase):
         board = InProcessBoard(self.directory / (code or f"publication-{len(self._stack)}"))
         self._stack.append(board)
         self.seed(board, preferences=preferences)
-        request = board.store.decisions.request_select({'requestId': 'route', 'task': 'choose'})
+        request = board.store.decisions.request_select({'requestId': 'route', 'task': 'choose',
+                                                        'expectedSeconds': 1800})
         pass  # Admission is owned by the service.
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
         result = {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'error' if code else 'ok', 'operation': 'select',
@@ -214,7 +215,7 @@ class RouterPublicationTests(WorkflowTestCase):
     def test_response_wait_update_does_not_change_direct_selection_replay(self):
         board = self.board()
         self.seed(board)
-        params = {'requestId': 'stable-response-wait-request', 'task': 'choose'}
+        params = {'requestId': 'stable-response-wait-request', 'task': 'choose', 'expectedSeconds': 1800}
         original = board.store.decisions.request_select(params)
         with board.store.db.write() as connection:
             connection.execute("UPDATE router_settings SET model_response_wait_seconds=90 WHERE id=1")

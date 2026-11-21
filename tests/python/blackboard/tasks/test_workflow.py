@@ -579,7 +579,8 @@ class LifecycleTests(WorkflowTestCase):
         cancelled = board.call("workflow_cancel", {"runId": run_id})
         self.assertEqual(cancelled["state"], "cancelled")
         # The caller-owned execution primitive remains independently cancellable.
-        execution = board.submit_execution(**{"requestId": "execution-1", "adapter": "command", "argv": ["/bin/true"], "task": "plain", "cwd": str(self.workdir("execution"))})
+        execution = board.submit_execution(**{"requestId": "execution-1", "adapter": "command", "argv": ["/bin/true"], "task": "plain", "cwd": str(self.workdir("execution")),
+                                              "expectedSeconds": 1800})
         plain = board.call("task_cancel", {"runId": execution["task"]["runId"]})
         self.assertEqual(plain["task"]["state"], "cancelled")
 

@@ -36,7 +36,7 @@ DECISION_ADAPTER = "decision"
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled")
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled"})
 
-SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities"})
+SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "expectedSeconds"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -250,7 +250,7 @@ class DecisionCoordinator:
             "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
         }
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, project: dict | None, hard_constraints: dict | None = None) -> dict:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int | None, project: dict | None, hard_constraints: dict | None = None) -> dict:
         table = self._table_input(
             connection, buddies=candidates, include_preferences=True, now=now
         )
@@ -273,10 +273,12 @@ class DecisionCoordinator:
             params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
         )
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=schemas.MAX_TASK_BYTES)
+        expected_seconds = schemas.expected_duration(params)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
         request = {
             "kind": "select",
             "task": task_text,
+            "expectedSeconds": expected_seconds,
             "requiredCapabilities": capabilities,
         }
         return self._create(request_id, request)
@@ -323,7 +325,7 @@ class DecisionCoordinator:
             sole_candidate: sqlite3.Row | None = None
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "modelResponseWaitSeconds": None, "routerCalled": False}
-            expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
+            expected_seconds = request["expectedSeconds"]
             snapshot: dict = {"facts": facts, "baseInput": {"protocolVersion": router_selection.VERSION, "task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
             if len(candidates) == 1:
@@ -933,6 +935,17 @@ class DecisionCoordinator:
                 "reason": reason_from_json(current["reason_code"], current["reason_params_json"]), "note": current["note"]}
 
 
+    @staticmethod
+    def _retry_expected_seconds(connection: sqlite3.Connection, row: sqlite3.Row, request: dict) -> int | None:
+        if row["request_form"] != "archived-inline-v1" or "expectedSeconds" in request:
+            return request["expectedSeconds"]
+        task = connection.execute(
+            "SELECT json_extract(t.spec_json, '$.expectedSeconds') AS expected_seconds"
+            " FROM workflow_routes wr JOIN tasks t ON t.task_id=wr.run_id WHERE wr.decision_id=?",
+            (row["decision_id"],),
+        ).fetchone()
+        return task["expected_seconds"] if task is not None else None
+
     def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, reason: dict, now: str) -> None:
         """Route the same micro task once with fresh bounds and Router settings.
 
@@ -941,6 +954,7 @@ class DecisionCoordinator:
         fresh packet, which subsequent failover dispatches also copy.
         """
         request = json.loads(row["requested_json"])
+        expected_seconds = self._retry_expected_seconds(connection, row, request)
         request["selectionRetry"] = True
         candidates, cooling_buddies = self._scan_candidates(
             connection, request.get("requiredCapabilities", []), constraints=request.get("constraints"),
@@ -962,7 +976,10 @@ class DecisionCoordinator:
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
                                                                "modelResponseWaitSeconds": None, "routerCalled": False},
-                                                     "baseInput": {"protocolVersion": router_selection.VERSION, "task": request["task"]}, "inspections": []},
+                                                     "baseInput": {"protocolVersion": router_selection.VERSION,
+                                                                   "task": request["task"],
+                                                                   "expectedSeconds": expected_seconds},
+                                                     "inspections": []},
                                            now=now, round=next_round)
             connection.execute(
                 "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
@@ -986,7 +1003,7 @@ class DecisionCoordinator:
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, now=now,
-            expected_seconds=request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS),
+            expected_seconds=expected_seconds,
             project=request.get("project"), hard_constraints=request.get("constraints") or {})
         document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),

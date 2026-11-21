@@ -92,6 +92,27 @@ class NativeFactsTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "invalid-catalog")
         self.assertEqual(connection.call.call_count, 2)
 
+    def test_catalog_records_only_native_input_modalities(self):
+        from hey_my_buddy.blackboard.catalog.catalog import CatalogView, discovery_payload
+
+        connection = mock.Mock()
+        efforts = [{"reasoningEffort": "low"}]
+        connection.call.return_value = {"data": [
+            {"model": "omitted", "supportedReasoningEfforts": efforts},
+            {"model": "empty", "supportedReasoningEfforts": efforts, "inputModalities": []},
+            {"model": "malformed", "supportedReasoningEfforts": efforts, "inputModalities": "text"},
+            {"model": "declared", "supportedReasoningEfforts": efforts, "inputModalities": ["text", "image"]},
+        ]}
+        catalog, _ = native_run._catalog(connection, "fixture", "openai")
+        models = catalog["providers"][0]["models"]
+        self.assertEqual({model["id"]: model["inputModalities"] for model in models},
+                         {"omitted": [], "empty": [], "malformed": [], "declared": ["text", "image"]})
+        proposed = CatalogView(discovery_payload(catalog, harness="codex")).proposed_buddies()
+        self.assertEqual(
+            {row["model"]: [cap for cap in row["capabilities"] if cap.startswith("input:")] for row in proposed},
+            {"omitted": [], "empty": [], "malformed": [], "declared": ["input:text", "input:image"]},
+        )
+
     def test_fast_ownership_and_history_still_refuse(self):
         for change, reason in (({"id": None}, "wrong-native-thread"),
                                ({"id": ""}, "wrong-native-thread"),

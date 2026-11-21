@@ -72,7 +72,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         """
         task = board.submit_execution(
             requestId="exploration-maintenance", task="Synthetic maintenance", adapter="command",
-            argv=["true"], cwd=str(self.workdir("maintenance")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("maintenance")), expectedSeconds=1800)["task"]["runId"]
         with board.store.db.write() as db:
             now = board.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES('domains','manual',?,?,"

@@ -86,7 +86,7 @@ class CoreContractTests(WorkflowTestCase):
         nested = Path(cwd) / "nested"
         nested.mkdir()
         blocked = board.submit_execution(requestId="blocked-after-continuation",task="Competing write",cwd=str(nested),
-                                         adapter="command",argv=["fixture-never-run"])["task"]
+                                         adapter="command",argv=["fixture-never-run"], expectedSeconds=1800)["task"]
         self.assertEqual(blocked["queueReason"],"cwd-overlap")
 
     def test_old_attempts_cannot_mutate_the_next_continuation_generation(self):

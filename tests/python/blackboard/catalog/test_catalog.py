@@ -288,6 +288,42 @@ class CatalogTests(unittest.TestCase):
         payload["providers"][0]["models"] = [{"id": f"model-{i}", "efforts": ["max"]} for i in range(201)]
         self.assertEqual(len(catalog.discovery_payload(payload)["providers"][0]["models"]), 201)
 
+    def test_only_declared_input_modalities_publish_input_capabilities(self):
+        payload = copy.deepcopy(FIXTURE_CATALOG)
+        payload["providers"][0]["models"] = [
+            {"id": "omitted", "efforts": ["max"]},
+            {"id": "empty", "efforts": ["max"], "inputModalities": []},
+            {"id": "declared", "efforts": ["max"], "inputModalities": ["text", "image"]},
+        ]
+        native = catalog.discovery_payload(payload)
+        self.assertEqual(
+            {model["id"]: model["inputModalities"] for model in native["providers"][0]["models"]},
+            {"omitted": [], "empty": [], "declared": ["text", "image"]},
+        )
+        proposed = catalog.CatalogView(catalog.canonical_payload(native)).proposed_buddies()
+        self.assertEqual(
+            {row["model"]: [cap for cap in row["capabilities"] if cap.startswith("input:")]
+             for row in proposed if row["model"] in {"omitted", "empty", "declared"}},
+            {"omitted": [], "empty": [], "declared": ["input:text", "input:image"]},
+        )
+
+    def test_claude_and_dsh_discovery_do_not_infer_input_modalities(self):
+        from hey_my_buddy.buddy.harnesses.claude import native_run as claude
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
+
+        claude_discovery = claude._catalog({"models": [{"resolvedModel": "claude-fixture"}]}, "fixture")
+        dsh_discovery = dsh._catalog([
+            {"id": "model", "options": [{"options": [{"value": '["fixture", "dsh-fixture"]'}]}]},
+            {"id": "reasoning_effort", "options": [{"value": "max"}]},
+        ], "fixture")
+        for harness, discovery in (("claude", claude_discovery), ("dsh", dsh_discovery)):
+            with self.subTest(harness=harness):
+                models = discovery["providers"][0]["models"]
+                self.assertEqual([model["inputModalities"] for model in models], [[]])
+                native = catalog.discovery_payload(discovery, harness=harness)
+                [buddy] = catalog.CatalogView(native).proposed_buddies()
+                self.assertEqual([cap for cap in buddy["capabilities"] if cap.startswith("input:")], [])
+
     def test_legal_efforts_and_input_capabilities_are_not_truncated(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
         efforts = [f"effort-{index}" for index in range(40)] + ["x" * 129]

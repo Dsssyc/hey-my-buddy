@@ -27,7 +27,7 @@ class StatisticsStorageTests(WorkflowTestCase):
     def maintenance(self):
         task_id = self.board_.submit_execution(
             requestId="maintenance", task="Model-free maintenance fixture", adapter="command", argv=["true"],
-            cwd=str(self.workdir("maintenance")))["task"]["runId"]
+            cwd=str(self.workdir("maintenance")), expectedSeconds=1800)["task"]["runId"]
         with self.board_.store.db.write() as db:
             now = self.board_.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES('maintenance','manual','fixture',?,'completed',NULL,NULL,?,?)",

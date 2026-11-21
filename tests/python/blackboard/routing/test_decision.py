@@ -111,7 +111,7 @@ class DecisionTestCase(BoardTestCase):
             run_next(board.client())
 
     def request(self, board, *, request_id: str = "pick-1", task: str = "fix the failing parser test") -> dict:
-        return board.store.decisions.request_select({"requestId": request_id, "task": task})
+        return board.store.decisions.request_select({"requestId": request_id, "task": task, "expectedSeconds": 1800})
 
     def decision(self, board, decision_id: str, *, audit: bool = True) -> dict:
         return board.call("selection_get", {"decisionId": decision_id, "includeAudit": audit})["decision"]
@@ -214,7 +214,8 @@ class SelectionRequestTests(DecisionTestCase):
             request = self.request(board, request_id=f"no-router-{index}")
             self.assertEqual(request["status"], "needs-host")
         no_candidate = board.store.decisions.request_select({"requestId":"no-candidates", "task":"task",
-                                                        "requiredCapabilities":["missing:capability"]})
+                                                        "requiredCapabilities":["missing:capability"],
+                                                             "expectedSeconds": 1800})
         self.assertEqual(no_candidate["status"], "needs-host")
         health = board.store.decisions.health_summary()
         self.assertEqual((health["sampleCount"], health["failureCount"], health["consecutiveFailures"]), (0, 0, 0))
@@ -328,7 +329,8 @@ class SelectionRequestTests(DecisionTestCase):
     def test_requested_capabilities_filter_the_candidate_set(self):
         board = self.board()
         self.seed(board)
-        request = board.store.decisions.request_select({"requestId": "pick-caps", "task": "needs image input", "requiredCapabilities": ["input:image"]},
+        request = board.store.decisions.request_select({"requestId": "pick-caps", "task": "needs image input", "requiredCapabilities": ["input:image"],
+                                                        "expectedSeconds": 1800},
         )
         # Exactly one capability-matching candidate: the program selects it without
         # a Router call, and the capability bound is still enforced in Python.
@@ -339,7 +341,8 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(decision["reason"], {"code": "single-candidate", "params": {}})
         self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
         self.readonly_start.assert_not_called()
-        no_candidate = board.store.decisions.request_select({"requestId": "pick-none", "task": "impossible", "requiredCapabilities": ["capability:nonexistent"]},
+        no_candidate = board.store.decisions.request_select({"requestId": "pick-none", "task": "impossible", "requiredCapabilities": ["capability:nonexistent"],
+                                                             "expectedSeconds": 1800},
         )
         self.assertEqual(no_candidate["status"], "needs-host")
         self.assertIsNone(no_candidate["runId"])
@@ -398,10 +401,10 @@ class SelectionRequestTests(DecisionTestCase):
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
                             "constraints": constraints, "requiredCapabilities": [],
-                            "modelResponseWaitSeconds": 60})
+                            "modelResponseWaitSeconds": 60, "expectedSeconds": 1800})
                 else:
                     request = board.store.decisions.request_select({"requestId": f"freeze-{name}",
-                                         "task": "bounded selection", **constraints})
+                                         "task": "bounded selection", "expectedSeconds": 1800, **constraints})
                 client = board.client()
                 worker = f"w-freeze-{name}"
                 pass  # Admission is owned by the service.
@@ -591,6 +594,7 @@ class DecisionFailureTests(DecisionTestCase):
             board.store.decisions.request_select({
                 "requestId": "pick-preferences", "task": "work on the DSH harness source files",
                 "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "Use the installed DSH harness"}],
+                "expectedSeconds": 1800,
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
@@ -598,7 +602,7 @@ class DecisionFailureTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         request = board.store.decisions.request_select({
-            "requestId": "pick-facts", "task": "work on the DSH harness source files"})
+            "requestId": "pick-facts", "task": "work on the DSH harness source files", "expectedSeconds": 1800})
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
@@ -616,7 +620,7 @@ class DecisionFailureTests(DecisionTestCase):
                   preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer high"}])
         self.use_helper(buddy_id=SECOND_BUDDY_ID, evidence="none")
         request = board.store.decisions.request_select({
-            "requestId": "pick-alternative", "task": "choose for this task"})
+            "requestId": "pick-alternative", "task": "choose for this task", "expectedSeconds": 1800})
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
@@ -767,7 +771,8 @@ class DecisionFailureTests(DecisionTestCase):
         self.use_helper(mode="sleep", sleep="40")
         with board.store.db.write() as connection:
             connection.execute("UPDATE router_settings SET model_response_wait_seconds=5 WHERE id=1")
-        request = board.store.decisions.request_select({"requestId": "pick-deadline", "task": "slow"})
+        request = board.store.decisions.request_select({"requestId": "pick-deadline", "task": "slow",
+                                                        "expectedSeconds": 1800})
         started = time.monotonic()
         # This fixture's dsh Router stands for a harness whose protocol can show
         # the model's start; the real DSH cannot (ADR-023 declaration) and never

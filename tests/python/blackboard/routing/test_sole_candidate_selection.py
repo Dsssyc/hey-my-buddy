@@ -29,7 +29,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.seed(board)
         request = board.store.decisions.request_select({
             "requestId": "pick-sole", "task": "needs image input",
-            "requiredCapabilities": ["input:image"],
+            "requiredCapabilities": ["input:image"], "expectedSeconds": 1800,
         })
         self.assertEqual(request["status"], "completed")
         self.assertIsNone(request["runId"])
@@ -66,7 +66,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.seed(board, decision_buddy=None)
         sole = board.store.decisions.request_select({
             "requestId": "pick-sole-no-router", "task": "needs image input",
-            "requiredCapabilities": ["input:image"],
+            "requiredCapabilities": ["input:image"], "expectedSeconds": 1800,
         })
         self.assertEqual(sole["status"], "completed")
         self.assertEqual(self.decision(board, sole["decisionId"])["reason"], SOLE_CANDIDATE_REASON)
@@ -96,7 +96,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             "sole-bounds",
             {"kind": "select", "task": "bounded selection",
              "constraints": {"harness": "dsh", "effort": "off"},
-             "requiredCapabilities": ["execution:dsh"]},
+             "requiredCapabilities": ["execution:dsh"], "expectedSeconds": 1800},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
@@ -117,7 +117,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         params = {"requestId": "pick-sole-replay", "task": "needs image input",
-                  "requiredCapabilities": ["input:image"]}
+                  "requiredCapabilities": ["input:image"], "expectedSeconds": 1800}
         first = board.store.decisions.request_select(params)
         replay = board.store.decisions.request_select(params)
         self.assertTrue(replay["duplicate"])
@@ -137,7 +137,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         request = board.store.decisions._create(
             "basis-freeze",
             {"kind": "select", "task": "bounded selection", "constraints": {"harness": "dsh"},
-             "requiredCapabilities": []},
+             "requiredCapabilities": [], "expectedSeconds": 1800},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])

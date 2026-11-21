@@ -312,7 +312,7 @@ class SyntheticBoard:
             self.clock.advance(1)
             view = self.board.submit_execution(**{"requestId": f"synthetic-plain-{number}", "adapter": "command",
                                              "argv": ["synthetic-never-executed"], "task": "Fictional plain record",
-                                             "cwd": str(self.state / "fictional-project")})
+                                             "cwd": str(self.state / "fictional-project"), "expectedSeconds": 1800})
             self.plain.append(view["task"]["runId"])
         self._seed_early_resolution()
         self._inject_results()

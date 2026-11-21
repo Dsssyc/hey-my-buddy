@@ -566,13 +566,14 @@ class UpgradeTests(BoardTestCase):
         # Bypass the outer RPC guard, as a call that entered just before fencing would.
         with self.assertRaises(BoardError) as caught:
             board.store.task_submit({'requestId': 'late', 'task': 'late work', 'cwd': str(self.workdir()),
-                                     'adapter': 'command', 'argv': ['/bin/true']})
+                                     'adapter': 'command', 'argv': ['/bin/true'], 'expectedSeconds': 1800})
         self.assertEqual(caught.exception.code, 'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(), 0)
 
     def test_nonidle_preflight_refuses_without_cancelling(self):
         board=self.board()
-        run=board.submit_execution(**{'requestId':'busy', 'task':'protected work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})['task']['runId']
+        run=board.submit_execution(**{'requestId':'busy', 'task':'protected work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok'],
+                                      'expectedSeconds': 1800})['task']['runId']
         with self.assertRaises(BoardError) as caught:
             upgrade.idle_snapshot(board.directory)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
@@ -586,7 +587,7 @@ class UpgradeTests(BoardTestCase):
     def test_contract_cutover_requires_finished_execution_materials_to_be_cleaned(self):
         board = self.board()
         board.submit_execution(requestId='pending-cleanup', task='completed work', cwd=str(self.workdir()),
-                               adapter='command', argv=['echo', 'done'])
+                               adapter='command', argv=['echo', 'done'], expectedSeconds=1800)
         claim = admit_execution(board.client(), 'n' * 32)['claim']
         attempt_id = claim['attempt']['attemptId']
         board.call('execution_result', {'attemptId': attempt_id, 'generation': claim['attempt']['generation'],
@@ -788,7 +789,8 @@ class UpgradeTests(BoardTestCase):
 
     def test_retained_event_prefix_detects_rewrites_but_allows_new_events(self):
         board=self.board()
-        board.submit_execution(**{'requestId':'event-fixture','task':'private','cwd':str(self.workdir()),'adapter':'command','argv':['/bin/true']})
+        board.submit_execution(**{'requestId':'event-fixture','task':'private','cwd':str(self.workdir()),'adapter':'command','argv':['/bin/true'],
+                                  'expectedSeconds': 1800})
         with board.store.db.connect() as connection:
             before=backup.database_snapshot(connection)
         with board.store.db.write() as connection:

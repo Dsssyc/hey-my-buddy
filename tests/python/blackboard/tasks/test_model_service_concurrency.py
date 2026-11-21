@@ -333,7 +333,7 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
 
     def request_selection(self, board, request_id: str) -> str:
         response = board.store.decisions.request_select(
-            {"requestId": request_id, "task": "pick a coding buddy"})
+            {"requestId": request_id, "task": "pick a coding buddy", "expectedSeconds": 1800})
         return response["decisionId"]
 
     def test_the_selector_model_service_quota_precedes_the_claim(self):

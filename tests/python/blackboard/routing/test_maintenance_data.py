@@ -39,7 +39,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.finish_turn(self.board_, claim)
         task_id = self.board_.submit_execution(
             requestId="maintenance-execution", task="Synthetic maintenance execution",
-            adapter="command", argv=["true"], cwd=str(self.workdir("maintenance")),
+            adapter="command", argv=["true"], cwd=str(self.workdir("maintenance")), expectedSeconds=1800,
         )["task"]["runId"]
         self.maintenance_id = "maintenance-test"
         with self.board_.store.db.write() as db:

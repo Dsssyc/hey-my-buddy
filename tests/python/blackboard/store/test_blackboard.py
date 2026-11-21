@@ -41,7 +41,8 @@ class TestAtomicity(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="atomic-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="atomic-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         before = client.get(runId=task["runId"])
         original = board.store._append_event
 
@@ -64,7 +65,8 @@ class TestAtomicity(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="atomic-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="atomic-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         client.cancel(runId=task["runId"], note="test")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertEqual(kinds, ["task.submitted", "task.cancelled"])
@@ -73,10 +75,10 @@ class TestAtomicity(BoardTestCase):
     def test_execution_cancel_records_only_the_supplied_note(self):
         board = self.board()
         first = board.submit_execution(requestId="cancel-note", task="do", cwd=str(self.workdir()),
-                                       adapter="command", argv=["/bin/true"])["task"]
+                                       adapter="command", argv=["/bin/true"], expectedSeconds=1800)["task"]
         board.store.task_cancel({"runId": first["runId"], "note": "Host asked to stop"})
         second = board.submit_execution(requestId="cancel-without-note", task="do", cwd=str(self.workdir()),
-                                        adapter="command", argv=["/bin/true"])["task"]
+                                        adapter="command", argv=["/bin/true"], expectedSeconds=1800)["task"]
         board.store.task_cancel({"runId": second["runId"]})
         cancelled = [event["payload"] for event in board.store.events_read({"after": 0})["events"]
                      if event["kind"] == "task.cancelled"]
@@ -86,7 +88,7 @@ class TestAtomicity(BoardTestCase):
     def test_execution_cancel_keeps_the_cli_requested_identity(self):
         board = self.board()
         task = board.submit_execution(requestId="cli-cancel-identity", task="do", cwd=str(self.workdir()),
-                                      adapter="command", argv=["/bin/true"])["task"]
+                                      adapter="command", argv=["/bin/true"], expectedSeconds=1800)["task"]
         cancelled = board.call("task_cancel", {"runId": task["runId"], "requestedBy": "host-operator"})
         self.assertEqual(cancelled["task"]["state"], "cancelled")
         events = board.call("events_read", {"after": 0})["events"]
@@ -97,7 +99,8 @@ class TestAtomicity(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="atomic-3", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="atomic-3", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         integrity = board.store.integrity()
         self.assertEqual(integrity["integrity"], "ok")
         self.assertEqual(integrity["foreignKeyViolations"], 0)
@@ -110,7 +113,8 @@ class TestAtomicity(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="atomic-4", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="atomic-4", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         claim = admit_execution(client, "n" * 32)
         attempt = claim["claim"]["attempt"]
         response = client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {
@@ -130,8 +134,10 @@ class TestConcurrency(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        first = board.submit_execution(requestId="dup", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        again = board.submit_execution(requestId="dup", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        first = board.submit_execution(requestId="dup", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                       expectedSeconds=1800)["task"]
+        again = board.submit_execution(requestId="dup", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                       expectedSeconds=1800)
         self.assertTrue(again["duplicate"])
         self.assertEqual(again["task"]["runId"], first["runId"])
         self.assertEqual(board.store.count_tasks(), 1)
@@ -140,23 +146,26 @@ class TestConcurrency(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        board.submit_execution(requestId="changed", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="changed", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         with self.assertRaises(BoardError) as caught:
-            board.submit_execution(requestId="changed", task="different", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+            board.submit_execution(requestId="changed", task="different", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                   expectedSeconds=1800)
         self.assertEqual(caught.exception.code, "CONFLICT")
 
     def test_conflict_survives_completion_and_restart(self):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="restart-conflict", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="restart-conflict", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         client.cancel(runId=task["runId"])
         store_two = type(board.store)(self.directory, max_concurrent=2)
         self.addCleanup(store_two.db.close)
         store_two.initialize()
         with self.assertRaises(BoardError) as caught:
             store_two.task_submit({"requestId": "restart-conflict", "task": "changed", "cwd": str(cwd),
-                                   "adapter": "command", "argv": ["/bin/true"]})
+                                   "adapter": "command", "argv": ["/bin/true"], "expectedSeconds": 1800})
         self.assertEqual(caught.exception.code, "CONFLICT")
 
 
@@ -169,10 +178,12 @@ class TestConcurrency(BoardTestCase):
         second_cwd = self.workdir("b")
         pass  # Admission is owned by the service.
         pass  # Admission is owned by the service.
-        board.submit_execution(requestId="cap-1", task="one", cwd=str(first_cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="cap-1", task="one", cwd=str(first_cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         admit_execution(client, "a" * 32)
         # Queued admission, not BUSY: the second task is accepted and says why it waits.
-        second = board.submit_execution(requestId="cap-2", task="two", cwd=str(second_cwd), adapter="command", argv=["/bin/true"])["task"]
+        second = board.submit_execution(requestId="cap-2", task="two", cwd=str(second_cwd), adapter="command", argv=["/bin/true"],
+                                        expectedSeconds=1800)["task"]
         self.assertEqual(second["state"], "queued")
         self.assertEqual(second["queueReason"], "capacity")
         empty = admit_execution(client, "c" * 32)
@@ -187,9 +198,11 @@ class TestConcurrency(BoardTestCase):
         child.mkdir()
         pass  # Admission is owned by the service.
         pass  # Admission is owned by the service.
-        board.submit_execution(requestId="cwd-1", task="one", cwd=str(parent), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="cwd-1", task="one", cwd=str(parent), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         admit_execution(client, "a" * 32)
-        other = board.submit_execution(requestId="cwd-2", task="two", cwd=str(child), adapter="command", argv=["/bin/true"])["task"]
+        other = board.submit_execution(requestId="cwd-2", task="two", cwd=str(child), adapter="command", argv=["/bin/true"],
+                                       expectedSeconds=1800)["task"]
         self.assertEqual(other["queueReason"], "cwd-overlap")
         self.assertIsNone(admit_execution(client, "c" * 32)["claim"])
 
@@ -242,7 +255,8 @@ class TestCrashWindows(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        board.submit_execution(requestId="crash-pre", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="crash-pre", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         board.store.release_execution(claim["claim"]["attempt"]["attemptId"], reason="execution-process-not-created")
@@ -481,7 +495,8 @@ class TestCrashWindows(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        board.submit_execution(requestId="crash-reply", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="crash-reply", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
@@ -505,7 +520,8 @@ class TestCrashWindows(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        board.submit_execution(requestId="crash-conflict", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="crash-conflict", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
@@ -637,7 +653,8 @@ class TestLifecycle(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        board.submit_execution(requestId="life-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="life-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim['claim']['attempt']
@@ -657,7 +674,8 @@ class TestIdentity(BoardTestCase):
     def test_wrong_capability_is_rejected(self):
         board = self.board()
         client = board.client()
-        board.submit_execution(requestId="id-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="id-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
@@ -677,7 +695,8 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         for index in range(5):
-            board.submit_execution(requestId=f"ev-{index}", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
+            board.submit_execution(requestId=f"ev-{index}", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                   expectedSeconds=1800)
         page = client.read_events(after=0, limit=3)
         self.assertEqual(len(page["events"]), 3)
         self.assertTrue(page["truncated"])
@@ -690,7 +709,8 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         empty = client.wait_events(after=board.store.head(), timeout_ms=200)
         self.assertTrue(empty["timedOut"])
-        board.submit_execution(requestId="ev-wait", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])
+        board.submit_execution(requestId="ev-wait", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+                               expectedSeconds=1800)
         page = client.wait_events(after=0, timeout_ms=1000)
         self.assertFalse(page["timedOut"])
         self.assertTrue(page["events"])
@@ -699,7 +719,8 @@ class TestDelivery(BoardTestCase):
         board = self.board(wait_capacity=2)
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="load", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="load", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
@@ -736,7 +757,8 @@ class TestDelivery(BoardTestCase):
         board = self.board()
         client = board.client()
         task = board.submit_execution(
-            requestId="race", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
+            requestId="race", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+            expectedSeconds=1800
         )["task"]
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
@@ -753,7 +775,8 @@ class TestDelivery(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="cancel-unconf", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="cancel-unconf", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
@@ -766,7 +789,8 @@ class TestDelivery(BoardTestCase):
         nested = cwd / "sub"
         nested.mkdir()
         blocked = board.submit_execution(
-            requestId="cancel-unconf-blocked", task="two", cwd=str(nested), adapter="command", argv=["/bin/true"]
+            requestId="cancel-unconf-blocked", task="two", cwd=str(nested), adapter="command", argv=["/bin/true"],
+            expectedSeconds=1800
         )["task"]
         self.assertEqual(blocked["queueReason"], "cwd-overlap")
 
@@ -775,7 +799,7 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(
-            requestId="q-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"]
+            requestId="q-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"], expectedSeconds=1800
         )["task"]
         pass  # Admission is owned by the service.
         admit_execution(client, "a" * 32)
@@ -791,7 +815,8 @@ class TestDelivery(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="inq-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="inq-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         with self.assertRaises(BoardError) as caught:
             board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q1", "question": "x" * 4001})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -808,6 +833,7 @@ class TestDelivery(BoardTestCase):
         board = self.board()
         task = board.submit_execution(
             requestId="inq-restart", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+            expectedSeconds=1800,
         )["task"]
         run_id = task["runId"]
         board.store._message_post(run_id, "q-restart", "how is it going?")
@@ -828,7 +854,8 @@ class TestDelivery(BoardTestCase):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
-        task = board.submit_execution(requestId="inq-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"])["task"]
+        task = board.submit_execution(requestId="inq-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"],
+                                      expectedSeconds=1800)["task"]
         pass  # Admission is owned by the service.
         attempt = admit_execution(client, "a" * 32)["claim"]["attempt"]
         board.store._message_post(task["runId"], "q-known", "hello?")
@@ -869,6 +896,7 @@ class TestExtensibility(BoardTestCase):
             cwd=str(cwd),
             adapter="command",
             argv=[sys.executable, '-c', "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('one\\n', encoding='utf-8'); print('two')", str(marker)],
+            expectedSeconds=1800,
         )["task"]
         run_next(client)
         result = client.result(runId=task["runId"])
@@ -887,7 +915,7 @@ class TestExtensibility(BoardTestCase):
             task="run something absent",
             cwd=str(self.workdir()),
             adapter="command",
-            argv=["/nonexistent/binary-xyz", "arg"],
+            argv=["/nonexistent/binary-xyz", "arg"], expectedSeconds=1800,
         )["task"]
         run_next(client)
         result = client.result(runId=task["runId"])
@@ -959,7 +987,7 @@ class TestPackaging(BoardTestCase):
         # Real work runs through the runtime-hosted daemon and its worker.
         task = self.submit_execution(
             requestId="runtime-1", task="run from the runtime", cwd=str(self.workdir()),
-            adapter="command", argv=[sys.executable, '-c', "print('from-runtime')"],
+            adapter="command", argv=[sys.executable, '-c', "print('from-runtime')"], expectedSeconds=1800,
         )["task"]
         self.assertTrue(
             wait_for(
@@ -986,7 +1014,8 @@ class TestTransitionTables(BoardTestCase):
     def test_illegal_task_transition_is_rejected(self):
         board = self.board()
         client = board.client()
-        task = board.submit_execution(requestId="t-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="t-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         client.cancel(runId=task["runId"])
         from hey_my_buddy.errors import BoardError as _BoardError
 
@@ -1025,7 +1054,7 @@ class TestTaskHistory(BoardTestCase):
             task=f"do {request_id}",
             cwd=str(self.workdir(name)),
             adapter="command",
-            argv=["/bin/true"],
+            argv=["/bin/true"], expectedSeconds=1800,
         )["task"]
 
     def test_every_task_view_carries_the_micro_task_contract(self):

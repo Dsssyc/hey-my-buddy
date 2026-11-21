@@ -157,7 +157,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
     def test_small_answers_remain_exact(self):
         board = self.board()
         params = {"requestId": "small-receipt", "adapter": "command", "task": "Record a command",
-                  "cwd": str(self.workdir()), "argv": ["/bin/true"]}
+                  "cwd": str(self.workdir()), "argv": ["/bin/true"], "expectedSeconds": 1800}
         answer = board.store.task_submit(params, command_id="small-submit")
         board.client().cancel(runId=answer["task"]["runId"])
         self.assertEqual(board.client().get(runId=answer["task"]["runId"])["state"], "cancelled")

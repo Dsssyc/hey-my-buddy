@@ -793,7 +793,9 @@ class UpgradeFixtureTests(unittest.TestCase):
         with board.store.db.write() as db:
             db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
             row = board.store.decisions._row(db, decision_id)
-            archived = json.loads(row['requested_json'])['executionWorkspace']
+            original_request = json.loads(row['requested_json'])
+            self.assertNotIn('expectedSeconds', original_request)
+            archived = original_request['executionWorkspace']
             self.assertIn('inputTree', archived)
             board.store.decisions._retry_selection(db, row,
                 reason={'code': 'router-out-of-bounds', 'params': {}}, now=board.store.now())
@@ -805,17 +807,28 @@ class UpgradeFixtureTests(unittest.TestCase):
             latest = snapshots[-1]
             expected = {key: archived[key] for key in ('workspaceId', 'manifestSha256')}
             self.assertEqual(latest['snapshot_form'], 'manifest-reference-v2')
-            self.assertEqual(json.loads(latest['snapshot_json'])['baseInput']['executionWorkspace'], expected)
+            base_input = json.loads(latest['snapshot_json'])['baseInput']
+            self.assertEqual(base_input['executionWorkspace'], expected)
+            [stored_duration] = db.execute(
+                "SELECT json_extract(spec_json, '$.expectedSeconds') FROM tasks WHERE task_id=?",
+                (run_id,),
+            ).fetchone()
+            self.assertEqual(stored_duration, 1800)
+            self.assertEqual(base_input['expectedSeconds'], stored_duration)
             task_id = db.execute(
                 'SELECT task_id FROM router_dispatches WHERE decision_id=? AND round=?',
                 (decision_id, latest['round'])).fetchone()[0]
             dispatch = router_sequence.dispatch(db, task_id)['document']
             self.assertEqual(dispatch['executionWorkspace'], expected)
             self.assertEqual(dispatch['executionWorkspaceForm'], 'manifest-reference-v2')
+            self.assertEqual(dispatch['expectedSeconds'], stored_duration)
             retained = db.execute('SELECT requested_json,request_form FROM decision_requests WHERE decision_id=?',
                                   (decision_id,)).fetchone()
             self.assertEqual(retained['request_form'], 'archived-inline-v1')
-            self.assertEqual(json.loads(retained['requested_json'])['executionWorkspace'], archived)
+            retained_request = json.loads(retained['requested_json'])
+            retry_fields = {'selectionRetry', 'routingBasis', 'routerProblem'}
+            self.assertEqual({key: value for key, value in retained_request.items() if key not in retry_fields},
+                             {key: value for key, value in original_request.items() if key not in retry_fields})
 
     def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('failed-upgrade', migrate=False)

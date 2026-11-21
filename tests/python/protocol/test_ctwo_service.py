@@ -161,7 +161,7 @@ class TestNamedContract(BoardTestCase):
                     # An unrelated event must not release the scoped wait slot.
                     unrelated = self.submit_execution(
                         requestId="wait-route-unrelated", task="unrelated", cwd=str(self.workdir()),
-                        adapter="command", argv=[sys.executable, "-c", "pass"],
+                        adapter="command", argv=[sys.executable, "-c", "pass"], expectedSeconds=1800,
                     )
                     self.assertNotIn("error", unrelated)
                     overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
@@ -186,7 +186,7 @@ class TestNamedContract(BoardTestCase):
         with self.daemon():
             endpoint = self._endpoint()
             params = {"requestId": "shared", "task": "do", "cwd": str(self.workdir()),
-                      "adapter": "command", "argv": [sys.executable, "-c", "pass"]}
+                      "adapter": "command", "argv": [sys.executable, "-c", "pass"], "expectedSeconds": 1800}
             one = self.submit_execution(**params)
             two = self.submit_execution(**params)
             self.assertEqual(one["task"]["runId"], two["task"]["runId"])

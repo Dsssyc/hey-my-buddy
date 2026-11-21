@@ -112,7 +112,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         submitted = self.submit_execution(**{
             "requestId": name, "task": "Wait across private installation",
             "cwd": str(self.workdir(name)), "adapter": "command",
-            "argv": [sys.executable, "-c", script],
+            "argv": [sys.executable, "-c", script], "expectedSeconds": 1800,
         })["task"]
         self.assertTrue(wait_for(started.exists, timeout=60), submitted)
         run_id = submitted["runId"]

@@ -12,7 +12,7 @@ class DomainSchemaTests(WorkflowTestCase):
         self.run = self.submit(self.board_, request_id="classified")
         self.tasks = [self.board_.submit_execution(
             requestId=f"maintenance-{index}", task="Synthetic maintenance execution",
-            adapter="command", argv=["true"], cwd=str(self.workdir(f"maintenance-{index}")),
+            adapter="command", argv=["true"], cwd=str(self.workdir(f"maintenance-{index}")), expectedSeconds=1800,
         )["task"]["runId"] for index in range(2)]
         self.now = self.board_.store.now()
         with self.board_.store.db.write() as db:

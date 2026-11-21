@@ -385,7 +385,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 "task": "keep working",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
-                "argv": ["/bin/echo", "hi"],
+                "argv": ["/bin/echo", "hi"], "expectedSeconds": 1800,
             })
         run_id = submitted["task"]["runId"]
         _, browser = self.open_console(board)
@@ -444,7 +444,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         board = self.board()
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        created = board.store.decisions.request_select({"requestId": "host-pick", "task": "inspect routing"})
+        created = board.store.decisions.request_select({"requestId": "host-pick", "task": "inspect routing",
+                                                        "expectedSeconds": 1800})
         status, _headers, data = browser.command(
             "selection_get", {"decisionId": created["decisionId"]}, csrf=csrf
         )
@@ -481,7 +482,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 "task": "produce a detail view",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
-                "argv": ["/bin/echo", "detail"],
+                "argv": ["/bin/echo", "detail"], "expectedSeconds": 1800,
             })
         run_id = submitted["task"]["runId"]
         from admission import admit_execution
@@ -811,7 +812,8 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
                               for buddy in (CATALOG_BUDDY, SECOND_BUDDY)],
             "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [BUDDY_ID]},
         })
-        selected = board.store.decisions.request_select({"requestId": "host-selection", "task": "Choose a Worker"})
+        selected = board.store.decisions.request_select({"requestId": "host-selection", "task": "Choose a Worker",
+                                                         "expectedSeconds": 1800})
         self.assertIsNotNone(selected["runId"], selected)
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -855,7 +857,8 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
 
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()
-        board.store.decisions.request_select({"requestId": "http-select", "task": "browse over http"})
+        board.store.decisions.request_select({"requestId": "http-select", "task": "browse over http",
+                                              "expectedSeconds": 1800})
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
 
@@ -885,7 +888,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
                 "task": "ordinary",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
-                "argv": ["true"],
+                "argv": ["true"], "expectedSeconds": 1800,
             })
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -914,7 +917,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
                 "task": "ordinary",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
-                "argv": ["true"],
+                "argv": ["true"], "expectedSeconds": 1800,
             })["task"]["runId"]
         posted = board.store._message_post(run, "ask-1", "Status?")["message"]
         _stated, browser = self.open_console(board)

@@ -86,7 +86,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         submitted = self.submit_execution(**{
             "requestId": name, "task": "Wait behind a private gate",
             "cwd": str(self.workdir(name)), "adapter": "command",
-            "argv": [sys.executable, "-c", script],
+            "argv": [sys.executable, "-c", script], "expectedSeconds": 1800,
         })["task"]
         run_id = submitted["runId"]
         self.assertTrue(wait_for(started.exists, timeout=60),
@@ -368,7 +368,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         """Admit a development-only Router selection through its internal owner."""
         store = BoardStore(self.directory)
         try:
-            return store.decisions.request_select({"requestId": request_id, "task": task})
+            return store.decisions.request_select({"requestId": request_id, "task": task, "expectedSeconds": 1800})
         finally:
             store.db.close()
 

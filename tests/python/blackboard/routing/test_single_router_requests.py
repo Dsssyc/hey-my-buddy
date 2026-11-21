@@ -27,7 +27,8 @@ class SingleRouterRequestTests(BoardTestCase):
         mock_readonly.install(self)
 
     def request(self, board, **extra):
-        return board.store.decisions.request_select({"requestId": "selection", "task": "bounded change", **extra})
+        return board.store.decisions.request_select({"requestId": "selection", "task": "bounded change",
+                                                    "expectedSeconds": 1800, **extra})
 
     def audit(self, board, response):
         return board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
@@ -123,7 +124,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_internal_create_does_not_mutate_its_input_or_conflict_on_replay(self):
         board = self.board()
         self.seed(board)
-        request = {"kind": "select", "task": "change", "requiredCapabilities": []}
+        request = {"kind": "select", "task": "change", "requiredCapabilities": [], "expectedSeconds": 1800}
         before = dict(request)
         first = board.store.decisions._create("internal", request)
         self.assertEqual(request, before)
@@ -260,21 +261,37 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         response = board.store.decisions.request_select({"requestId": "large-selection",
-                                                    "task": "x" * 9000})
+                                                    "task": "x" * 9000, "expectedSeconds": 1800})
         view = self.audit(board, response)
         self.assertEqual(view["status"], "queued")
         self.assertEqual(view["input"]["task"], "x" * 9000)
         self.assertIsNotNone(view["runId"])
 
+    def test_direct_selection_requires_duration_and_freezes_the_supplied_value(self):
+        board = self.board()
+        self.seed(board)
+        params = {"requestId": "selection-duration", "task": "bounded change"}
+        with self.assertRaisesRegex(BoardError, "expectedSeconds") as raised:
+            board.store.decisions.request_select(params)
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+
+        response = board.store.decisions.request_select({**params, "expectedSeconds": 917})
+        view = self.audit(board, response)
+        self.assertEqual(view["status"], "queued")
+        self.assertEqual(view["requested"]["expectedSeconds"], 917)
+        self.assertEqual(view["input"]["expectedSeconds"], 917)
+
     def test_direct_selection_uses_shared_one_mib_task_bound(self):
         board = self.board()
         self.seed(board)
         task = "x" * schemas.MAX_TASK_BYTES
-        accepted = board.store.decisions.request_select({"requestId": "exact-one-mib", "task": task})
+        accepted = board.store.decisions.request_select({"requestId": "exact-one-mib", "task": task,
+                                                         "expectedSeconds": 1800})
         self.assertEqual(accepted["status"], "queued")
         self.assertEqual(self.audit(board, accepted)["input"]["task"], task)
         with self.assertRaises(BoardError) as raised:
-            board.store.decisions.request_select({"requestId": "over-one-mib", "task": task + "x"})
+            board.store.decisions.request_select({"requestId": "over-one-mib", "task": task + "x",
+                                                 "expectedSeconds": 1800})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_admission_failure_rolls_back_request_task_and_event_together(self):
@@ -282,7 +299,8 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with patch.object(board.store.decisions, "_append_event", side_effect=RuntimeError("transaction fault")):
             with self.assertRaisesRegex(RuntimeError, "transaction fault"):
-                board.store.decisions.request_select({"requestId": "selection", "task": "bounded change"})
+                board.store.decisions.request_select({"requestId": "selection", "task": "bounded change",
+                                                     "expectedSeconds": 1800})
         with board.store.db.read() as connection:
             for table in ("decision_requests", "evaluation_decisions", "tasks"):
                 self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)

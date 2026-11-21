@@ -56,7 +56,8 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         # The mode comes from the Router setting; the submission no longer carries it.
         self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode='fast')
-        result = board.store.decisions.request_select({'requestId': 'fast', 'task': 'choose a tiny edit'})
+        result = board.store.decisions.request_select({'requestId': 'fast', 'task': 'choose a tiny edit',
+                                                       'expectedSeconds': 1800})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
         self.assertEqual(view['modelResponseWaitSeconds'], 60)
@@ -68,7 +69,8 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.configure(board, routerBuddyIds=[], defaultRoutingMode='review')
-        result = board.store.decisions.request_select({'requestId': 'no-fallback', 'task': 'choose'})
+        result = board.store.decisions.request_select({'requestId': 'no-fallback', 'task': 'choose',
+                                                       'expectedSeconds': 1800})
         self.assertEqual(result['status'], 'needs-host')
         self.assertIsNone(result['runId'])
         self.assertEqual(result['decision']['routingMode'], 'review')
@@ -95,7 +97,8 @@ class RoutingModesTests(BoardTestCase):
     def test_claim_rechecks_review_without_charging_another_model_service(self):
         board = self.board()
         self.seed(board)
-        result = board.store.decisions.request_select({'requestId': 'later-ineligible', 'task': 'choose'})
+        result = board.store.decisions.request_select({'requestId': 'later-ineligible', 'task': 'choose',
+                                                       'expectedSeconds': 1800})
         pass  # Admission is owned by the service.
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             claim = admit_execution(board.client(), 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
@@ -113,7 +116,7 @@ class RoutingModesTests(BoardTestCase):
     def test_replay_does_not_reresolve_default_or_budget(self):
         board = self.board()
         self.seed(board)
-        params = {'requestId': 'frozen-mode', 'task': 'choose'}
+        params = {'requestId': 'frozen-mode', 'task': 'choose', 'expectedSeconds': 1800}
         original = board.store.decisions.request_select(params)
         self.configure(board, defaultRoutingMode='fast', routerBuddyIds=[BUDDY_ID])
         replay = board.store.decisions.request_select(params)
@@ -124,7 +127,8 @@ class RoutingModesTests(BoardTestCase):
     def test_preflight_policy_failure_stops_host_after_stop_without_second_attempt(self):
         board = self.board()
         self.seed(board)
-        result = board.store.decisions.request_select({'requestId': 'preflight', 'task': 'choose'})
+        result = board.store.decisions.request_select({'requestId': 'preflight', 'task': 'choose',
+                                                       'expectedSeconds': 1800})
         pass  # Admission is owned by the service.
         nonce = 'nonce-abcdefghijklmnop'
         first = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']
@@ -151,7 +155,8 @@ class RoutingModesTests(BoardTestCase):
                 (True, 1, 'needs-host', 'router-tools-forbidden'),
                 (True, False, 'needs-host', 'router-tool-evidence-unverified'))):
             clock.advance(601)
-            result = board.store.decisions.request_select({'requestId': f'proof-{index}', 'task': 'choose'})
+            result = board.store.decisions.request_select({'requestId': f'proof-{index}', 'task': 'choose',
+                                                           'expectedSeconds': 1800})
             worker = f'router-{index}'
             pass  # Admission is owned by the service.
             claim = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']

@@ -147,7 +147,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.assert_settlement(board, pending=True)
         self.assertEqual(read_bytes(credential), b"private fixture")
         queued = board.submit_execution(requestId="conflict", task="conflict", cwd=str(self.workdir()),
-                                         adapter="command", argv=["echo", "conflict"])["task"]
+                                         adapter="command", argv=["echo", "conflict"], expectedSeconds=1800)["task"]
         self.assertIsNone(board.store.admit_execution("x" * 32, queued["runId"])["claim"])
         with patch.object(processes, "stop_orphan_process", return_value="orphan-stopped"):
             self.assertEqual(len(self.recover(board)), 1)

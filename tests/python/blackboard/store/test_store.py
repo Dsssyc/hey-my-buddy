@@ -68,7 +68,7 @@ class CurrentSchemaTests(BoardTestCase):
         board = self.board()
         submitted = board.submit_execution(
             requestId="claim-name", task="do", cwd=str(self.workdir()),
-            adapter="command", argv=["/bin/true"],
+            adapter="command", argv=["/bin/true"], expectedSeconds=1800,
         )["task"]
         task_id = submitted["runId"]
         self.assertNotIn("taskId", submitted)
@@ -152,12 +152,12 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
                 task="no model",
                 cwd=str(self.workdir(f"cmd-{index}")),
                 adapter="command",
-                argv=["/bin/true"],
+                argv=["/bin/true"], expectedSeconds=1800,
             )
             claim = admit_execution(client, f"{index}" * 32, task_id=submitted["task"]["runId"])
         third = board.submit_execution(
             requestId="cmd-2", task="no model either", cwd=str(self.workdir("cmd-2")),
-            adapter="command", argv=["/bin/true"],
+            adapter="command", argv=["/bin/true"], expectedSeconds=1800,
         )["task"]
         self.assertEqual(third["queueReason"], "capacity")
         pass  # Admission is owned by the service.
@@ -284,17 +284,17 @@ class ExpectedDurationTests(BoardTestCase):
         return board.submit_execution(requestId=request_id, task="duration fixture", cwd=str(self.workdir()),
                                      adapter="command", argv=["/bin/true"], **duration)["task"]
 
-    def test_command_default_and_explicit_duration_are_authoritative_board_facts(self):
+    def test_command_durations_are_authoritative_board_facts(self):
         board = self.board()
-        default = self.submit(board, "duration-default")
+        ordinary = self.submit(board, "duration-ordinary", expectedSeconds=1800)
         explicit = self.submit(board, "duration-explicit", expectedSeconds=1)
-        self.assertEqual(default["expectedSeconds"], 1800)
+        self.assertEqual(ordinary["expectedSeconds"], 1800)
         self.assertEqual(explicit["expectedSeconds"], 1)
-        self.assertNotIn("timeoutSeconds", default)
+        self.assertNotIn("timeoutSeconds", ordinary)
         self.assertNotIn("modelResponseWaitSeconds", explicit)
         with board.store.db.read() as connection:
             rows = connection.execute("SELECT json_extract(spec_json,'$.expectedSeconds'),json_extract(spec_json,'$.modelResponseWaitSeconds') FROM tasks ORDER BY request_id").fetchall()
-            self.assertEqual([tuple(row) for row in rows], [(1800, None), (1, None)])
+            self.assertEqual([tuple(row) for row in rows], [(1, None), (1800, None)])
         self.assertEqual(board.call("task_get", {"runId": explicit["runId"]})["task"]["expectedSeconds"], 1)
 
     def test_command_duration_rejects_zero_and_renamed_field_even_together(self):
@@ -310,7 +310,7 @@ class ExpectedDurationTests(BoardTestCase):
 
     def test_storage_rejects_a_mixed_duration_meaning(self):
         board = self.board()
-        task = self.submit(board, "duration-storage")
+        task = self.submit(board, "duration-storage", expectedSeconds=1800)
         for update in ("spec_json=json_set(spec_json,'$.expectedSeconds',0)",
                        "spec_json=json_set(spec_json,'$.expectedSeconds','60')",
                        "spec_json=json_remove(spec_json,'$.expectedSeconds')"):
@@ -320,7 +320,7 @@ class ExpectedDurationTests(BoardTestCase):
 
     def test_deadline_reason_is_reserved_for_router_calls(self):
         board = self.board()
-        task = self.submit(board, "duration-reason")
+        task = self.submit(board, "duration-reason", expectedSeconds=1800)
         client = board.client()
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
@@ -341,17 +341,17 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         client = board.client()
         held = self.workdir('held')
         board.submit_execution(requestId='held', task='hold', cwd=str(held),
-                               adapter='command', argv=['true'])
+                               adapter='command', argv=['true'], expectedSeconds=1800)
         admit_execution(client, 'held-nonce-0000000000000000000')
         for index in range(board.store.CLAIM_CANDIDATE_LIMIT + 2):
             clock.advance(1)
             blocked = held / f'blocked-{index}'
             blocked.mkdir()
             board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(blocked),
-                                   adapter='command', argv=['true'])
+                                   adapter='command', argv=['true'], expectedSeconds=1800)
         clock.advance(1)
         runnable = board.submit_execution(requestId='runnable', task='free', cwd=str(self.workdir('free')),
-                                 adapter='command', argv=['true'])['task']
+                                 adapter='command', argv=['true'], expectedSeconds=1800)['task']
         admitted = admit_execution(client, 'free-nonce-0000000000000000000')['claim']
         self.assertIsNotNone(admitted)
         self.assertEqual(admitted['task']['taskId'], runnable['runId'])
@@ -365,7 +365,7 @@ class ServiceAdmissionWindowTests(BoardTestCase):
             self.assertIsNone(board.service.admit_execution('empty-nonce-0000000000000')['claim'])
         changed.assert_not_called()
         board.submit_execution(requestId='new-work', task='new', cwd=str(self.workdir()),
-                              adapter='command', argv=['true'])
+                              adapter='command', argv=['true'], expectedSeconds=1800)
         changed.assert_called_once()
 
     def test_change_notifications_name_only_tasks_changed_by_the_committed_events(self):
@@ -373,7 +373,8 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         board = self.board()
         client = board.client()
         tasks = [board.submit_execution(requestId=f'notify-{index}', task='work',
-                     cwd=str(self.workdir(f'notify-{index}')), adapter='command', argv=['true'])['task']
+                     cwd=str(self.workdir(f'notify-{index}')), adapter='command', argv=['true'],
+                                        expectedSeconds=1800)['task']
                  for index in range(2)]
         changed = Mock()
         board.store.on_change = changed

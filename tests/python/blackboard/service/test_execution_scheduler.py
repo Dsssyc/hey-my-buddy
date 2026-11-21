@@ -1274,7 +1274,7 @@ class UpgradeAdmissionTests(BoardTestCase):
     def test_upgrade_defers_queued_execution_without_issues_or_events(self):
         board = self.board(max_concurrent=1)
         board.submit_execution(requestId="upgrade-fenced", task="work", adapter="command",
-                               cwd=str(self.workdir()), argv=["echo", "work"])
+                               cwd=str(self.workdir()), argv=["echo", "work"], expectedSeconds=1800)
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         journal = board.directory / "upgrade.json"
         journal.write_text("{}", encoding="utf-8")
@@ -1316,7 +1316,7 @@ class RootCreationTeardownTests(BoardTestCase):
         self._stack.append(board)
         client = board.client()
         task = board.submit_execution(requestId="creation-failure", task="work", adapter="command",
-                                      cwd=str(self.workdir()), argv=["echo", "work"])["task"]
+                                      cwd=str(self.workdir()), argv=["echo", "work"], expectedSeconds=1800)["task"]
         claim = admit_execution(client, "n" * 32)["claim"]
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         process = FakeProcess()
@@ -1396,7 +1396,7 @@ class SessionRecordGroupingTests(WorkflowTestCase):
         board = self.board()
         task = board.submit_execution(
             requestId="ungrouped", task="Private command fixture",
-            cwd=str(self.workdir("ungrouped")), adapter="command", argv=["fixture-never-run"],
+            cwd=str(self.workdir("ungrouped")), adapter="command", argv=["fixture-never-run"], expectedSeconds=1800,
         )["task"]
         admitted = self.claim(board, run_id=task["runId"])["claim"]
         self.assertIsNone(admitted["sessionRecordPath"])

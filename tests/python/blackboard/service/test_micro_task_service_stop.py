@@ -65,7 +65,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
                     connection.execute("UPDATE workflow_continuations SET state=? WHERE run_id=?", (state, run["runId"]))
         ordinary = board.submit_execution(**{
             "requestId": "ordinary", "adapter": "command", "task": "plain",
-            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"],
+            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"], "expectedSeconds": 1800,
         })["task"]["runId"]
         with self.assertRaises(BoardError) as caught:
             upgrade.idle_snapshot(board.directory)
@@ -129,7 +129,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "FORBIDDEN")
         ordinary = board.submit_execution(**{
             "requestId": "ordinary", "adapter": "command", "task": "plain",
-            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"],
+            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"], "expectedSeconds": 1800,
         })
         self.assertEqual(board.call("task_cancel", {"runId": ordinary["task"]["runId"]})["task"]["state"],
                          "cancelled")

@@ -52,6 +52,7 @@ class MicroTaskFixTests(WorkflowTestCase):
         maintenance_task = board.submit_execution(
             requestId="maintenance-for-" + target["runId"], task="Classify accepted delivery",
             adapter="command", argv=["true"], cwd=str(self.workdir("maintenance-for-" + target["runId"])),
+            expectedSeconds=1800,
         )["task"]["runId"]
         now = board.store.now()
         with board.store.db.write() as db:

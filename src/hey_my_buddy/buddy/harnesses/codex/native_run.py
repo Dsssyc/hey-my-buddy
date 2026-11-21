@@ -607,9 +607,10 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
             if warning not in warnings:
                 warnings.append(warning)
             continue
+        modalities = item.get("inputModalities")
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
-                       "inputModalities": item.get("inputModalities") or ["text"], "available": True})
+                       "inputModalities": modalities if isinstance(modalities, list) else [], "available": True})
     catalog = {"source": "codex-native-app-server", "harness": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "codex", "provider": provider, "displayName": provider,

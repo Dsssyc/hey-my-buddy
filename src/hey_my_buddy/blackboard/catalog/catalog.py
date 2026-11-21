@@ -256,7 +256,7 @@ def canonical_payload(value: dict) -> dict:
                 "name": _text(model.get("name"), 200) or model_id,
                 "description": _text(model.get("description")),
                 "contextWindow": context,
-                "inputModalities": _strings(model.get("inputModalities")) or ["text"],
+                "inputModalities": _strings(model.get("inputModalities")),
                 "efforts": efforts,
                 "available": available,
                 "unavailableReason": None if available else native_reason,

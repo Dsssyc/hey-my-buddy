@@ -333,7 +333,7 @@ class ProfileExecutionTests(BoardTestCase):
         self.board_.console_call("user_policy_publish", {"commandId": "profile-routing",
             "configuration": {"routerBuddyIds": [PROFILE_BUDDY, TARGET_BUDDY], "defaultRoutingMode": "fast"}})
         request = self.board_.store.decisions.request_select({"requestId": "profile-routing",
-                                                               "task": "Fix parser"})
+                                                               "task": "Fix parser", "expectedSeconds": 1800})
         decision = self.board_.call("selection_get", {"decisionId": request["decisionId"],
                                                       "includeAudit": True})["decision"]
         target = next(item for item in decision["input"]["buddies"] if item["buddyId"] == TARGET_BUDDY)
