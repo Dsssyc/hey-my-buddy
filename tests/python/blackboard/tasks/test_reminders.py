@@ -155,7 +155,8 @@ class ReminderFacts(BoardTestCase):
         reminders.collect(self.store)
         params = {'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True, 'reminderWaitId': 'lost-reply'}
         first = self.store.task_wait(params)['reminder']
-        self.assertEqual(self.store.task_wait(params)['reminder'], first)
+        with patch.object(self.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertEqual(self.store.task_wait(params)['reminder'], first)
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 2)
 
     def test_prompt_observation_does_not_reset_silence_or_invent_a_native_event(self):

@@ -359,17 +359,35 @@ class FastSeamTests(SeamCase):
         facts = native_run.native_evidence(result)["threadNotifications"]
         self.assertEqual(facts, {"countsByType": {"thread/futureNotification": 1}, "total": 1})
 
-    def test_connection_unknown_notifications_before_thread_and_during_turn_keep_answer(self):
+    def test_connection_unknown_notifications_during_the_turn_keep_answer(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("connection-notification", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"buddyId": "legal"}')
         self.assertIsNone(correction.stop_reason)
         self.assertEqual(result.native_evidence.unknown_events.to_payload(),
-                         {"countsByType": {"account/updated": 2}, "total": 2})
+                         {"countsByType": {"account/updated": 1}, "total": 1})
         retained = native_run._read_evidence_ref(result, "unknown-events")
         self.assertEqual(retained, result.native_evidence.unknown_events.to_payload())
         self.assertNotIn("unknownEvents", native_run.native_evidence(result))
+
+    def test_a_turn_run_never_reads_the_account(self):
+        # Account and billing probing belongs to discovery and the account
+        # probe; a turn run's initialization reads the handshake, config and
+        # catalog only, so a failing account read can no longer abort the
+        # attempt before a thread exists.
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
+        result = self.fast_run("ok", correction)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+        self.assertIn("model/list", trace["rpc"])
+        self.assertNotIn("account/read", trace["rpc"])
+        marker = uuid.uuid4().hex
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{marker}",
+                                native_root=self.base / f"discovery-native-{marker}",
+                                timeout_seconds=180, cancelled=lambda: False)
+        # The same fixture still answers discovery's account read.
+        self.assertEqual(catalog["billingByProvider"]["openai"]["kind"], "subscription")
 
     def test_explicit_foreign_identity_is_refused_with_method_in_message(self):
         # A known method isolates the identity guard; unknown turn-scoped
@@ -495,8 +513,8 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.end.reason_code)
         self.assertIsNone(correction.stop_reason)
         # The unknown event's own count is the observer statistics' fact.
-        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"account/updated": 1, "futureThing": 1},
-                                                      "total": 2} for facts in seen),
+        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"futureThing": 1},
+                                                      "total": 1} for facts in seen),
                         [facts["unknownEvents"] for facts in seen])
 
     def test_a_denied_interaction_is_refused_then_stops_the_run(self):
@@ -610,7 +628,7 @@ class FastSeamTests(SeamCase):
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 facts = result.native_evidence.unknown_events.to_payload()
-                self.assertEqual(facts["countsByType"], {"account/updated": 1, label: 1})
+                self.assertEqual(facts["countsByType"], {label: 1})
                 self.assertTrue(result.completion_evidence.stream_end)
         observations = []
         def observe(facts):
@@ -639,7 +657,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.native_evidence.unknown_events.to_payload()["countsByType"],
-                         {"account/updated": 1, "unknown-method": 1})
+                         {"unknown-method": 1})
 
     def test_an_unrunnable_executable_fails_native_creation_without_a_child(self):
         garbage = self.base / "not-a-cli"
@@ -1043,7 +1061,7 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         facts = native_run.native_evidence(result)
         self.assertEqual(result.native_evidence.unknown_events.to_payload()["countsByType"],
-                         {"account/updated": 1, "thread/futureItem": 1, "item-shape-unreadable": 1})
+                         {"thread/futureItem": 1, "item-shape-unreadable": 1})
         self.assertEqual(facts["nativeToolEvents"][0]["params"]["item"], "new-native-shape")
         self.assertFalse(facts["nativeEvidenceTruncated"])
 
@@ -1660,7 +1678,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         # The unknown event's own count is the observer statistics' fact.
         self.assertEqual(seen[-1]["unknownEvents"],
-                         {"countsByType": {"account/updated": 1, "thread/hologram/updated": 1}, "total": 2})
+                         {"countsByType": {"thread/hologram/updated": 1}, "total": 1})
 
     def test_unknown_event_types_merge_at_the_public_bound(self):
         # More distinct unclassified types in one real turn than the public
@@ -1677,12 +1695,12 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         counts = seen[-1]["unknownEvents"]["countsByType"]
         total = seen[-1]["unknownEvents"]["total"]
-        self.assertEqual(total, 66)
-        self.assertEqual(sum(counts.values()), 66)
+        self.assertEqual(total, 65)
+        self.assertEqual(sum(counts.values()), 65)
         self.assertEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(list(counts)[:MAX_UNKNOWN_EVENT_TYPES - 1],
-                         ["account/updated", *[f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 2)]])
-        self.assertEqual(counts[UNLISTED_NATIVE_EVENTS], 3)
+                         [f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 1)])
+        self.assertEqual(counts[UNLISTED_NATIVE_EVENTS], 2)
         self.assertEqual(result.native_evidence.unknown_events.to_payload(), seen[-1]["unknownEvents"])
 
     def test_worker_tool_facts_are_live_public_evidence(self):

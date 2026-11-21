@@ -108,8 +108,10 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 self.assertEqual(len(macro_summaries(page)), limit)
                 # Count actual SQL, including any separate matching scan of
                 # the member relation; patching the loader alone misses that.
-                members = [sql for sql in statements if "SELECT h.*, ownership.group_id" in sql]
+                markers = [sql for sql in statements if "FROM history ORDER BY task_id" in sql]
+                members = [sql for sql in statements if "AS summary_matching" in sql]
                 failures = [sql for sql in statements if "execution_status='failed'" in sql]
+                self.assertEqual(len(markers), 1)
                 self.assertEqual(len(members), 1)
                 self.assertEqual(len(failures), 1)
                 self.assertEqual(sum(row["matchingRuns"] for row in macro_summaries(page)),
@@ -554,6 +556,20 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 )
                 self.assertNotIn("summary", self.rows()[group])
                 self.assert_recomputed(counter, [])
+
+    def test_standalone_repository_owner_correction_invalidates_the_cached_label(self):
+        root = self.root_for(self.fixture.macros[1])
+        self.sql(
+            "UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks"
+            " WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE run_id=?", (root,),
+        )
+        group = "run:" + root
+        self.rows()
+        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("UPDATE workflow_artifacts SET repository_path='/fictional/corrected-standalone/.git'"
+                     " WHERE run_id=? AND kind='input' AND workspace_facts_role='owner'", (root,))
+            self.assertEqual(self.rows()[group]["project"]["label"], "corrected-standalone")
+            self.assert_recomputed(counter, [group])
 
     def test_route_move_only_recomputes_old_and_new_groups(self):
         old, new = self.fixture.macros[:2]

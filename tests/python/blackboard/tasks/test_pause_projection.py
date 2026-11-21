@@ -1,6 +1,8 @@
 """Pause facts are visible to readers and interruption delivery is one-time."""
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
 
@@ -55,8 +57,9 @@ class PauseProjectionTests(WorkflowTestCase):
                                             'reminderWaitId': wait_id})
         first = wait('pause-wait-1')
         self.assertEqual(first['pause']['pausedAt'], paused_at)
-        self.assertEqual(wait('pause-wait-1')['pause'], first['pause'])
-        self.assertNotIn('pause', wait('pause-wait-2'))
+        with patch.object(board.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertEqual(wait('pause-wait-1')['pause'], first['pause'])
+            self.assertNotIn('pause', wait('pause-wait-2'))
         with board.store.db.read() as db:
             deliveries = db.execute(
                 "SELECT COUNT(*) FROM events WHERE kind='workflow.pause_delivered' AND task_id=?",

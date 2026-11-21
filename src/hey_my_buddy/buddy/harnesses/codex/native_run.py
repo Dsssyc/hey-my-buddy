@@ -618,7 +618,7 @@ def _discovery_account_status(account) -> str:
 
 def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dict,
                 state: _RunState) -> bool | None:
-    """Initialization phase: handshake, account check, catalog and membership.
+    """Initialization phase: handshake, config, catalog and membership.
 
     The listed/unlisted fact comes from every
     non-hidden identity this model/list read named, even a row whose efforts
@@ -631,7 +631,6 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     experimental = {"capabilities": {"experimentalApi": True}}
     connection.call("initialize", {**INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
-    connection.call("account/read", {"refreshToken": False})
     configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config")
     provider = native_provider(configured) if isinstance(configured, dict) else None
     catalog, listed_ids = _catalog(connection, prep.version, provider)

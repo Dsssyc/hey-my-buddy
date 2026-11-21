@@ -70,6 +70,20 @@ ACTIVE_TASK_STATES = ("queued", "running", "cancelling", "reconciliation-needed"
 UNCONCLUDED_RESULT_STATES = ("failed", "cancelled")
 _ACTIVE_TASK_SQL = ",".join(map(repr, ACTIVE_TASK_STATES))
 _RESULT_SQL = ",".join(map(repr, UNCONCLUDED_RESULT_STATES))
+_ACTIVE_RUN_STATES_SQL = f"'executing','awaiting-host','waiting-owned',{_RESULT_SQL}"
+_REVIEW_RUN_STATE = "delivered"
+
+
+def active_task_sql(state: str) -> str:
+    return f"{state} IN ({_ACTIVE_TASK_SQL})"
+
+
+def active_run_sql(state: str) -> str:
+    return f"{state} IN ({_ACTIVE_RUN_STATES_SQL})"
+
+
+def list_candidate_run_sql(state: str) -> str:
+    return f"{state} IN ({_ACTIVE_RUN_STATES_SQL},{_REVIEW_RUN_STATE!r})"
 
 
 def host_filter_sql(*, run_state="run_state", task_state="state", root_run_id="root_run_id") -> str:
@@ -86,21 +100,13 @@ def host_filter_sql(*, run_state="run_state", task_state="state", root_run_id="r
 FILTER_SQL = {
     "all": None,
     # Open work, including Lead-owned runs waiting for the Lead to resume them.
-    "active": (
-        f"(state IN ({_ACTIVE_TASK_SQL})"
-        " OR run_state IN ('executing','awaiting-host','waiting-owned')"
-        f" OR run_state IN ({_RESULT_SQL}))"
-    ),
+    "active": f"({active_task_sql('state')} OR {active_run_sql('run_state')})",
     # A Lead-owned run is active for its Lead while it has a boundary.
     "host": host_filter_sql(),
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
     # Micro-task review_ready also proves stop for every owned run and Router.
-    "review": (
-        "(accepted_at IS NULL AND state IN ('completed','failed','cancelled')"
-        " AND decision_id IS NULL AND adapter <> 'decision'"
-        " AND (micro_task_run_id IS NULL OR run_state = 'delivered') AND review_ready = 1)"
-    ),
+    "review": "review_ready = 1",
 }
 
 #: Every immutable Router dispatch and its owning micro task, when routed for one.
@@ -114,9 +120,8 @@ SELECT dispatch.task_id, dispatch.decision_id, route.run_id,
 
 # Equivalent to WorkflowCoordinator._stop_proven for existing tasks. Reuse this
 # predicate for every grouped stop proof, including the paused macro view.
-UNCONFIRMED_STOPS_SQL = """
-SELECT task.task_id FROM tasks task
- WHERE EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+_UNCONFIRMED_STOP_SQL = """
+       EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
                 AND (attempt.execution_state <> 'finished' OR attempt.shutdown_confirmed <> 1))
     OR (task.active_attempt_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
@@ -128,25 +133,15 @@ SELECT task.task_id FROM tasks task
         SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id))
 """
 
+UNCONFIRMED_STOPS_SQL = f"SELECT task.task_id FROM tasks task WHERE ({_UNCONFIRMED_STOP_SQL})"
+
 #: One row per task: the full task row plus its derived micro task facts.
 #:
-#: A routing decision uses the owning run's project and Host.
+#: A routing decision uses the owning run's project and Host. The CASE guards
+#: review proof so accepted, active and Router tasks never walk owned runs.
 RELATION_SQL = f"""
-WITH RECURSIVE manifest_owners AS ({MANIFEST_OWNERS_CTE}),
-routing_tasks AS ({ROUTING_TASKS_SQL}),
-owned_runs(owner_run_id, run_id) AS (
-    SELECT run_id, run_id FROM workflow_runs
-    UNION
-    SELECT owned.owner_run_id, lead.owned_run_id
-      FROM owned_runs owned JOIN workflow_lead_tasks lead ON lead.lead_run_id = owned.run_id
-),
-owned_executions(owner_run_id, task_id) AS (
-    SELECT owner_run_id, run_id FROM owned_runs
-    UNION
-    SELECT owned.owner_run_id, routing.task_id FROM owned_runs owned
-      JOIN routing_tasks routing ON routing.run_id = owned.run_id
-),
-unconfirmed_stops AS ({UNCONFIRMED_STOPS_SQL})
+WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),
+routing_tasks AS ({ROUTING_TASKS_SQL})
 SELECT
     t.*,
     r.run_id AS micro_task_run_id,
@@ -190,18 +185,34 @@ SELECT
     t.adapter AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
-    EXISTS(
-        SELECT 1 FROM attempts attempt
-         WHERE attempt.task_id = t.task_id
-           AND attempt.attempt_id = COALESCE(t.active_attempt_id, t.selected_attempt_id)
-           AND attempt.result_json IS NOT NULL
-           AND attempt.execution_state = 'finished'
-           AND attempt.shutdown_confirmed = 1
-    ) AND NOT EXISTS (
+    CASE WHEN t.accepted_at IS NULL AND t.state IN ('completed','failed','cancelled')
+          AND dr.decision_id IS NULL AND t.adapter <> 'decision'
+          AND (r.run_id IS NULL OR r.state = {_REVIEW_RUN_STATE!r})
+          AND EXISTS (
+              SELECT 1 FROM attempts attempt
+               WHERE attempt.task_id = t.task_id
+                 AND attempt.attempt_id = COALESCE(t.active_attempt_id, t.selected_attempt_id)
+                 AND attempt.result_json IS NOT NULL
+                 AND attempt.execution_state = 'finished'
+                 AND attempt.shutdown_confirmed = 1
+          )
+    THEN NOT EXISTS (
+        WITH RECURSIVE owned_runs(run_id) AS (
+            SELECT r.run_id WHERE r.run_id IS NOT NULL
+            UNION
+            SELECT lead.owned_run_id FROM owned_runs owned
+              JOIN workflow_lead_tasks lead ON lead.lead_run_id = owned.run_id
+        ),
+        owned_executions(task_id) AS (
+            SELECT run_id FROM owned_runs
+            UNION
+            SELECT routing.task_id FROM owned_runs owned
+              JOIN routing_tasks routing ON routing.run_id = owned.run_id
+        )
         SELECT 1 FROM owned_executions owned
-          JOIN unconfirmed_stops pending ON pending.task_id = owned.task_id
-         WHERE owned.owner_run_id = r.run_id
-    ) AS review_ready
+          CROSS JOIN tasks task ON task.task_id = owned.task_id
+         WHERE ({_UNCONFIRMED_STOP_SQL})
+    ) ELSE 0 END AS review_ready
 FROM tasks t
 LEFT JOIN workflow_runs r ON r.run_id = t.task_id
 LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id

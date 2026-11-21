@@ -69,7 +69,7 @@ To install from a checkout of this repository instead, build the wheel and insta
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.72.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.72.2-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
