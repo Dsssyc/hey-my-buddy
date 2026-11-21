@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from console.test_console import Browser, ConsoleTestCase
+from blackboard.catalog.test_catalog_trust import reading
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
@@ -134,6 +135,57 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(snapshot["tasks"], {"pendingCount": 0})
         for _status, _headers, body in replays:
             self.assertEqual(body, b"")
+
+    def test_buddy_remove_over_http_invalidates_the_cached_snapshot(self):
+        board = self.board()
+        board.evaluation.record_catalog(reading(efforts=('high', 'max')))
+        board.evaluation.record_catalog(reading(efforts=('high',)))
+        active, retired = 'dsh:fixture:alpha:high', 'dsh:fixture:alpha:max'
+        with board.store.db.write() as db:
+            db.execute('INSERT INTO router_buddies(position,buddy_id) VALUES(0,?)', (retired,))
+        browser = self.open(board)
+        configured = browser.bootstrap()
+        csrf = configured['csrfToken']
+        self.assertEqual(next(buddy['removal'] for buddy in configured['buddies'] if buddy['buddyId'] == retired),
+                         {'allowed': False, 'reason': {'code': 'buddy-removal.in-router-list', 'params': {}}})
+
+        for buddy, error_code, reason_code in (
+            (active, 'BUDDY_NOT_REMOVABLE', 'buddy-removal.not-retired'),
+            (retired, 'BUDDY_IN_USE', 'buddy-removal.in-router-list'),
+        ):
+            with self.subTest(buddy=buddy):
+                status, _headers, body = browser.command(
+                    'buddy_remove', {'commandId': 'remove', 'buddyIds': [buddy]}, csrf=csrf)
+                self.assertEqual(status, 409, body)
+                error = json.loads(body)['error']
+                self.assertEqual(error['code'], error_code)
+                self.assertEqual(error['details'], {'buddyId': buddy, 'reason': {'code': reason_code, 'params': {}}})
+
+        with board.store.db.write() as db:
+            db.execute('DELETE FROM router_buddies WHERE buddy_id=?', (retired,))
+        first, replays = self.polls(browser, count=1)
+        self.assertEqual(replays[0][0], 304)
+        previous = json.loads(first[2])
+        self.assertEqual([buddy['buddyId'] for buddy in previous['buddies']], [active])
+        self.assertEqual(previous['unavailableBuddyCount'], 1)
+        status, _headers, body = browser.command('buddy_list', {'includeUnavailable': True}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        buddies = {buddy['buddyId']: buddy for buddy in json.loads(body)['result']['buddies']}
+        self.assertEqual(buddies[retired]['removal'], {'allowed': True})
+
+        status, _headers, body = browser.command(
+            'buddy_remove', {'commandId': 'remove', 'buddyIds': [retired]}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)['result'], {
+            'removedBuddyIds': [retired], 'removedModelServices': [], 'duplicate': False,
+        })
+        status, headers, body = browser.get('/api/console', headers={'If-None-Match': first[1]['etag']})
+        self.assertEqual(status, 200, body)
+        self.assertNotEqual(headers['etag'], first[1]['etag'])
+        current = json.loads(body)
+        self.assertGreater(current['eventCursor'], previous['eventCursor'])
+        self.assertEqual([buddy['buddyId'] for buddy in current['buddies']], [active])
+        self.assertEqual(current['unavailableBuddyCount'], 0)
 
     def test_maintenance_and_kind_evidence_reads_are_current_and_linkable(self):
         board = self.board()

@@ -9,7 +9,48 @@ from . import buddy_state
 from .catalog import CatalogView
 from ..store.db import canonical_json
 from ...errors import BoardError
+from ...protocol import schemas
 from ...protocol.reasons import reason, reason_from_json
+
+
+REMOVAL_REASONS = {
+    0: 'buddy-removal.in-router-list',
+    1: 'buddy-removal.is-maintenance-buddy',
+    2: 'buddy-removal.is-profile-buddy',
+    3: 'buddy-removal.has-maintenance-runs',
+    4: 'buddy-removal.has-profile-runs',
+    5: 'buddy-removal.active-execution',
+}
+
+
+def removal_references(db):
+    """Read removal blockers in priority order for all buddies and model services."""
+    references = {}
+    for priority, buddy_id, harness, provider, model in db.execute(
+        'SELECT 0 AS priority, buddy_id, NULL, NULL, NULL FROM router_buddies'
+        ' UNION ALL SELECT 1, maintenance_buddy_id, NULL, NULL, NULL FROM router_settings'
+        ' WHERE maintenance_buddy_id IS NOT NULL'
+        ' UNION ALL SELECT 2, profile_buddy_id, NULL, NULL, NULL FROM router_settings'
+        ' WHERE profile_buddy_id IS NOT NULL'
+        ' UNION ALL SELECT DISTINCT 3, buddy_id, NULL, NULL, NULL FROM maintenance_runs'
+        ' UNION ALL SELECT DISTINCT 4, buddy_id, NULL, NULL, NULL FROM profile_runs'
+        ' UNION ALL SELECT DISTINCT 5, NULL, model_harness, model_provider, model_model FROM attempts'
+        " WHERE model_model IS NOT NULL AND (execution_state != 'finished' OR shutdown_confirmed != 1)"
+        ' ORDER BY priority'
+    ):
+        key = buddy_id if buddy_id is not None else (harness, provider, model)
+        references.setdefault(key, priority)
+    return references
+
+
+def is_removal_candidate(row):
+    return row['retired'] == 1 or row['confirmed_absent_at'] is not None
+
+
+def removal_blocker(row, references):
+    service = (row['harness'], row['provider'], row['model'])
+    priority = references.get(row['buddy_id'], references.get(service))
+    return reason(REMOVAL_REASONS[priority]) if priority is not None else None
 
 
 def begin(evaluation, *, harnesses=None):
@@ -228,7 +269,6 @@ def record(evaluation, discovered, sequence=None, *, health_generation=None):
 
 
 def buddies(evaluation, params):
-    from ...protocol import schemas
     schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'harness', 'enabled'}, 'buddy.list')
     limit = params.get('limit', 100)
     if type(limit) is not int or not 1 <= limit <= 200:
@@ -255,7 +295,8 @@ def buddies(evaluation, params):
             return all(any(term in field for field in (*fields, complete_name)) for term in terms)
         candidates = sorted(buddy_state.rows(db, harness=harness), key=lambda row: row['buddy_id'])
         rows = list(islice((row for row in candidates if matches(row)), limit + 1))
-        values = [evaluation._buddy_view(row) for row in rows[:limit]]
+        references = removal_references(db)
+        values = [evaluation._buddy_view(row, references) for row in rows[:limit]]
         from ...protocol.billing import for_provider
         from ..routing.quota_routing import cooling
         for value in values:
@@ -266,3 +307,68 @@ def buddies(evaluation, params):
         return {'buddies': values, **user_policy.policy_view(db, ids),
                 'modelServiceConcurrency': evaluation.board.model_capacity_rows(db, model_services),
                 'nextCursor': rows[limit - 1]['buddy_id'] if len(rows) > limit else None}
+
+
+def remove_buddies(evaluation, params):
+    """Remove retired or confirmed absent entries while retaining evaluation history."""
+    user_policy.require_console()
+    operation = 'buddy.remove'
+    schemas.reject_unknown(params, {'commandId', 'buddyIds'}, operation)
+    command_id = schemas.required_string(params, 'commandId', max_length=128)
+    buddy_ids = params.get('buddyIds')
+    if not isinstance(buddy_ids, list) or not 1 <= len(buddy_ids) <= 200:
+        raise BoardError('INVALID_ARGUMENT', 'buddyIds must contain between 1 and 200 buddy IDs')
+    if any(not isinstance(buddy_id, str) or not schemas.IDENTIFIER_PATTERN.fullmatch(buddy_id)
+           for buddy_id in buddy_ids):
+        raise BoardError('INVALID_ARGUMENT', 'buddyIds contains an invalid buddy ID')
+    if len(set(buddy_ids)) != len(buddy_ids):
+        raise BoardError('INVALID_ARGUMENT', 'buddyIds must not contain duplicates')
+    request = {'buddyIds': buddy_ids}
+    board = evaluation.board
+    with evaluation.db.write() as db:
+        receipt = board._receipt(db, command_id, operation, request)
+        if receipt is not None:
+            return {**receipt, 'duplicate': True}
+        if board.upgrading():
+            raise BoardError('UPGRADE_IN_PROGRESS', 'Buddy removal is fenced until upgrade verification finishes')
+
+        marks = ','.join('?' for _ in buddy_ids)
+        rows = {row['buddy_id']: row for row in db.execute(
+            'SELECT b.buddy_id, b.harness, b.provider, b.model, b.retired, m.confirmed_absent_at'
+            ' FROM buddies b JOIN model_services m USING (harness, provider, model)'
+            f' WHERE b.buddy_id IN ({marks})', buddy_ids)}
+        references = removal_references(db)
+        affected_services = {}
+        for buddy_id in buddy_ids:
+            row = rows.get(buddy_id)
+            if row is None:
+                raise BoardError('NOT_FOUND', 'Unknown buddy ID', buddyId=buddy_id)
+            if not is_removal_candidate(row):
+                raise BoardError('BUDDY_NOT_REMOVABLE', 'Buddy is neither retired nor confirmed absent',
+                                 buddyId=buddy_id, reason=reason('buddy-removal.not-retired'))
+            blocker = removal_blocker(row, references)
+            if blocker is not None:
+                raise BoardError('BUDDY_IN_USE', 'Buddy still has references that prevent removal',
+                                 buddyId=buddy_id, reason=blocker)
+            affected_services[(row['harness'], row['provider'], row['model'])] = None
+
+        db.execute(f'DELETE FROM evaluation_preferences WHERE buddy_id IN ({marks})', buddy_ids)
+        db.execute(f'DELETE FROM buddies WHERE buddy_id IN ({marks})', buddy_ids)
+        removed_model_services = []
+        for service in affected_services:
+            deleted = db.execute(
+                'DELETE FROM model_services WHERE harness=? AND provider=? AND model=?'
+                ' AND confirmed_absent_at IS NOT NULL'
+                ' AND NOT EXISTS (SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=?)',
+                (*service, *service))
+            if deleted.rowcount:
+                harness, provider, model = service
+                removed_model_services.append({'harness': harness, 'provider': provider, 'model': model})
+
+        board._append_event(db, 'catalog.buddies_removed',
+                            payload={'buddyIds': buddy_ids, 'modelServices': removed_model_services})
+        response = {'removedBuddyIds': buddy_ids, 'removedModelServices': removed_model_services, 'duplicate': False}
+        board._store_receipt(db, command_id, operation, request, response)
+        head = board._head_of(db)
+    board._notify(head)
+    return response

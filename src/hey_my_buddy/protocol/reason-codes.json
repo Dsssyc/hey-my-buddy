@@ -12,6 +12,13 @@
   "alias.conflict": ["conflictingBuddy"],
   "alias.invalid": ["violation"],
   "alias.reserved": [],
+  "buddy-removal.active-execution": [],
+  "buddy-removal.has-maintenance-runs": [],
+  "buddy-removal.has-profile-runs": [],
+  "buddy-removal.in-router-list": [],
+  "buddy-removal.is-maintenance-buddy": [],
+  "buddy-removal.is-profile-buddy": [],
+  "buddy-removal.not-retired": [],
   "all-candidates-cooling": [
     "retryAt"
   ],

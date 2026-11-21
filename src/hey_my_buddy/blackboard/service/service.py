@@ -71,6 +71,7 @@ CONTROL_OPERATIONS = (
     "selection_list",
     "model_catalog_refresh",
     "buddy_list",
+    "buddy_remove",
     "workflow_create",
     "workflow_amend",
     "workflow_submit",
@@ -644,6 +645,12 @@ class BoardService(_BaseResource):
             self._touch_harnesses(params)
             return catalog_store.buddies(self.evaluation, params)
         return self._guard("buddy.list", request_json, handler)
+
+    def buddy_remove(self, request_json: str) -> str:
+        from ..catalog import catalog_store
+
+        return self._guard("buddy.remove", request_json,
+                           lambda params: catalog_store.remove_buddies(self.evaluation, params))
 
     # -- micro-task workflow --------------------------------------------------
     def workflow_create(self, request_json: str) -> str:

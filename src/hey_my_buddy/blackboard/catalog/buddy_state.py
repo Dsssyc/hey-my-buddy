@@ -39,6 +39,7 @@ def _project(buddy, model, health, current) -> dict:
         'unavailable_params_json': canonical_json(cause['params']) if cause else None,
         'unavailable_content': content,
         'pending_since': model['pending_since'],
+        'confirmed_absent_at': model['confirmed_absent_at'],
         'catalog_status': ('pending' if model['pending_since'] is not None else
                            'available' if catalog_available else 'unavailable'),
         'input_modalities_json': model['input_modalities_json'],

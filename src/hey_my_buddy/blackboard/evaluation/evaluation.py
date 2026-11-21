@@ -29,10 +29,11 @@ class EvaluationStore:
             settings = router.configuration(connection)
             _profile_buddy, profile_problem = self.board.profile.readiness(connection)
             configured_ids = settings["routerBuddyIds"]
-            from ..catalog import buddy_state
+            from ..catalog import buddy_state, catalog_store
             all_buddies = buddy_state.rows(connection)
+            references = catalog_store.removal_references(connection)
             buddies = [
-                self._buddy_view(row)
+                self._buddy_view(row, references)
                 for row in all_buddies
                 if row["available"] or row["buddy_id"] in configured_ids
             ]
@@ -112,8 +113,9 @@ class EvaluationStore:
         return catalog_store.record(self, discovered, sequence)
 
     @staticmethod
-    def _buddy_view(row: dict) -> dict:
+    def _buddy_view(row: dict, references: dict) -> dict:
         from ...protocol.capabilities import buddy_capabilities
+        from ..catalog import catalog_store
         capabilities = buddy_capabilities(row["harness"], json.loads(row["capabilities_json"]))
         view = {
             "buddyId": row["buddy_id"],
@@ -141,6 +143,9 @@ class EvaluationStore:
         view["catalogStatus"] = row["catalog_status"]
         if row["pending_since"] is not None:
             view["pendingSince"] = row["pending_since"]
+        if catalog_store.is_removal_candidate(row):
+            blocker = catalog_store.removal_blocker(row, references)
+            view["removal"] = {"allowed": False, "reason": blocker} if blocker else {"allowed": True}
         return view
 
     @staticmethod
