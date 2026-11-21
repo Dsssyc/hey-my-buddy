@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import sqlite3
 from unittest.mock import patch
 
+from blackboard.routing.fixtures.maintenance_answers import stage_and_commit
 from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from hey_my_buddy.blackboard.routing import statistics, maintenance_data
 from hey_my_buddy.blackboard.routing.evidence import domain_statistics
@@ -34,8 +35,8 @@ class StatisticsStorageTests(WorkflowTestCase):
             packet = maintenance_data.build_packet(db)
         answer = {"newNodes": [{"id": "root", "name": "Root", "definition": "Work", "parentId": None}],
                   "merges": [], "classifications": [{"runId": self.run["runId"], "domainNodeId": "root", "taskType": "verify"}],
-                  "summaries": {kind["kindId"]: {"text": "Observed work", "citations": []}
-                                for kind in packet["kinds"]}}
+                  "summaries": [{"kindId": kind["kindId"], "text": "Observed work", "citations": []}
+                                for kind in packet["kinds"]]}
         return packet, answer
 
     def test_acceptance_and_conclusion_roll_back_with_their_statistics(self):
@@ -75,13 +76,13 @@ class StatisticsStorageTests(WorkflowTestCase):
 
         with self.assertRaisesRegex(RuntimeError, "after-cell-write"):
             with self.board_.store.db.write() as db, patch.object(maintenance_data, "accumulate_cell", side_effect=fail_after_write):
-                maintenance_data.apply_answer(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
+                stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
         self.assertEqual(self.facts()["overall"]["samples"], 1)
         self.assertEqual(self.facts()["byDomain"], {})
         with self.board_.store.db.write() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_cell_statistics_buckets").fetchone()[0], 0)
-            result = maintenance_data.apply_answer(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
+            result = stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
         self.assertEqual(result["errors"], [])
         self.assertEqual(self.facts()["byDomain"]["root"]["samples"], 1)
 
@@ -107,7 +108,7 @@ class StatisticsStorageTests(WorkflowTestCase):
         self.accept_run(self.board_, self.delivered)
         packet, answer = self.maintenance()
         with self.board_.store.db.write() as db:
-            maintenance_data.apply_answer(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
+            stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id="maintenance")
             statistics.accumulate_infrastructure(db, BUDDY,
                 {"terminationReason": "harness-error", "result": {"code": "harness-unavailable"}}, self.board_.store.now())
         before = self.facts()

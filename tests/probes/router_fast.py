@@ -15,7 +15,9 @@ from pathlib import Path
 import time
 import uuid
 
-from hey_my_buddy.blackboard.routing import router, selection_policy
+from hey_my_buddy.blackboard.routing import router_sequence, selection_policy
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.private_files import publish_snapshot
 from hey_my_buddy.blackboard.routing.evidence import _empty_statistics, _statistics_fact
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
@@ -39,6 +41,12 @@ def parser():
 def packet(args):
     # This board-free probe has synthetic empty statistics and an empty queue.
     buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True,
+                'modelId': buddy['model'], 'modelDisplayName': buddy['model'],
+                'modelNames': [{key: buddy[key] for key in ('harness', 'provider', 'model')}],
+                'contextWindow': None, 'capabilities': ['input:text'],
+                'infrastructureFailures': {'count': 0, 'lastAt': None},
+                'summary': None, 'modelProfile': None,
+                'billing': {'kind': 'unknown'},
                 'statistics': {'overall': _statistics_fact(_empty_statistics()),
                                'byDomain': {}, 'byDomainTaskType': {}},
                 'load': {'active': 0, 'limit': 2, 'queued': 0,
@@ -46,17 +54,19 @@ def packet(args):
                 for buddy in (
                     {'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
                     {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
+    identity = {key: getattr(args, key) for key in ('harness', 'provider', 'model', 'effort')}
     return {
-        'buddy': {key: getattr(args, key) for key in ('harness', 'provider', 'model', 'effort')},
+        'buddy': identity,
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
-        'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
-        'captureEvidence': True,
-        'buddies': buddies, 'preferences': [],
+        'routingMode': 'fast', 'protocolVersion': router_selection.VERSION,
+        'buddies': buddies, 'preferences': [], 'domainNodes': [],
+        'project': None, 'expectedSeconds': 60, 'requiredCapabilities': [],
         'policyFacts': selection_policy.policy_facts(buddies=buddies,
                                                     prefer_buddy_ids=[], hard_constraints={}),
         'requestId': 'native-fast-check',
         'modelResponseWaitSeconds': 60,
-        'outputSchema': router.answer_schema([p['buddyId'] for p in buddies], 'fast'),
+        'routerBuddy': identity, 'routerBuddyId': ':'.join(identity.values()),
+        'routerIndex': 0,
     }
 
 
@@ -85,10 +95,14 @@ def run(args):
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
     environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(root / 'state'),
                        HMB_RUNTIME_ROOT=str(root / 'runtime'))
+    owner = document['requestId']
+    reference, _ = publish_snapshot(root / 'state', 'routing', owner, document, round=1)
+    request = router_sequence.execution_document({'document': document, 'decisionId': owner, 'round': 1},
+                                                 reference, digest)
     context = ExecutionContext(task_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), generation=1,
         spec={'adapter': 'decision', 'cwd': str(root), 'modelResponseWaitSeconds': document['modelResponseWaitSeconds']},
         directory=root / 'attempt', runtime={'identity': 'source:fast-probe'},
-        environment=environment, decision_input=document, session_record_path=None)
+        environment=environment, decision_input={**request, "captureEvidence": True}, session_record_path=None)
     implementation = DecisionAdapter()
     started = time.monotonic()
     handle = None

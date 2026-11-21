@@ -88,15 +88,50 @@ describe("reaching the top of the transcript", () => {
   });
 
   it("polls additions without observing history when no earlier page exists", async () => {
-    const session = vi.fn().mockResolvedValueOnce(page(0, 2, false)).mockResolvedValueOnce(page(2, 2, false));
+    const session = vi.fn().mockResolvedValueOnce({ ...page(0, 2, false), state: "running" }).mockResolvedValueOnce(page(2, 2, false));
     renderPanel({ session });
     expect(await screen.findByText("第 1 条记录")).toBeTruthy();
     // No earlier page can be read, so the top sentinel is not even attached and
     // no intersection can disturb the follow state.
     expect(observers.filter(item => item.targets.some(target => target.getAttribute("aria-hidden") === "true"))).toEqual([]);
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3400)); });
+    await screen.findByText("第 3 条记录");
     expect(session).toHaveBeenCalledTimes(2);
     expect(session.mock.calls[1][2]).toEqual({ after: 2, limit: SESSION_PAGE_SIZE });
-    expect(screen.getByText("第 3 条记录")).toBeTruthy();
+  });
+
+  it("qualifies the tab summary while earlier pages remain unloaded", async () => {
+    const tabsSide = document.createElement("span");
+    document.body.append(tabsSide);
+    try {
+      const session = vi.fn().mockResolvedValueOnce(page(SESSION_PAGE_SIZE, 2, true))
+        .mockResolvedValueOnce(page(0, 2, false));
+      render(<TooltipProvider><I18nextProvider i18n={i18n}><SessionPanel client={{ session }} taskId="task" attemptId="attempt" harness="zcode" taskText="任务" checkoutRoot="/project" tabsSide={tabsSide} active/></I18nextProvider></TooltipProvider>);
+      expect(await screen.findByText("第 257 条记录")).toBeTruthy();
+      expect(tabsSide.querySelector('[data-slot="session-summary"]')?.textContent).toBe("已加载 2 条消息");
+      await reachTop();
+      expect(await screen.findByText("第 0 条记录")).toBeTruthy();
+      expect(tabsSide.querySelector('[data-slot="session-summary"]')?.textContent).toBe("4 条消息");
+    } finally {
+      tabsSide.remove();
+    }
+  });
+
+  it("retries a failed earlier page in place on an ended session", async () => {
+    const session = vi.fn()
+      .mockResolvedValueOnce(page(SESSION_PAGE_SIZE, 2, true))
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce(page(0, 2, false));
+    render(<TooltipProvider><I18nextProvider i18n={i18n}><SessionPanel client={{ session }} taskId="task" attemptId="attempt" harness="zcode" taskText="任务" checkoutRoot="/project" active/></I18nextProvider></TooltipProvider>);
+    expect(await screen.findByText("第 257 条记录")).toBeTruthy();
+    await reachTop();
+    const banner = await screen.findByRole("alert");
+    expect(banner.getAttribute("data-slot")).toBe("session-earlier-error");
+    // Loaded transcript stays visible in place while the earlier page error is shown.
+    expect(screen.getByText("第 257 条记录")).toBeTruthy();
+    await act(async () => { screen.getByRole("button", { name: "重试读取" }).click(); });
+    expect(await screen.findByText("第 0 条记录")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(session).toHaveBeenCalledTimes(3);
+    expect(session.mock.calls[2]![2]).toMatchObject({ before: SESSION_PAGE_SIZE });
   });
 });

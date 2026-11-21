@@ -2,8 +2,9 @@
 
 Apply before the first local register/connect. Unix roles use <state>/ipc,
 independent of inherited C2_IPC_ROOT; Windows retains the native Named Pipe domain.
-The buddy pool is disabled. Temporary shared-memory transfers remain possible:
-configuration and C-Two memory accounting are not process RSS.
+Each role gets its own (memory, file-spill, outstanding-calls) budget, which C-Two
+allocates lazily at the role's first I/O and freezes there: a configured budget is
+a ceiling C-Two accounts for, never a resident-memory claim.
 """
 from __future__ import annotations
 
@@ -19,36 +20,42 @@ import c_two as cc
 
 #: Identifier of the applied profile, echoed in every report so a running process
 #: can be compared against the source it claims to run.
-PROFILE_ID = "hey-my-buddy-lightweight-1"
+PROFILE_ID = "hey-my-buddy-lightweight-2"
 MAX_WAIT_CAPACITY = 48
 #: Shared by the launcher readiness wait and every native RPC server startup.
 SERVICE_STARTUP_TIMEOUT_SECONDS = 20
 
 _MIB = 1024 * 1024
 
-#: Non-pool and reassembly overrides accepted by both ``set_server`` and ``set_client``.
-POOL_OVERRIDES: dict[str, object] = {
-    "pool_enabled": False,
-    "reassembly_segment_size": 16 * _MIB,
-    "reassembly_max_segments": 2,
-    "max_reassembly_bytes": 16 * _MIB,
-    "max_total_chunks": 256,
+#: In-memory transfer budget each role may account against before spilling.
+MEMORY_BUDGET_BYTES = 64 * _MIB
+#: File-spill budget for transfers that outgrow the in-memory budget.
+FILE_SPILL_BUDGET_BYTES = 64 * _MIB
+#: Calls one role may keep outstanding; the pool itself stays lazily allocated.
+MAX_OUTSTANDING_CALLS = 256
+#: Server-only payload ceiling, verified against 8-32 MiB transfers.
+MAX_PAYLOAD_BYTES = 32 * _MIB
+#: Server-only execution workers, the released maximum.
+MAX_EXECUTION_WORKERS = 64
+
+#: Role-domain budget keywords accepted by ``set_client``.
+CLIENT_BUDGETS: dict[str, int] = {
+    "memory_budget_bytes": MEMORY_BUDGET_BYTES,
+    "file_spill_budget_bytes": FILE_SPILL_BUDGET_BYTES,
+    "max_outstanding_calls": MAX_OUTSTANDING_CALLS,
 }
 
-#: Server-only capacity overrides. ``max_execution_workers`` is capped at 64 by the
-#: released resolver. Message and frame ceilings remain independent of the pool.
-SERVER_OVERRIDES: dict[str, object] = {
-    **POOL_OVERRIDES,
-    "max_execution_workers": 64,
-    "max_pending_requests": 256,
-    "max_payload_size": 32 * _MIB,
-    "max_frame_size": 16 * _MIB,
+#: Budget keywords accepted by ``set_server``, adding its payload and worker ceilings.
+SERVER_BUDGETS: dict[str, int] = {
+    **CLIENT_BUDGETS,
+    "max_payload_size": MAX_PAYLOAD_BYTES,
+    "max_execution_workers": MAX_EXECUTION_WORKERS,
 }
 
-#: The override keys this module is allowed to publish, by role.
+#: The budget keys this module is allowed to publish, by role.
 WHITELISTED_KEYS: dict[str, tuple[str, ...]] = {
-    "server": tuple(SERVER_OVERRIDES),
-    "client": tuple(POOL_OVERRIDES),
+    "server": tuple(SERVER_BUDGETS),
+    "client": tuple(CLIENT_BUDGETS),
 }
 
 _LOCK = threading.Lock()
@@ -56,41 +63,28 @@ _configured: set[str] = set()
 _reports: dict[str, dict] = {}
 
 
-def _role_overrides(role: str) -> dict[str, object]:
+def _role_budgets(role: str) -> dict[str, int]:
     if role == "server":
-        return dict(SERVER_OVERRIDES)
+        return dict(SERVER_BUDGETS)
     if role == "client":
-        return dict(POOL_OVERRIDES)
+        return dict(CLIENT_BUDGETS)
     raise ValueError(f"unknown rpc role {role!r}")
 
 
-def _capacity(overrides: dict[str, object]) -> dict[str, int]:
-    reassembly_segment = int(overrides["reassembly_segment_size"])
-    reassembly_segments = int(overrides["reassembly_max_segments"])
-    return {
-        "reassemblySegmentBytes": reassembly_segment,
-        "maxReassemblySegments": reassembly_segments,
-        "reassemblyCapacityBytes": reassembly_segment * reassembly_segments,
-        "maxReassemblyBytes": int(overrides["max_reassembly_bytes"]),
-    }
-
-
 def _build_report(role: str) -> dict:
-    overrides = _role_overrides(role)
     return {
         "profile": PROFILE_ID,
         "role": role,
-        "overrides": overrides,
-        "capacity": _capacity(overrides),
-        "sharedMemoryDisabled": False,
+        "budgets": _role_budgets(role),
     }
 
 
 def report(role: str = "server") -> dict:
-    """The applied profile as whitelisted overrides plus the bounds they imply.
+    """The applied profile as its whitelisted role budgets.
 
-    Configured capacity is *not* resident memory: no mapped or RSS number is claimed
-    or inferred here. The returned mapping is cached and must be treated as read-only.
+    A budget is a ceiling C-Two enforces when it lazily allocates the role's pool:
+    no resident or mapped memory number is claimed or inferred here. The returned
+    mapping is cached and must be treated as read-only.
     """
     if role not in ("server", "client"):
         raise ValueError(f"unknown rpc role {role!r}")
@@ -134,7 +128,7 @@ def configure_local_endpoint(state_dir: Path, *, create: bool = True) -> Path | 
         # Windows has a user-scoped Named Pipe domain, never a Unix root.
         # Core rejects even an inherited root override before selecting it.
         os.environ.pop("C2_IPC_ROOT", None)
-        cc.set_local_endpoint()
+        cc.endpoint.set_local_endpoint()
         return None
     root = state / "ipc"
     for directory in (state, root):
@@ -148,7 +142,7 @@ def configure_local_endpoint(state_dir: Path, *, create: bool = True) -> Path | 
         _validate_path(directory, boundary=state)
     # Core owns both the active-domain fence and endpoint access validation.
     try:
-        cc.set_local_endpoint(root=str(root))
+        cc.endpoint.set_local_endpoint(root=str(root))
     except (ValueError, RuntimeError) as error:
         raise BoardError("PRIVATE_PATH_UNSAFE", str(error), path=str(root)) from error
     return root
@@ -157,18 +151,17 @@ def configure_local_endpoint(state_dir: Path, *, create: bool = True) -> Path | 
 def _apply(role: str, state_dir: Path, *, create: bool) -> dict:
     with _LOCK:
         configure_local_endpoint(state_dir, create=create)
-        # The public scope is absent before the role's first I/O and after complete
-        # shutdown. Reapply then; never ask C-Two to retune an active role.
-        scope = "server" if role == "server" else "runtime_outgoing"
-        active = cc.memory_stats()[scope] is not None
-        if active and role not in _configured:
+        # C-Two freezes a role's budgets at its first I/O and unfreezes only after
+        # complete shutdown. Reapply then; never ask C-Two to retune an active role.
+        stats = cc.observe.memory_stats()[role]
+        if stats["frozen"] and role not in _configured:
             raise BoardError("RPC_CONFIG_TOO_LATE", "Private RPC profile must precede local I/O", role=role)
-        if not active:
-            overrides = _role_overrides(role)
+        if not stats["frozen"]:
+            budgets = _role_budgets(role)
             if role == "server":
-                cc.set_server(ipc_overrides=overrides, startup_timeout=SERVICE_STARTUP_TIMEOUT_SECONDS)
+                cc.set_server(startup_timeout=SERVICE_STARTUP_TIMEOUT_SECONDS, **budgets)
             else:
-                cc.set_client(ipc_overrides=overrides)
+                cc.set_client(**budgets)
         _reports.setdefault(role, _build_report(role))
         _configured.add(role)
         return _reports[role]

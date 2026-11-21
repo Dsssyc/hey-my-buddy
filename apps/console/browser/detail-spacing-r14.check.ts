@@ -18,21 +18,28 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const title = page.locator('[data-slot=detail-pane] h3').first();
     await expect(title).toHaveText("回合 2");
     const [headBox, stripBox, tabsBox, titleBox] = await Promise.all([header.boundingBox(), strip.boundingBox(), tabs.boundingBox(), title.boundingBox()]);
-    expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
+    expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(0, 0);
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
     expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
     await expect(strip).toHaveCSS("border-bottom-width", "0px");
+    await expect(tabs).toHaveCSS("height", "34px");
     await expect(tabs).toHaveCSS("border-bottom-width", "1px");
-    await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    const paper = await page.evaluate(() => {
-      const probe = document.createElement("span"); probe.style.backgroundColor = "var(--paper)"; document.body.append(probe);
-      const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color;
+    const [paper, sunk, line] = await page.evaluate(() => {
+      const probe = document.body.appendChild(document.createElement("span"));
+      const colors = ["--paper", "--sunk", "--line"].map(token => {
+        probe.style.backgroundColor = `var(${token})`;
+        return getComputedStyle(probe).backgroundColor;
+      });
+      probe.remove();
+      return colors;
     });
+    const timeline = strip.locator('[data-slot=detail-timeline]');
+    await expect(timeline).toHaveCSS("border-top-color", line);
+    await expect(timeline).toHaveCSS("background-color", paper);
+    await expect(ruler).toHaveCSS("border-bottom-color", line);
+    await expect(ruler).toHaveCSS("background-color", sunk);
     await expect(band).toHaveCSS("background-color", paper);
-    await expect(band).toHaveCSS("border-top-width", "1px");
     await expect(band).toHaveCSS("border-bottom-width", "1px");
-    await expect(band).toHaveCSS("padding-top", "12px");
-    await expect(band).toHaveCSS("padding-bottom", "12px");
     // The workspace is the page's own ground, and the header bar carries the ruler's.
     expect(await header.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(paper);
     await expect(page.locator('[data-slot=task-detail]')).toHaveCSS("background-color", paper);

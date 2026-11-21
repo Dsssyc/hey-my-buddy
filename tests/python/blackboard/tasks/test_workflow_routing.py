@@ -1,17 +1,19 @@
 """Durable Micro task routing with real transactions and no provider/model calls."""
 from __future__ import annotations
 
-import hashlib
 import json
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch, frozen_input
 from admission import run_next
-from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.roles.prompts import router_prompt
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY,
                              SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID)
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
@@ -426,14 +428,25 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(held[0].request.identity.attempt_id, selected["routing"]["attemptId"])
         harness, context, fixture_request = self.readonly_start.call_args.args
         self.assertEqual(harness, audit["input"]["buddy"]["harness"])
-        self.assertEqual(context.decision_input, audit["input"])
-        expected_prompt = router_prompt(router.render_prompt(audit["input"]))
+        head = context.decision_input
+        self.assertEqual(head["protocolVersion"], 20)
+        self.assertEqual(head["snapshot"]["owner"], decision_id)
+        self.assertEqual(head["snapshot"]["round"], 1)
+        assert_frozen_dispatch(self, board, head, audit["input"])
+        self.assertEqual(control["snapshot"], head["snapshot"])
+        self.assertEqual(control["inputSha256"], head["inputSha256"])
+        self.assertIn("query_task", held[0].request.snapshot_query.tool_names)
+        schema = router_selection.answer_schema("review")
+        self.assertEqual(head["outputSchema"], schema)
+        self.assertEqual(fixture_request.output_schema, schema)
+        self.assertNotIn("outputSchema", audit["input"])
+        expected_prompt = router_prompt(render_selection_prompt(head))
         self.assertEqual(fixture_request.prompt, expected_prompt)
-        self.assertEqual(held[0].request.input_text, structured_prompt(expected_prompt, audit["input"]["outputSchema"]))
-        self.assertEqual(fixture_request.output_schema, audit["input"]["outputSchema"])
+        self.assertEqual(held[0].request.input_text, structured_prompt(expected_prompt, schema))
         self.assertEqual(context.spec["modelResponseWaitSeconds"], audit["input"]["modelResponseWaitSeconds"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
-        self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
+        self.assertIs(audit["stopEvidence"]["shutdownConfirmed"], True)
+        self.assertIs(audit["stopEvidence"]["native"]["shutdownConfirmed"], True)
         self.assertTrue(self.routed(board)["alreadyExists"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
@@ -443,7 +456,32 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"],
                          {key: selected["buddy"][key] for key in BUDDY})
 
-    def test_large_micro_task_reaches_router_whole(self):
+    def assert_bounded_router_task(self, board, head, task):
+        encoded = task.encode("utf-8")
+        preview = head["task"]
+        self.assertEqual(preview, encoded[:8192].decode("utf-8", errors="ignore"))
+        self.assertLessEqual(len(preview.encode("utf-8")), 8192)
+        self.assertIs(head["taskTruncated"], True)
+        self.assertEqual(head["taskBytes"], len(encoded))
+        self.assertEqual(head["taskCharacters"], len(task))
+
+        query = SnapshotQuery(frozen_input(board, head))
+        pages = []
+        offset = 0
+        while offset is not None:
+            page, _ = query.call("query_task", {"offset": offset, "limit": 1024})
+            self.assertEqual(page["offset"], offset)
+            self.assertEqual(page["totalBytes"], len(encoded))
+            self.assertEqual(page["totalCharacters"], len(task))
+            pages.append(page["text"])
+            if page["nextOffset"] is not None:
+                self.assertEqual(page["nextOffset"], offset + len(page["text"]))
+                self.assertGreater(page["nextOffset"], offset)
+            offset = page["nextOffset"]
+        self.assertGreater(len(pages), 1)
+        self.assertEqual("".join(pages), task)
+
+    def test_large_micro_task_is_reconstructed_from_router_snapshot(self):
         board = self.board()
         self.seed(board)
         task = "完整工作说明" * 15000
@@ -451,19 +489,17 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board, task=task)
         self.assertEqual(submitted["routing"]["status"], "queued")
         selected = self.router_claim(board, submitted)
-        self.assertEqual(selected["claim"]["decisionInput"]["task"], task)
-        self.assertGreater(len(router_prompt(router.render_prompt(selected["claim"]["decisionInput"])).encode()),
-                           128 * 1024)
+        self.assert_bounded_router_task(board, selected["claim"]["decisionInput"], task)
 
-    def test_micro_task_above_old_routing_byte_limit_is_passed_whole(self):
+    def test_router_preview_ends_at_a_complete_unicode_character(self):
         board = self.board()
         self.seed(board)
-        task = "界" * 3000
+        task = "界🙂" * 1300
         self.assertGreater(len(task.encode("utf-8")), 8192)
         submitted = self.routed(board, task=task)
         self.assertEqual(submitted["routing"]["status"], "queued")
         selected = self.router_claim(board, submitted)
-        self.assertEqual(selected["claim"]["decisionInput"]["task"], task)
+        self.assert_bounded_router_task(board, selected["claim"]["decisionInput"], task)
 
     def test_explicit_long_micro_task_does_not_require_selector(self):
         board = self.board()

@@ -230,7 +230,7 @@ def execution(startup: Path):
     executor = SimulatedExecutor()
     gate = Path(os.environ["HMB_C2_STARTUP_GATE_ROOT"]) if os.environ.get("HMB_C2_STARTUP_GATE_ROOT") else None
     register = runtime.cc.register
-    credential = runtime.cc.server_credential
+    credential = runtime.cc.endpoint.server_credential
 
     def registered(*args, **kwargs):
         result = register(*args, **kwargs)
@@ -255,7 +255,7 @@ def execution(startup: Path):
             patch.object(inline_run, "run_harness", simulated_run), \
             patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint), \
             patch.object(runtime.cc, "register", side_effect=registered), \
-            patch.object(runtime.cc, "server_credential", side_effect=server_credential):
+            patch.object(runtime.cc.endpoint, "server_credential", side_effect=server_credential):
         return runtime.main()
 
 

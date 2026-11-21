@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.private_files import read_snapshot
+from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
 
 path = Path(__file__).resolve().parents[3] / 'probes' / 'router_fast.py'
 spec = importlib.util.spec_from_file_location('fast_router_probe', path)
@@ -30,10 +32,8 @@ class FastRouterProbeTests(unittest.TestCase):
         self.assertNotIn('executionWorkspace', document)
         self.assertNotIn('evidence', document)
         self.assertEqual(document['modelResponseWaitSeconds'], 60)
-        prompt = probe.router.render_prompt(document)
-        self.assertIn('"firstPassRateInterval":null', prompt)
-        self.assertIn('"failureRateInterval":null', prompt)
-        self.assertIn('"resultTime":{"atLeast":false,"missingMedianDelivery":true,"seconds":null}', prompt)
+        self.assertEqual(document['protocolVersion'], 20)
+        self.assertNotIn('outputSchema', document)
 
     def test_execute_refuses_a_second_call_with_the_same_packet(self):
         self.args.execute = True
@@ -60,6 +60,18 @@ class FastRouterProbeTests(unittest.TestCase):
         start.assert_called_once()
         context = start.call_args.args[0]
         self.assertIsNone(context.agent_credential)
+        head = context.decision_input
+        self.assertNotIn('buddies', head)
+        self.assertNotIn('enum', head['outputSchema']['properties']['buddyId'])
+        source = head['snapshot']
+        frozen = read_snapshot(Path(context.environment['HMB_STATE_DIR']), source['namespace'], source['owner'],
+                               source['reference'], round=source['round'])
+        self.assertEqual(frozen, probe.packet(self.args))
+        query = SnapshotQuery(frozen)
+        candidates, _ = query.call('query_compare', {})
+        self.assertEqual(len(candidates['items']), 2)
+        details, _ = query.call('query_details', {'buddyIds': [candidates['items'][0]['buddyId']]})
+        self.assertTrue(any(item['field'] == 'summary' for item in details['items']))
         self.assertEqual(Path(context.environment['HMB_STATE_DIR']).parent, self.args.output_root.resolve())
         self.assertEqual(Path(context.environment['HMB_RUNTIME_ROOT']).parent, self.args.output_root.resolve())
 

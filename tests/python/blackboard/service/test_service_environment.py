@@ -136,6 +136,15 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
         self.assertEqual(environment["HMB_STATE_DIR"], str(FIXTURE_ROOT / "explicit"))
         self.assertEqual(environment["PATH"], str(FIXTURE_ROOT / "usr/bin"))
 
+    def test_pypi_check_disable_reaches_service_without_leaking_test_runner_vars(self):
+        with mock.patch.dict(os.environ, {"HMB_DISABLE_PYPI_CHECK": "1"}, clear=True):
+            self.assertEqual(launcher.service_environment()["HMB_DISABLE_PYPI_CHECK"], "1")
+        for marker in ("HMB_CHECKS_TMPDIR", "PYTEST_CURRENT_TEST"):
+            with self.subTest(marker=marker), mock.patch.dict(os.environ, {marker: "active"}, clear=True):
+                environment = launcher.service_environment()
+                self.assertEqual(environment["HMB_DISABLE_PYPI_CHECK"], "1")
+                self.assertNotIn(marker, environment)
+
     def test_the_cli_invocation_path_preserves_attempt_credential(self):
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(FIXTURE_ROOT / "private/attempt.json")}, clear=True):
             environment = launcher.runtime_environment(FIXTURE_ROOT / "private/runtime" / ("a" * 32))

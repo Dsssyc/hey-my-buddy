@@ -22,7 +22,7 @@ import { Usage } from "./usage";
  * reader needs, and the list says nothing more. What the record lacks is said to
  * be unrecorded.
  */
-export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?: ContentTabs }) {
+export function RoutingPane({ step, ctx, tabs, session }: { step: Step; ctx: Context; tabs?: ContentTabs; session?: boolean }) {
   const { t } = useTranslation("taskDetail");
   const buddies = useBuddies();
   const span = step.span!;
@@ -39,7 +39,7 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
   const failed = step.outcome === "failed";
   const state = confirmingStop(attempt) ? t("state.confirmingStop") : running ? t("state.running") : failed ? t("state.failed") : step.outcome === "unknown" ? t("state.unknown")
     : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
-  return <Pane tabs={tabs} title={
+  return <Pane tabs={tabs} title={session ? null :
     <PaneTitle title={t("step.routing")} state={state} tone={confirmingStop(attempt) ? "hand" : running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
       <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.routing")}/>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}

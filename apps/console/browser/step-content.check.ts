@@ -170,8 +170,12 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
     expect((await title.boundingBox())!.y).toBeLessThan((await wait.boundingBox())!.y);
     expect((await wait.boundingBox())!.y).toBeLessThan((await tabs.boundingBox())!.y);
     await tabs.getByRole("tab", { name: "会话", exact: true }).click();
-    await expect(title).toBeVisible();
+    const readout = page.locator('[data-slot="step-readout"]');
+    await expect(readout).toContainText("回合 2");
+    await expect(title).toHaveCount(0);
     await expect(wait).toBeVisible();
+    expect((await readout.boundingBox())!.y).toBeLessThan((await wait.boundingBox())!.y);
+    expect((await wait.boundingBox())!.y).toBeLessThan((await tabs.boundingBox())!.y);
     await expect(tabs).toHaveCSS("border-bottom-width", "1px");
     await expect(pane(page).getByRole("tabpanel")).toHaveCSS("padding-top", "16px");
     await tabs.getByRole("tab", { name: "概述", exact: true }).click();

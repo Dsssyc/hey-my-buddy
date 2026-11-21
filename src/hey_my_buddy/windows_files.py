@@ -78,6 +78,17 @@ class WindowsFileAPI:
                          handle, self.win32file.FileAttributeTagInfo)
         return tag["FileAttributes"], tag["ReparseTag"]
 
+    def file_id(self, handle):
+        info = self._call(self.win32file.GetFileInformationByHandle, handle)
+        return info[4], info[8], info[9]
+
+    def final_path(self, handle):
+        return self._call(self.win32file.GetFinalPathNameByHandle, handle, 0)
+
+    def long_path(self, path):
+        import win32api
+        return self._call(win32api.GetLongPathNameW, windows_path(path))
+
     def file_type(self, handle):
         return self._call(self.win32file.GetFileType, handle)
 
@@ -137,10 +148,43 @@ class WindowsFileAPI:
 
 
 READ_CONTROL = 0x00020000
+WRITE_DAC = 0x00040000
+FILE_ALL_ACCESS = 0x001F01FF
+OBJECT_INHERIT_ACE = 0x1
+CONTAINER_INHERIT_ACE = 0x2
 FILE_SHARE_DELETE = 0x00000004
 SYSTEM_SID = 'S-1-5-18'
 ADMINISTRATORS_SID = 'S-1-5-32-544'
 OWNER_RIGHTS_SID = 'S-1-3-4'
+
+
+class _UnsafeDacl(BoardError):
+    """A DACL failure for which the owner entry point may attempt repair."""
+
+
+def _trustee_kind(sid):
+    known = {
+        'S-1-1-0': 'everyone',
+        'S-1-3-0': 'creator-owner',
+        'S-1-5-11': 'authenticated-users',
+        'S-1-5-32-545': 'builtin-users',
+        'S-1-15-2-1': 'all-application-packages',
+        'S-1-15-2-2': 'all-restricted-application-packages',
+    }
+    if sid in known:
+        return known[sid]
+    if sid.startswith('S-1-15-'):
+        return 'app-package-sid'
+    if sid.startswith('S-1-5-80-'):
+        return 'service-sid'
+    if sid.startswith('S-1-5-32-'):
+        return 'builtin-group-sid'
+    return 'other-account-sid'
+
+
+def _validate_root_owner(owner, user):
+    if owner not in {user, ADMINISTRATORS_SID}:
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root has a foreign owner')
 
 
 def validate_acl(owner, user, dacl_present, aces):
@@ -149,15 +193,20 @@ def validate_acl(owner, user, dacl_present, aces):
     SID strings and synthetic ACE lists make the policy testable on every OS.
     None means NULL DACL; an empty list is an existing, empty DACL.
     """
-    allowed = {user, SYSTEM_SID, ADMINISTRATORS_SID, OWNER_RIGHTS_SID}
-    if owner not in {user, ADMINISTRATORS_SID}:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root has a foreign owner')
+    _validate_root_owner(owner, user)
     if not dacl_present or aces is None:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must have a non-NULL DACL')
+        raise _UnsafeDacl('PRIVATE_PATH_UNSAFE', 'State root must have a non-NULL DACL')
+    allowed = {user, SYSTEM_SID, ADMINISTRATORS_SID, OWNER_RIGHTS_SID}
     for ace in aces:
-        if (len(ace) != 3 or len(ace[0]) != 2 or ace[0][0] != 0
-                or ace[2] not in allowed):
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE')
+        if len(ace) != 3 or len(ace[0]) != 2:
+            details = {'aceShape': 'malformed'}
+        elif ace[0][0] != 0:
+            details = {'aceType': ace[0][0], 'aceFlags': ace[0][1]}
+        elif ace[2] not in allowed:
+            details = {'aceType': 0, 'aceFlags': ace[0][1], 'trusteeKind': _trustee_kind(ace[2])}
+        else:
+            continue
+        raise _UnsafeDacl('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE', **details)
 
 
 def _security():
@@ -167,24 +216,71 @@ def _security():
     return win32api, win32con, win32security
 
 
-def _validate_root_acl(handle):
-    api, con, security = _security()
-    token = security.OpenProcessToken(api.GetCurrentProcess(), con.TOKEN_QUERY)
+def _root_security(api, handle, *, include_dacl):
+    win32api, con, security = _security()
+    token = api._call(security.OpenProcessToken, win32api.GetCurrentProcess(), con.TOKEN_QUERY)
     try:
-        user = security.GetTokenInformation(token, security.TokenUser)[0]
+        user, _ = api._call(security.GetTokenInformation, token, security.TokenUser)
     finally:
-        token.Close()
-    descriptor = security.GetSecurityInfo(handle, security.SE_FILE_OBJECT,
-        security.OWNER_SECURITY_INFORMATION | security.DACL_SECURITY_INFORMATION)
+        api.close(token)
+    information = security.OWNER_SECURITY_INFORMATION
+    if include_dacl:
+        information |= security.DACL_SECURITY_INFORMATION
+    descriptor = api._call(security.GetSecurityInfo, handle, security.SE_FILE_OBJECT, information)
+    sid = security.ConvertSidToStringSid
+    return security, sid(user), sid(descriptor.GetSecurityDescriptorOwner()), descriptor
+
+
+def _validate_root_acl(api, handle):
+    security, user, owner, descriptor = _root_security(api, handle, include_dacl=True)
     dacl = descriptor.GetSecurityDescriptorDacl()
     control, _ = descriptor.GetSecurityDescriptorControl()
-    sid = security.ConvertSidToStringSid
-    aces = None if dacl is None or not control & security.SE_DACL_PRESENT else [dacl.GetAce(index) for index in range(dacl.GetAceCount())]
-    if aces is not None:
-        # Preserve all ACE shapes. Only ordinary allow ACEs have a trustee in slot 2.
-        aces = [(ace[0], ace[1], sid(ace[2])) if len(ace) == 3 else ace for ace in aces]
-    validate_acl(sid(descriptor.GetSecurityDescriptorOwner()), sid(user),
-                 bool(control & security.SE_DACL_PRESENT), aces)
+    present = bool(control & security.SE_DACL_PRESENT)
+    aces = None
+    if present and dacl is not None:
+        # Check owner before decoding ACEs so a foreign owner is never repaired even
+        # when the DACL holds an ACE type pywin32 cannot decode (such as callback ACEs).
+        _validate_root_owner(owner, user)
+        sid = security.ConvertSidToStringSid
+        aces = []
+        for index in range(dacl.GetAceCount()):
+            try:
+                ace = dacl.GetAce(index)
+            except NotImplementedError as error:
+                raise _UnsafeDacl('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE',
+                                  aceShape='unsupported') from error
+            # Preserve extended ACE shapes. The three-field form stores its SID in slot 2.
+            aces.append((ace[0], ace[1], sid(ace[2])) if len(ace) == 3 else ace)
+    validate_acl(owner, user, present, aces)
+
+
+def _repair_root_dacl(api, handle):
+    security, user, owner, _ = _root_security(api, handle, include_dacl=False)
+    _validate_root_owner(owner, user)
+    dacl = security.ACL()
+    for trustee in dict.fromkeys((user, SYSTEM_SID, ADMINISTRATORS_SID)):
+        api._call(dacl.AddAccessAllowedAceEx, security.ACL_REVISION,
+                  OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, FILE_ALL_ACCESS,
+                  security.ConvertStringSidToSid(trustee))
+    api._call(security.SetSecurityInfo, handle, security.SE_FILE_OBJECT,
+              security.DACL_SECURITY_INFORMATION | security.PROTECTED_DACL_SECURITY_INFORMATION,
+              None, None, dacl, None)
+    _validate_root_acl(api, handle)
+
+
+def _check_root_directory(api, handle):
+    attributes, _ = api.info(handle)
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT or not attributes & FILE_ATTRIBUTE_DIRECTORY:
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must be a real directory')
+
+
+def _normalize_win_path(value: str) -> str:
+    return value.rstrip('\\').casefold()
+
+
+def _check_root_final_path(api, handle, expected_final: str) -> None:
+    if _normalize_win_path(api.final_path(handle)) != _normalize_win_path(expected_final):
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root handle resolved outside the target path')
 
 
 def check_state_root(path, *, create=False):
@@ -197,17 +293,40 @@ def check_state_root(path, *, create=False):
     if create:
         native_path(path).mkdir(parents=True, exist_ok=True)
     api = WindowsFileAPI()
-    handle = api._open(path, READ_CONTROL | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:
-        attributes, _ = api.info(handle)
-        if attributes & FILE_ATTRIBUTE_REPARSE_POINT or not attributes & FILE_ATTRIBUTE_DIRECTORY:
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must be a real directory', path=str(path))
-        _validate_root_acl(handle)
+        access = READ_CONTROL | FILE_READ_ATTRIBUTES
+        reader = api._open(path, access, OPEN_EXISTING, share_delete=True)
+        writer = None
+        try:
+            _check_root_directory(api, reader)
+            expected_final = api.long_path(path)
+            _check_root_final_path(api, reader, expected_final)
+            try:
+                _validate_root_acl(api, reader)
+                return
+            except _UnsafeDacl:
+                if not create:
+                    raise
+            reader_id = api.file_id(reader)
+            writer = api._open(path, access | WRITE_DAC, OPEN_EXISTING, share_delete=True)
+            try:
+                _check_root_directory(api, writer)
+                if api.file_id(writer) != reader_id:
+                    raise BoardError('PRIVATE_PATH_UNSAFE', 'State root changed while opening for ACL repair')
+                _check_root_final_path(api, writer, expected_final)
+            except BaseException:
+                api.close(writer)
+                writer = None
+                raise
+        finally:
+            api.close(reader)
+        try:
+            _repair_root_dacl(api, writer)
+        finally:
+            api.close(writer)
     except BoardError as error:
         error.details['path'] = str(path)
         raise
-    finally:
-        api.close(handle)
 
 
 def open_regular_fd(path, flags, mode=0o600, *, delete=False, api=None):

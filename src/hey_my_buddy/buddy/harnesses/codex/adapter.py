@@ -15,6 +15,9 @@ class CodexAdapter:
     native_resume = True
     interrupted_resume = True
     native_resume_permission_change = True
+    # A correction is a new turn on the same thread, so the model keeps the
+    # root context and the correction input carries only the error locations.
+    same_session_corrections = True
     model_discovery = True
 
     @property

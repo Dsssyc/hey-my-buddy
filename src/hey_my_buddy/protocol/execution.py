@@ -296,7 +296,7 @@ class ExecutionLiveClient:
                     rpc_config.configure_client(self.state_dir)
                     peer = cc.connect(ExecutionLive, name=self.name, address=self.address, timeout=timeout)
                     try:
-                        self.connection_observation = cc.connection_observation(peer)
+                        self.connection_observation = cc.observe.connection_observation(peer)
                     except BaseException:
                         cc.close(peer)
                         raise
@@ -378,8 +378,8 @@ def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint descriptor is invalid")
     if type(descriptor["hostPid"]) is not int or descriptor["hostPid"] != observed_process_identity["pid"]:
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint host PID differs")
-    credential = cc.EndpointCredential.from_json(descriptor["endpointCredential"])
-    trusted = cc.local_endpoint_context()
+    credential = cc.endpoint.EndpointCredential.from_json(descriptor["endpointCredential"])
+    trusted = cc.endpoint.local_endpoint_context()
     if credential.address != descriptor["address"] or (
             credential.context.platform, credential.context.namespace_id, credential.context.root) != (
             trusted.platform, trusted.namespace_id, trusted.root):
@@ -418,15 +418,15 @@ def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state
     rpc_config.configure_server(Path(state_dir))
     rpc_config.configure_client(Path(state_dir))
     try:
-        credential = cc.EndpointCredential.from_json(descriptor.get("endpointCredential"))
+        credential = cc.endpoint.EndpointCredential.from_json(descriptor.get("endpointCredential"))
     except (ValueError, TypeError):
         return {"status": "unverified", "reason": "endpoint-credential-invalid"}
-    context = cc.local_endpoint_context()
+    context = cc.endpoint.local_endpoint_context()
     if credential.address != descriptor.get("address") or (
             credential.context.platform, credential.context.namespace_id, credential.context.root) != (
             context.platform, context.namespace_id, context.root):
         return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
-    result = cc.reap_endpoint(descriptor["address"], credential, context=context)
+    result = cc.endpoint.reap_endpoint(descriptor["address"], credential, context=context)
     if result["status"] in ("reaped", "already-absent", "not-applicable"):
         native_path(path).unlink(missing_ok=True)
     return result

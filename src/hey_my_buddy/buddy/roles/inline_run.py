@@ -226,6 +226,9 @@ def _profile_execute(control, handle, module, started):
             "toolCalls": sum(evidence["toolCalls"] for evidence in evidences),
             "unsettledToolCalls": sum(evidence["unsettledToolCalls"] for evidence in evidences),
             "toolSummary": tool_evidence.merge_tool_summaries(evidence["toolSummary"] for evidence in evidences),
+            # The profile plane mounts no session service; the aggregated form
+            # still states that explicitly (ADR-035 decision 3).
+            "sessionServiceTools": [],
         }
     def any_fact(values):
         return True if True in values else None if None in values else False
@@ -432,7 +435,7 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
                     "session_record_failure": first.session_record_failure or result.session_record_failure,
                 })
     verdict = {"elapsedMs": round((time.monotonic() - started) * 1000)}
-    if control["operation"] == "fast":
+    if control["operation"] == "fast" or control["operation"] == "review" and correction.stop_reason is not None:
         verdict["stopReason"] = correction.stop_reason
     code = 0 if result.end.status == "ok" else 1
     if control["operation"] == "worker":

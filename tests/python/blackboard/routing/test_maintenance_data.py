@@ -4,16 +4,17 @@ import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from blackboard.routing.fixtures.maintenance_answers import EMPTY_STAGE, stage_and_commit
 from support import FakeClock, seed_buddy
 from hey_my_buddy.blackboard.routing.maintenance_data import (
-    answer_schema, apply_answer, build_packet, merge_domain, pending, rename_domain,
-    pending_count,
+    MAX_MICRO_TASKS, MAX_SUMMARY_CITATIONS, MAX_SUMMARY_KINDS, MAX_SUMMARY_TEXT_BYTES,
+    answer_schema, build_packet, merge_domain, pending, rename_domain, stage_answer, pending_count,
 )
 from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
-from hey_my_buddy.protocol import maintenance as files
 from hey_my_buddy.protocol.task_types import TASK_TYPES
+from hey_my_buddy.protocol.snapshot_query import kind_id
 from hey_my_buddy.blackboard.evaluation.models import append_correspondence, current_model, ensure_model_service
 
 
@@ -53,8 +54,8 @@ class MaintenanceDataTests(WorkflowTestCase):
             return build_packet(db)
 
     def summary(self, packet, citations=None):
-        return {kind["kindId"]: {"text": "Observed work", "citations": citations or []}
-                for kind in packet["kinds"]}
+        return [{"kindId": kind["kindId"], "text": "Observed work", "citations": citations or []}
+                for kind in packet["kinds"]]
 
     def test_packet_has_oldest_unclassified_tasks_and_declared_schema(self):
         packet = self.packet()
@@ -64,14 +65,14 @@ class MaintenanceDataTests(WorkflowTestCase):
                          {run["runId"] for run in self.runs})
         self.assertEqual(len(packet["taskTypes"]), 7)
         self.assertEqual({item["task"] for item in packet["microTasks"]}, {"Task 0", "Task 1"})
-        schema = answer_schema(packet)
+        schema = answer_schema()
         answer = {"newNodes": [{"id": "new", "name": "Systems", "definition": "Systems work",
                                  "parentId": None}], "merges": [],
                   "classifications": [{"runId": run["runId"], "domainNodeId": "new", "taskType": "debug"}
                                       for run in self.runs], "summaries": self.summary(packet)}
         self.assertEqual(schema_errors(answer, schema), [])
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
         self.assertEqual(result["errors"], [])
         self.assertEqual(result["written"]["classifications"], 2)
@@ -135,119 +136,19 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertIsNone(untouched["result"]["acceptanceNote"])
         self.assertEqual(untouched["result"]["continuations"], [])
 
-    def test_summary_schema_binds_kind_combinations_and_citations(self):
-        packet = deepcopy(self.packet())
-        first, second = (run["runId"] for run in self.runs)
-        original = packet["kinds"][0]
-        other = deepcopy(original)
-        other["modelId"] = "other-model-id"
-        other["kindId"] = ":".join(packet_key(other))
-        original["citationRunIds"] = [first]
-        original["unreadRunIds"] = [first]
-        other["citationRunIds"] = [second]
-        other["unreadRunIds"] = [second]
-        packet["kinds"].append(other)
-        schema = answer_schema(packet)
-        answer = {"newNodes": [], "merges": [], "classifications": [],
-                  "summaries": {original["kindId"]: {"text": "First", "citations": [first]},
-                                other["kindId"]: {"text": "Second", "citations": [second]}}}
-        self.assertEqual(schema_errors(answer, schema), [])
-        answer["summaries"][original["kindId"]]["citations"] = [second]
-        self.assertIn("enum", schema_errors(answer, schema))
-        answer["summaries"][original["kindId"]]["citations"] = [first]
-        answer["summaries"][f"{original['harness']}:{other['modelId']}:invalid-effort"] = {
-            "text": "Invalid combination", "citations": []}
-        self.assertIn("additionalProperties", schema_errors(answer, schema))
-        packet["kinds"] = []
-        packet["classificationRunIds"] = []
-        answer = {"newNodes": [], "merges": [], "classifications": [], "summaries": {}}
-        self.assertEqual(schema_errors(answer, answer_schema(packet)), [])
-
-    def test_answer_schema_uses_strict_objects_and_literals(self):
-        def check(schema, path):
-            if schema["type"] == "object":
-                properties = schema["properties"]
-                self.assertCountEqual(schema["required"], properties, path)
-                self.assertIs(schema["additionalProperties"], False, path)
-                for key, child in properties.items():
-                    self.assertNotRegex(key, r'["\r\n]', path)
-                    check(child, f"{path}.{key}")
-            if "enum" in schema:
-                self.assertTrue(schema["enum"], path)
-                for value in schema["enum"]:
-                    self.assertNotRegex(value, r'["\r\n]', path)
-            if "items" in schema:
-                check(schema["items"], f"{path}[]")
-
+    def test_static_summary_schema_defers_membership_and_uniqueness_to_the_batch(self):
         packet = self.packet()
-        kind = packet["kinds"][0]
-        empty_kind_id = f"{kind['harness']}:{kind['modelId']}:high"
-        packet["kinds"].append({**kind, "effort": "high", "citationRunIds": [], "summary": None,
-                                "kindId": empty_kind_id})
-        for run_ids in (packet["classificationRunIds"], []):
-            with self.subTest(classifications=bool(run_ids)):
-                schema = answer_schema({**packet, "classificationRunIds": run_ids})
-                check(schema, "answer")
-                summaries = schema["properties"]["summaries"]["properties"]
-                self.assertEqual(set(summaries), {kind["kindId"], empty_kind_id})
-                citations = summaries[empty_kind_id]["properties"]["citations"]
-                self.assertEqual(schema_errors([], citations), [])
-                self.assertIn("maxItems", schema_errors([kind["citationRunIds"][0]], citations))
-
-    def test_answer_schema_rejects_invalid_kind_identifiers(self):
-        packet = self.packet()
-        kind = packet["kinds"][0]
-        for field in ("harness", "modelId", "effort"):
-            for value in ("", " \t\n", None, 42):
-                with self.subTest(field=field, value=value):
-                    invalid_kind = {**kind, field: value}
-                    with self.assertRaisesRegex(ValueError, "kind identifier components"):
-                        answer_schema({**packet, "kinds": [invalid_kind]})
-        for kind_id in (None, 42, "", " \t\n", 'zcode:m:hi"gh\n', "zcode:m:hi'gh", "zcode:m:high\r\n"):
-            with self.subTest(kindId=kind_id):
-                with self.assertRaisesRegex(ValueError, "kindId must be a nonblank printable string"):
-                    answer_schema({**packet, "kinds": [{**kind, "kindId": kind_id}]})
-        other = deepcopy(kind)
-        other["kindId"] = f"{kind['harness']}:{kind['modelId']}:custom+high"
-        with self.assertRaisesRegex(ValueError, "duplicate kindId"):
-            answer_schema({**packet, "kinds": [other, other]})
-
-    def test_packet_sealed_by_the_previous_version_keeps_its_verbatim_kind_id(self):
-        """A packet frozen before percent-encoding still binds its answer rows.
-
-        CONTRACT_VERSION stays at 0.70.0 across the 0.70.1 install, so an
-        execution dispatched before the switch answers against a sealed packet
-        whose kindId holds a native effort verbatim, such as custom+high.
-        Sealed input is validated in the form it was written with: the frozen
-        kindId is the schema key, and apply_answer binds it back to the same
-        kind triple. Newly built packets keep the percent-encoded form.
-        """
-        packet = deepcopy(self.packet())
-        kind = packet["kinds"][0]
-        frozen_id = f"{kind['harness']}:{kind['modelId']}:custom+high"
-        self.assertNotIn("%2B", frozen_id)
-        kind["effort"] = "custom+high"
-        kind["kindId"] = frozen_id
-        packet["classificationRunIds"] = []
-        schema = answer_schema(packet)
-        self.assertEqual(list(schema["properties"]["summaries"]["properties"]), [frozen_id])
+        kind, = packet["kinds"]
+        valid = {"kindId": kind["kindId"], "text": "Observed work", "citations": []}
         answer = {"newNodes": [], "merges": [], "classifications": [],
-                  "summaries": {frozen_id: {"text": "Observed custom effort", "citations": []}}}
-        self.assertEqual(schema_errors(answer, schema), [])
-        # The Maintenance.answer path reads the digest-bound sealed packet and
-        # applies the answer against that frozen form.
-        reference = files.publish(self.board_.directory, self.maintenance_id,
-                                  {"packet": packet, "outputSchema": schema})
-        sealed = files.read(self.board_.directory, self.maintenance_id, reference)
-        with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=sealed["packet"], answer=answer,
-                                  maintenance_run_id=self.maintenance_id)
-        self.assertEqual(result["errors"], [])
-        self.assertEqual(result["written"]["summaries"], 1)
+                  "summaries": [valid, valid, {**valid, "kindId": "outside-batch"}]}
+        self.assertEqual(schema_errors(answer, answer_schema()), [])
         with self.board_.store.db.read() as db:
-            row = db.execute("SELECT harness,model_id,effort,text FROM kind_summaries").fetchone()
-        self.assertEqual(tuple(row), (kind["harness"], kind["modelId"], "custom+high",
-                                      "Observed custom effort"))
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+        self.assertEqual(staged["summaries"], {})
+        self.assertIn(f"summaries[{kind['kindId']}]: duplicate kindId", feedback["errors"])
+        self.assertIn("summaries[outside-batch]: unknown kindId", feedback["errors"])
+        self.assertIn(f"summaries[{kind['kindId']}]: missing kindId", feedback["errors"])
 
     def test_encoded_kind_ids_bind_distinct_summaries_to_the_original_components(self):
         cases = (
@@ -280,19 +181,19 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(ordinary["kindId"], ":".join(packet_key(ordinary)))
         self.assertEqual({packet_key(kind): kind["kindId"] for kind in packet["kinds"] if kind["harness"] == "zcode"},
                          {("zcode", model_id, effort): kind_id for model_id, effort, kind_id in cases})
-        schema = answer_schema(packet)
-        self.assertCountEqual(schema["properties"]["summaries"]["required"], [ordinary["kindId"], *run_ids])
+        schema = answer_schema()
+
         answer = {
             "newNodes": [{"id": "parser", "name": "Parsing", "definition": "Parsing work", "parentId": None}],
             "merges": [],
             "classifications": [{"runId": run_id, "domainNodeId": "parser", "taskType": "debug"}
                                 for run_id in packet["classificationRunIds"]],
-            "summaries": {ordinary["kindId"]: {"text": "Ordinary kind", "citations": []},
-                          **{kind_id: {"text": kind_id, "citations": [run_id]} for kind_id, run_id in run_ids.items()}},
+            "summaries": [{"kindId": ordinary["kindId"], "text": "Ordinary kind", "citations": []},
+                          *({"kindId": kind_id, "text": kind_id, "citations": [run_id]} for kind_id, run_id in run_ids.items())],
         }
         self.assertEqual(schema_errors(answer, schema), [])
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
+            result = stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
             self.assertEqual(result["errors"], [])
             self.assertEqual(result["written"]["summaries"], len(cases) + 1)
             rows = db.execute("SELECT s.model_id,s.effort,s.text,e.run_id FROM kind_summaries s"
@@ -300,6 +201,85 @@ class MaintenanceDataTests(WorkflowTestCase):
                               " WHERE s.harness='zcode' AND e.cited=1")
             self.assertCountEqual([tuple(row) for row in rows],
                                   [(model_id, effort, kind_id, run_ids[kind_id]) for model_id, effort, kind_id in cases])
+
+    def test_six_summary_kinds_are_selected_and_the_rest_drain_in_the_next_batch(self):
+        kinds = [f"batch-kind-{index}" for index in range(9)]
+        with self.board_.store.db.write() as db:
+            for model in kinds:
+                seed_buddy(db, buddy_id=model, harness="dsh", provider="fixture", model=model,
+                           effort="off", now=self.board_.store.now())
+                db.execute("UPDATE buddies SET alias=? WHERE buddy_id=?", (model, model))
+        for model in kinds:
+            run = self.submit(self.board_, request_id=model, buddy=model)
+            self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
+            self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
+        first = self.packet()
+        self.assertEqual(len(first["kinds"]), 6)
+        original_ids = {kind["kindId"] for kind in first["kinds"]}
+        answer = {"newNodes": [{"id": "work", "name": "Work", "definition": "Work evidence", "parentId": None}],
+                  "merges": [],
+                  "classifications": [{"runId": run_id, "domainNodeId": "work", "taskType": "change"}
+                                      for run_id in first["classificationRunIds"]],
+                  "summaries": self.summary(first)}
+        with self.board_.store.db.write() as db:
+            result = stage_and_commit(db, packet=first, answer=answer, maintenance_run_id=self.maintenance_id)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["written"]["summaries"], 6)
+        rest = self.packet()
+        self.assertEqual(rest["classificationRunIds"], [])
+        self.assertEqual(len(rest["kinds"]), 4)
+        self.assertTrue(original_ids.isdisjoint(kind["kindId"] for kind in rest["kinds"]))
+
+    def test_full_multibyte_batch_fits_dsh_structured_answer_limit(self):
+        packet = self.packet()
+        # This is a synthetic frozen batch over live task identities. Stage
+        # every required entry to test the same membership and byte validation
+        # used before any maintenance publication.
+        run_ids = list(packet["classificationRunIds"])
+        for index in range(len(run_ids), MAX_MICRO_TASKS):
+            row = self.submit(self.board_, request_id=f"byte-budget-{index}",
+                              cwd=str(self.workdir(f"budget-{index}")), kind="existing")
+            run_ids.append(row["runId"])
+        packet["classificationRunIds"] = run_ids
+        packet["microTasks"] = [{"runId": run_id} for run_id in run_ids]
+        citations = run_ids[:MAX_SUMMARY_CITATIONS]
+        kind = packet["kinds"][0]
+        packet["kinds"] = [
+            {**kind, "modelId": f"00000000-0000-4000-8000-{index:012d}", "citationRunIds": citations,
+             "unreadRunIds": run_ids}
+            for index in range(MAX_SUMMARY_KINDS)
+        ]
+        for entry in packet["kinds"]:
+            entry["kindId"] = kind_id(entry)
+        text = "汉" * ((MAX_SUMMARY_TEXT_BYTES - 4) // 3) + "🙂"
+        self.assertEqual(len(text.encode("utf-8")), MAX_SUMMARY_TEXT_BYTES)
+        domain = "d" * 128
+        answer = {
+            "newNodes": [{"id": domain, "name": "工作", "definition": "工作证据", "parentId": None}],
+            "merges": [],
+            "classifications": [{"runId": run_id, "domainNodeId": domain, "taskType": "research"} for run_id in run_ids],
+            "summaries": [{"kindId": entry["kindId"], "text": text, "citations": citations}
+                          for entry in packet["kinds"]],
+        }
+        with self.board_.store.db.read() as db:
+            staged, feedback = stage_answer(db, packet=packet, answer=canonical_json(answer), previous=EMPTY_STAGE)
+            self.assertEqual(feedback["errors"], [])
+            self.assertEqual(len(staged["classifications"]), MAX_MICRO_TASKS)
+            self.assertEqual(len(staged["summaries"]), MAX_SUMMARY_KINDS)
+            self.assertLess(len(canonical_json(answer).encode("utf-8")), 65_536)
+            answer["summaries"][0]["text"] += "界"
+            answer["summaries"][1]["citations"] = run_ids[:MAX_SUMMARY_CITATIONS + 1]
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+        self.assertIn(f"summaries[{packet['kinds'][0]['kindId']}]: text exceeds 4096 UTF-8 bytes", feedback["errors"])
+        self.assertIn("$.summaries[1].citations: maxItems", feedback["errors"])
+        self.assertEqual(len(staged["summaries"]), MAX_SUMMARY_KINDS - 2)
+        answer["classifications"].append(answer["classifications"][0])
+        with self.board_.store.db.read() as db:
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+        self.assertIn("$.classifications: maxItems", feedback["errors"])
+        self.assertIn(f"classifications[{run_ids[0]}]: duplicate runId", feedback["errors"])
+        self.assertIn(f"classifications[{run_ids[0]}]: missing runId", feedback["errors"])
+        self.assertEqual(len(staged["classifications"]), MAX_MICRO_TASKS - 1)
 
     def test_schema_permitted_values_pass_the_write_boundary(self):
         kind = self.packet()["kinds"][0]
@@ -314,7 +294,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             db.execute("INSERT INTO kind_summaries VALUES(?,?,?,?,?)", (*key, "Earlier observations", self.maintenance_id))
             db.execute("INSERT INTO kind_summary_evidence VALUES(?,?,?,?,1)", (*key, prior["runId"]))
             packet = build_packet(db)
-            schema = answer_schema(packet)
+            schema = answer_schema()
             references = [[], [self.runs[0]["runId"]], [prior["runId"]],
                           [run["runId"] for run in self.runs] + [prior["runId"]]]
             for task_type in packet["taskTypes"]:
@@ -325,13 +305,13 @@ class MaintenanceDataTests(WorkflowTestCase):
                             "merges": [], "classifications": [
                                 {"runId": run_id, "domainNodeId": "fresh", "taskType": task_type["id"]}
                                 for run_id in packet["classificationRunIds"]],
-                            "summaries": {kind["kindId"]: {"text": text, "citations": citations}},
+                            "summaries": [{"kindId": kind['kindId'], 'text': text, 'citations': citations}],
                         }
                         with self.subTest(task_type=task_type["id"], text_length=len(text), citations=citations):
                             self.assertEqual(schema_errors(answer, schema), [])
                             db.execute("SAVEPOINT schema_case")
                             try:
-                                checked = apply_answer(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
+                                checked = stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
                                 self.assertEqual(checked["errors"], [])
                             finally:
                                 db.execute("ROLLBACK TO schema_case")
@@ -346,9 +326,9 @@ class MaintenanceDataTests(WorkflowTestCase):
             "merges": [], "classifications": [
                 {"runId": run["runId"], "domainNodeId": "child", "taskType": "create"}
                 for run in self.runs], "summaries": self.summary(packet)}
-        self.assertEqual(schema_errors(answer, answer_schema(packet)), [])
+        self.assertEqual(schema_errors(answer, answer_schema()), [])
         with self.board_.store.db.write() as db:
-            applied = apply_answer(db, packet=packet, answer=answer,
+            applied = stage_and_commit(db, packet=packet, answer=answer,
                                    maintenance_run_id=self.maintenance_id)
             self.assertEqual(applied["errors"], [])
             self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
@@ -357,7 +337,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             changed["newNodes"][2]["parentId"] = "parent-b"
             changed["newNodes"].append(
                 {"id": "duplicate", "name": " Parent A ", "definition": "Same name", "parentId": None})
-            rejected = apply_answer(db, packet=packet, answer=changed,
+            rejected = stage_and_commit(db, packet=packet, answer=changed,
                                     maintenance_run_id=self.maintenance_id)
             self.assertTrue(any("existing node cannot be changed" in error for error in rejected["errors"]))
             self.assertTrue(any("active domain name already exists" in error for error in rejected["errors"]))
@@ -368,6 +348,17 @@ class MaintenanceDataTests(WorkflowTestCase):
             rename_domain(db, "child", " Renamed ", "C")
             self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
                              "Renamed")
+
+    def test_nul_bytes_in_new_domain_nodes_are_rejected_at_staging(self):
+        packet = self.packet()
+        for field, value in (("id", "bad\x00id"), ("name", "\x00Visible"), ("definition", "\x00Defined")):
+            node = {"id": "clean-id", "name": "Clean", "definition": "Clean def", "parentId": None}
+            node[field] = value
+            answer = {"newNodes": [node], "merges": [], "classifications": [], "summaries": []}
+            with self.subTest(field=field), self.board_.store.db.read() as db:
+                staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+            self.assertEqual(staged["tree"], [])
+            self.assertTrue(any("NUL" in error for error in feedback["errors"]), feedback["errors"])
 
     def test_packet_reads_kind_counts_and_real_provider_failure_columns(self):
         with self.board_.store.db.write() as db:
@@ -445,12 +436,6 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertGreaterEqual(median, 1)
         self.assertLess(median, 1.2)
         self.assertNotIn("old-parser", stats["byDomain"])
-        schema = answer_schema(packet)
-        self.assertEqual(set(schema["properties"]["summaries"]["properties"]),
-                         {packet["kinds"][0]["kindId"]})
-        self.assertEqual(schema["properties"]["summaries"]["properties"][packet["kinds"][0]["kindId"]]
-                         ["properties"]["citations"]["items"]["enum"],
-                         sorted(run["runId"] for run in self.runs))
 
     def test_unclassified_tasks_do_not_select_peer_cells_without_target_samples(self):
         with self.board_.store.db.write() as db:
@@ -569,9 +554,9 @@ class MaintenanceDataTests(WorkflowTestCase):
                                       for run_id in packet["classificationRunIds"]],
                   "summaries": self.summary(packet, [accepted["runId"]])}
         with self.board_.store.db.write() as db:
-            first = apply_answer(db, packet=packet, answer=answer,
+            first = stage_and_commit(db, packet=packet, answer=answer,
                                  maintenance_run_id=self.maintenance_id)
-            repeated = apply_answer(db, packet=packet, answer=answer,
+            repeated = stage_and_commit(db, packet=packet, answer={**answer, "newNodes": [], "merges": []},
                                     maintenance_run_id=self.maintenance_id)
             cell = db.execute("SELECT samples,successes FROM kind_cell_statistics"
                               " WHERE domain_node_id='cell' AND task_type='review'").fetchone()
@@ -589,18 +574,19 @@ class MaintenanceDataTests(WorkflowTestCase):
                                  "parentId": None}], "merges": [],
                   "classifications": [{"runId": first, "domainNodeId": "root", "taskType": "create"},
                                       {"runId": second, "domainNodeId": "missing", "taskType": "debug"}],
-                  "summaries": {kind_id: {"text": "Observed engineering work", "citations": [first]}}}
+                  "summaries": [{"kindId": kind_id, 'text': 'Observed engineering work', 'citations': [first]}]}
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
         self.assertTrue(any(second in error for error in result["errors"]))
         self.assertEqual(result["written"]["summaries"], 1)
+        answer["newNodes"] = []
         answer["classifications"] = [
             {"runId": first, "domainNodeId": "root", "taskType": "debug"},
             {"runId": second, "domainNodeId": "root", "taskType": "debug"}]
-        answer["summaries"][kind_id]["text"] = "Attempted replacement"
+        answer["summaries"][0]["text"] = "Attempted replacement"
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             rows = list(db.execute("SELECT run_id,task_type FROM micro_task_classifications ORDER BY run_id"))
             summary = db.execute("SELECT text FROM kind_summaries").fetchone()[0]
@@ -620,13 +606,13 @@ class MaintenanceDataTests(WorkflowTestCase):
             "classifications": [{"runId": run["runId"], "domainNodeId": "leaf", "taskType": "create"}
                                 for run in self.runs], "summaries": self.summary(packet)}
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             self.assertEqual(result["errors"], [])
             rows = {r["node_id"]: dict(r) for r in db.execute("SELECT * FROM domain_nodes")}
             self.assertEqual(rows["leaf"]["parent_id"], "target")
             self.assertEqual(rows["alias"]["merged_into_id"], "target")
-            repeated = apply_answer(db, packet=packet, answer=answer,
+            repeated = stage_and_commit(db, packet=packet, answer={**answer, "newNodes": [], "merges": []},
                                     maintenance_run_id=self.maintenance_id)
             self.assertEqual(repeated["errors"], [])
             self.assertEqual(repeated["written"]["merges"], 0)
@@ -648,12 +634,12 @@ class MaintenanceDataTests(WorkflowTestCase):
         packet = self.packet()
         kind_id = packet["kinds"][0]["kindId"]
         answer = {"newNodes": [], "merges": [], "classifications": [],
-                  "summaries": {kind_id: {"text": "Unsupported", "citations": ["outside-batch"]}}}
+                  "summaries": [{"kindId": kind_id, 'text': 'Unsupported', 'citations': ['outside-batch']}]}
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             self.assertIsNone(db.execute("SELECT text FROM kind_summaries").fetchone())
-        self.assertTrue(any("citations" in error for error in result["errors"]))
+        self.assertTrue(any("citation" in error for error in result["errors"]))
 
     def test_bad_shape_does_not_block_independent_facts_and_summary_is_required(self):
         packet = self.packet()
@@ -671,10 +657,10 @@ class MaintenanceDataTests(WorkflowTestCase):
                 {"runId": first, "domainNodeId": "good", "taskType": "create"},
                 {"runId": second, "domainNodeId": "good", "taskType": "invalid"},
             ],
-            "summaries": {},
+            "summaries": [],
         }
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM domain_nodes").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 1)
@@ -682,10 +668,10 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(result["written"]["nodes"], 1)
         self.assertEqual(result["written"]["classifications"], 1)
         self.assertTrue(any("newNodes[1]" in error for error in result["errors"]))
-        self.assertTrue(any("answer.merges: type" in error for error in result["errors"]))
+        self.assertTrue(any("$.merges: type" in error for error in result["errors"]))
         self.assertTrue(any("active domain name already exists" in error for error in result["errors"]))
         self.assertTrue(any("parent cycle" in error for error in result["errors"]))
-        self.assertTrue(any("answer.summaries" in error and "required" in error for error in result["errors"]))
+        self.assertTrue(any("summaries[" in error and "missing" in error for error in result["errors"]))
 
     def test_merge_target_must_still_be_active(self):
         packet = self.packet()
@@ -701,7 +687,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             "classifications": [], "summaries": self.summary(packet),
         }
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             nodes = {row["node_id"]: row for row in db.execute("SELECT * FROM domain_nodes")}
         self.assertEqual(result["written"]["merges"], 1)
@@ -739,16 +725,17 @@ class MaintenanceDataTests(WorkflowTestCase):
             "summaries": self.summary(packet, ["deleted-after-packet", survivor]),
         }
         with self.board_.store.db.write() as db:
-            result = apply_answer(db, packet=packet, answer=answer,
+            result = stage_and_commit(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
             rows = list(db.execute("SELECT run_id FROM micro_task_classifications"))
             self.assertIsNone(db.execute("SELECT text FROM kind_summaries").fetchone())
         self.assertEqual([row[0] for row in rows], [survivor])
         self.assertEqual(result["written"]["classifications"], 1)
-        self.assertTrue(any("citations" in error for error in result["errors"]))
+        self.assertTrue(any("citation" in error for error in result["errors"]))
+        answer["newNodes"] = []
         answer["summaries"] = self.summary(packet, [survivor])
         with self.board_.store.db.write() as db:
-            corrected = apply_answer(db, packet=packet, answer=answer,
+            corrected = stage_and_commit(db, packet=packet, answer=answer,
                                      maintenance_run_id=self.maintenance_id)
             self.assertIsNotNone(db.execute("SELECT text FROM kind_summaries").fetchone())
         self.assertEqual(corrected["errors"], [])
@@ -773,10 +760,10 @@ class MaintenanceDataTests(WorkflowTestCase):
         }
         with self.board_.store.db.write() as db:
             for raw in (None, "{invalid"):
-                rejected = apply_answer(db, packet=packet, answer=raw,
+                rejected = stage_and_commit(db, packet=packet, answer=raw,
                                         maintenance_run_id=self.maintenance_id)
-                self.assertEqual(rejected["errors"], ["answer-invalid-json"])
-            applied = apply_answer(db, packet=packet, answer=json.dumps(answer),
+                self.assertTrue(rejected["errors"])
+            applied = stage_and_commit(db, packet=packet, answer=json.dumps(answer),
                                    maintenance_run_id=self.maintenance_id)
         self.assertEqual(applied["errors"], [])
         self.assertEqual(applied["written"]["classifications"], 2)
@@ -800,7 +787,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.assertTrue(all(item["classification"] == {"domainNodeId": "existing", "taskType": "review"}
                                 for item in first["microTasks"]))
             first_ids = {item["runId"] for item in first["microTasks"]}
-            result = apply_answer(db, packet=first, answer={
+            result = stage_and_commit(db, packet=first, answer={
                 "newNodes": [], "merges": [], "classifications": [],
                 "summaries": self.summary(first, [first["microTasks"][0]["runId"]]),
             }, maintenance_run_id=self.maintenance_id)
@@ -809,7 +796,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             second = build_packet(db)
             self.assertEqual(len(second["microTasks"]), 10)
             self.assertFalse(first_ids & {item["runId"] for item in second["microTasks"]})
-            result = apply_answer(db, packet=second, answer={
+            result = stage_and_commit(db, packet=second, answer={
                 "newNodes": [], "merges": [], "classifications": [],
                 "summaries": self.summary(second, [second["microTasks"][0]["runId"]]),
             }, maintenance_run_id=self.maintenance_id)

@@ -22,11 +22,13 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 ## 2. 私有目录与文件：继承 profile 的 ACL，边界上查一次
 
-私有状态指状态目录里的黑板、令牌、凭据、控制文件、会话，以及安装的私有文件（active 指针、启动设置、安装日志、锁与备份）。私有规则防得住的只有同一台机器上的其他普通账户：本账户和它起的进程（包括 Worker）本来就能读，SYSTEM 与管理员也挡不住。Windows 给每个账户的 profile 目录（`C:\Users\<name>`）配的 ACL 只有本账户、SYSTEM 与 Administrators，其他普通账户进不去；状态目录默认在 `%LOCALAPPDATA%` 之下，继承这张 ACL 就满足要求。这一节 2026-10-22 由开发者定，取代阶段 B 的逐次句柄校验（第 9 节）。
+私有状态指状态目录里的黑板、令牌、凭据、控制文件、会话，以及安装的私有文件（active 指针、启动设置、安装日志、锁与备份）。限制针对同一台机器上的其他普通账户。本账户及其进程、SYSTEM 和管理员可以访问。状态目录默认位于 `%LOCALAPPDATA%` 下，继承父目录的 ACL，合规条件见下文。这一节 2026-10-22 由开发者定，取代阶段 B 的逐次句柄校验（第 9 节）。
 
 Windows 上的私有目录与文件照常创建，继承上层的 ACL，不传 0o700。Python 3.12.4 起，`mkdir(0o700)` 在 Windows 上写一张受保护、不点名用户的 ACL（SYSTEM、Administrators、OWNER RIGHTS），访问随属主走：提权终端建出的对象属主是 Administrators，同一账户的普通终端打不开（[桌面实验记录](windows-experiments-desktop.md)）。继承来的 profile ACL 明确写着本账户，提权与普通终端都能用，不需要改令牌的默认属主。POSIX 照旧逐级以 0700 新建。
 
-状态根在安装与冷启动时查一次：路径上没有链接（符号链接或目录联接）；属主是本账户或 Administrators；DACL 存在且非 NULL，全部 ACE 是普通 allow，受托者只有本账户、SYSTEM、Administrators 与 OWNER RIGHTS。查不过就拒绝并说出原因，例如状态目录被设到了共享位置。这一条对应 POSIX 的“状态目录 0700、属于本人、上层不能被他人替换、路径上没有链接”。状态目录之内的读写不再逐次校验。凭据经继承的文件描述符转交时只核对它是普通文件，POSIX 另照旧核对属主与 mode。ACL 的查询用 pywin32，它仍是直接依赖；DACL 缺失与对象、条件、未知 ACE 等形状用合成列表写单元测试。
+Windows 在进程入口校验状态目录。路径各级必须是实际目录，属主须为本账户或 Administrators，DACL 须存在且非 NULL，全部 ACE 须为普通 Allow，受托者限本账户、SYSTEM、Administrators 与 OWNER RIGHTS。POSIX 先解析符号链接，再校验目录属主、0700 权限及实际祖先。状态目录内的读写沿用入口校验结果。凭据经继承的文件描述符转交时检查文件类型，POSIX 另查属主与权限。ACL 查询使用直接依赖 pywin32，DACL 缺失及对象、条件、未知 ACE 等情形用合成列表测试。
+
+2026-11-20 修订。Windows 11 实机的 `%LOCALAPPDATA%` 可能使状态目录继承 `ALL APPLICATION PACKAGES`、`CREATOR OWNER` 等校验规则之外的 ACE。安装与冷启动的拥有者入口（`create=True`）遇到属主合法但 DACL 不合规的目录时，按句柄重新核对目录类型和属主，再写入受保护的 DACL。修复后的权限明确授予进程令牌的 `TokenUser`、SYSTEM 与 Administrators，让同一账户的普通和提权终端都能访问。子目录和文件自然继承这组权限。只读入口（`create=False`）继续严格校验，ACE 错误只报告结构字段和脱敏类别。方案的句柄操作已在 Windows 11 build 26200、pywin32 312 的隔离实机实验中验证。
 
 安装发布路径不属私有：skill 目录与它的运行时提示、运行时根及其清单与 READY，两个系统同一政策，允许上层目录是链接，不按私有 ACL 校验（`tests/python/install/test_publication_paths.py`）。
 

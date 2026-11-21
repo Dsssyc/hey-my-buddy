@@ -29,7 +29,8 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await name.click();
       const strip = page.locator('[data-slot=detail-strip]');
       await expect(strip).toBeVisible();
-      await expectWholeAndApart(strip, strip.locator(":scope > [data-slot=step-navigation], :scope > [data-slot=scroll-area]"));
+      const controls = strip.locator("[data-slot=step-bar]");
+      await expectWholeAndApart(controls, controls.locator(":scope > *"));
       await expect(strip.locator('[aria-pressed=true]')).toHaveCount(1);
       await expect(page.locator('[data-slot=detail-pane]')).toContainText("回合 2");
       await settle(page);

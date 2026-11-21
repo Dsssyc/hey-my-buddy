@@ -6,6 +6,9 @@ thread or native storage is read by this projector.
 """
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from ....protocol.session_content import (
     MessageChunk, NativeMeta, TextContent,
     ToolCall, ToolCallUpdate, ToolContent,
@@ -15,10 +18,14 @@ from ..session_record import SessionRecord
 from .tool_evidence import (RAW_TOOL_OUTPUTS, RAW_TOOL_STARTS, TYPED_TOOL_ITEMS,
                             TYPED_TOOL_OUTPUTS, native_identity)
 
+_DELTA_FLUSH_SECONDS = 0.15
+_DELTA_FLUSH_BYTES = 2048
+
 
 class CodexSessionProjector:
-    def __init__(self, record: SessionRecord):
+    def __init__(self, record: SessionRecord, *, clock: Callable[[], float] = time.monotonic):
         self.record = record
+        self.clock = clock
         self.roots: set[tuple[str, str]] = set()
         self.sent_inputs: dict[tuple[str, str], list[str]] = {}
         self.items: dict[tuple, dict] = {}
@@ -29,6 +36,8 @@ class CodexSessionProjector:
         self.pending_key: tuple | None = None
         self.pending: list[str] = []
         self.pending_update: tuple | None = None
+        self.pending_since = 0.0
+        self.pending_bytes = 0
         self.awaiting_root = False
         self.unbound: list[dict] = []
         self.late: list[dict] = []
@@ -282,9 +291,15 @@ class CodexSessionProjector:
             self.flush()
         self.text[key] = self.text.get(key, "") + text
         if text:
+            now = self.clock()
+            if self.pending_key is None:
+                self.pending_since = now
             self.pending_key = key
             self.pending_update = (kind, meta)
             self.pending.append(text)
+            self.pending_bytes += len(text.encode("utf-8"))
+            if self.pending_bytes >= _DELTA_FLUSH_BYTES or now >= self.pending_since + _DELTA_FLUSH_SECONDS:
+                self.flush()
 
     def flush(self) -> None:
         if self.pending_key is None:
@@ -292,6 +307,7 @@ class CodexSessionProjector:
         kind, meta = self.pending_update
         self._write_content(self.pending_key, kind, meta, "".join(self.pending))
         self.pending_key, self.pending_update, self.pending = None, None, []
+        self.pending_bytes = 0
 
     def _write_content(self, key: tuple, kind: str, meta, value: str, *, replace: bool = False) -> None:
         text = TextContent(text=value)

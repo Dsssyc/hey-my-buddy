@@ -197,6 +197,8 @@ class FakeAgent:
             arguments = entry["args"]
             self.bridge_config = arguments[arguments.index("--config") + 1]
         name = entry.get("name")
+        if name == "hey_my_buddy_snapshot":
+            self.snapshot_config = Path(entry["args"][-1])
         env = entry.get("env")
         if env is not None and not isinstance(env, list):
             # The installed agent accepts a mapping env and silently fails to
@@ -618,6 +620,23 @@ class FakeAgent:
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
         self.emit_session_fixture(session_id)
+        if hasattr(self, "snapshot_config"):
+            from hey_my_buddy.buddy.roles.snapshot_mcp import SnapshotService
+
+            service = SnapshotService.from_file(self.snapshot_config)
+            for call_id, args in (("page", {"limit": 5}), ("error", {"offset": 999})):
+                reply = service.mcp_call("query_task", args)
+                updates = [
+                    {"sessionUpdate": "agent_message_chunk",
+                     "content": {"type": "text", "text": "Querying the frozen data."}},
+                    {"sessionUpdate": "tool_call", "toolCallId": call_id,
+                     "title": "mcp__hey_my_buddy_snapshot__query_task", "rawInput": args},
+                    {"sessionUpdate": "tool_call_update", "toolCallId": call_id,
+                     "status": "failed" if reply["isError"] else "completed",
+                     "rawOutput": ("Error: " if reply["isError"] else "") + reply["content"][0]["text"]},
+                ]
+                for update in updates:
+                    self.notify_client("session/update", {"sessionId": session_id, "update": update})
         if self.emit_foreign_chunk:
             # A message chunk framed under a session this run never opened.
             self.notify_client("session/update", {"sessionId": "foreign-root-1",

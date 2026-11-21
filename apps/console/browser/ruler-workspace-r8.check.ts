@@ -78,8 +78,8 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await ruler(page).press("0");
     await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]').click();
     const strip = page.locator('[data-slot=detail-strip]'), detailView = strip.locator('[data-slot=detail-strip-scroll]');
-    await expect(strip.locator(':scope > [data-slot=scroll-area]')).toBeVisible();
-    expect(await strip.locator(':scope > [data-slot=timeline-zoom]').count()).toBe(0);
+    await expect(strip.locator('[data-slot=detail-timeline] > [data-slot=scroll-area]')).toBeVisible();
+    expect(await strip.locator('[data-slot=timeline-zoom]').count()).toBe(0);
     const track = strip.locator('[data-slot=timeline-track]');
     const beforeWidth = Number(await track.getAttribute("width"));
     await moveTo(page, track, .5); await page.mouse.wheel(0, -350);
@@ -94,7 +94,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await strip.locator('[data-slot=zoom-fit]').click();
     await expect.poll(async () => Number(await track.getAttribute("width"))).toBe(beforeWidth);
     await expect(strip.locator('[data-slot=zoom-fit]')).toHaveCount(0);
-    await moveTo(page, strip.locator('[data-slot=step-navigation]'));
+    await moveTo(page, track);
     await page.mouse.wheel(0, -180);
     await expect.poll(async () => Number(await track.getAttribute("width"))).toBeGreaterThan(beforeWidth);
     await ruler(page).press("0");

@@ -48,11 +48,11 @@ type Props = {
   onOpenRun: (runId: string, macroTaskId?: string) => void;
 };
 
-function pane(step: Step, ctx: Context, tabs?: ContentTabs) {
+function pane(step: Step, ctx: Context, tabs?: ContentTabs, session = false) {
   switch (step.kind) {
     case "delegation": return <DelegationPane step={step} ctx={ctx} />;
-    case "routing": return <RoutingPane step={step} ctx={ctx} tabs={tabs} />;
-    case "turn": return <TurnPane step={step} ctx={ctx} tabs={tabs} />;
+    case "routing": return <RoutingPane step={step} ctx={ctx} tabs={tabs} session={session} />;
+    case "turn": return <TurnPane step={step} ctx={ctx} tabs={tabs} session={session} />;
     case "decision": case "continue": return <DecisionPane step={step} ctx={ctx} />;
     case "acceptance": return <AcceptancePane step={step} ctx={ctx} />;
     default: return <EventPane step={step} ctx={ctx} />;
@@ -123,7 +123,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   useLayoutEffect(() => {
     if (!keyboardFocusPending.current) return;
     keyboardFocusPending.current = false;
-    stripRef.current?.querySelector<SVGElement>('[aria-pressed=true]')?.focus({ preventScroll: true });
+    stripRef.current?.querySelector<SVGElement>('[data-expanded=true] [aria-pressed=true]')?.focus({ preventScroll: true });
   }, [chosen]);
 
   // Detail keys leave fields and dialogs to their own controls.
@@ -140,7 +140,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
       if (next !== chosen) {
         keyboardFocusPending.current = true;
         onStep(next + 1);
-      } else stripRef.current?.querySelector<SVGElement>('[aria-pressed=true]')?.focus({ preventScroll: true });
+      } else stripRef.current?.querySelector<SVGElement>('[data-expanded=true] [aria-pressed=true]')?.focus({ preventScroll: true });
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -176,18 +176,18 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
     </div></>);
   }
   return bare(<>
-    <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)}
-      error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
+    <Header view={view} workflow={workflow} endMs={elapsedEnd(view, workflow, now)}
+      error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} onOpenRun={onOpenRun} />
     {view.attempt && view.attempt.issues.length > 0 && (!steps || !steps.steps.some(item => (item.kind === "turn" || item.kind === "routing") && item.span?.attemptId === view.attempt!.attemptId)) &&
       <div className="shrink-0 border-b py-2"><ExecutionIssues attempt={view.attempt} /></div>}
     {steps && !steps.complete && <p className="border-b bg-background px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
-    {steps && current && ctx && row && <div ref={stripRef} data-slot="detail-step-band" className="shrink-0 border-y border-line bg-background py-3">
-      <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>
+    {steps && current && ctx && row && <div ref={stripRef} data-slot="detail-step-band" className="shrink-0 border-b border-line bg-background">
+      <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip} tab={tab}/>
     </div>}
     {steps && current && ctx
       ? <div key={current.key} data-step-direction={stepDirection} className={cn("flex min-h-0 min-w-0 flex-1 flex-col motion-reduce:transition-none", stepDirection && "step-pane-enter")}>{pane(current, ctx, execution ? children =>
         <ExecutionTabs routingMode={execution.kind === "routing" ? execution.routing?.routingMode ?? null : undefined} taskText={view.task.task} checkoutRoot={workflow?.cwd ?? view.task.cwd} client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
-          harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{children}</ExecutionTabs> : undefined)}</div>
+          harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{children}</ExecutionTabs> : undefined, tab === "session")}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}
   </>);
 }

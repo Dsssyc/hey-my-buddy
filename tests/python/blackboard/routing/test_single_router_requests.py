@@ -6,6 +6,7 @@ import uuid
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_sequence
+from hey_my_buddy.protocol import router_selection
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -76,7 +77,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["input"]["modelResponseWaitSeconds"], 90)
         self.assertNotIn("executionWorkspace", view["input"])
         self.assertNotIn("evidence", view["input"])
-        self.assertNotIn("file", view["input"]["outputSchema"]["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
+        self.assertNotIn("file", router_selection.answer_schema("fast")["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
 
     def test_router_choice_is_independent_of_worker_bounds_and_preferences(self):
         board = self.board()

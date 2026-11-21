@@ -240,7 +240,11 @@ export type Lineage = {
 };
 export type ProviderRejection = { code: "quota-exceeded" | "rate-limited" | "overloaded"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
 
+export const blockingTaskSchema = z.object({ runId: z.string(), title: z.string().nullable(), macroTaskId: z.string().nullable() }).nullable().optional();
+export type BlockingTask = z.infer<typeof blockingTaskSchema>;
+
 export type Task = {
+  blockingTask?: BlockingTask;
   providerCooling?: ProviderCooling | null;
   providerRejection?: ProviderRejection | null;
   runId: string;
@@ -279,6 +283,7 @@ export type Task = {
     projectKind?: "git" | "folder";
     revision: number;
     requestSummary?: string;
+    blockingTask?: BlockingTask;
     /** Host-authored explicit micro task title; null or absent means fallback. */
     title?: string | null;
     /** The macro task the micro task belongs to; absent for a standalone one, which is its own group. */
@@ -503,3 +508,5 @@ export const runtimeVersionSchema = z.looseObject({
   running: versionFactsSchema.extend({ mode: z.enum(["runtime", "source"]) }), installed: versionFactsSchema.nullable(),
 });
 export type RuntimeVersionInfo = z.infer<typeof runtimeVersionSchema>;
+export const publishedVersionSchema = z.object({ publishedVersion: z.string().nullable(), checkedAt: z.string().nullable() });
+export type PublishedVersionInfo = z.infer<typeof publishedVersionSchema>;

@@ -117,7 +117,7 @@ def run_path_case(name, work):
                     assert all(call.kwargs['state_dir'] == state for call in observed.call_args_list)
                     evidence['requests'].extend({'state': str(call.kwargs['state_dir']),
                                                   'operation': call.args[1]} for call in observed.call_args_list)
-            native_root = transport.cc.local_endpoint_context().root
+            native_root = transport.cc.endpoint.local_endpoint_context().root
             evidence['nativeRoot'] = None if native_root is None else str(native_root)
             assert evidence['nativeRoot'] == (None if os.name == 'nt' else str(state / 'ipc'))
             assert not (work / 'native-invoked').exists()
@@ -349,7 +349,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(fixture.directory.stat().st_mode), 0o500)
             self.assertEqual(len(received.read_text(encoding="utf-8").splitlines()), received_before + 2)
             self.assertFalse(invoked.exists())
-            evidence.update(pid=endpoint['pid'], nativeRoot=str(transport.cc.local_endpoint_context().root),
+            evidence.update(pid=endpoint['pid'], nativeRoot=str(transport.cc.endpoint.local_endpoint_context().root),
                             mode=0o500, snapshotExceptPeerTracePreserved=True)
         finally:
             fixture.directory.chmod(0o700)

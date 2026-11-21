@@ -329,7 +329,7 @@ def routing_boundary(connection, row, *, now, run_id=None, state_dir=None) -> di
     facts = deepcopy(snapshot["baseInput"])
     facts.update(deepcopy(snapshot["facts"]))
     facts["inspections"] = deepcopy(snapshot["inspections"])
-    candidates = facts.get("buddies") or []
+    candidates = facts.pop("buddies", None) or []
     retry_at = _retry_at(connection, snapshot["facts"],
                          trials, now=now, kind=kind)
     stopped, problem = _continuation_context(connection, route, run_id, state_dir)

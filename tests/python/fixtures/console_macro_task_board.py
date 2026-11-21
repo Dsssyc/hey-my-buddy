@@ -219,7 +219,7 @@ class SyntheticBoard:
         if (document.get("exploration") or {}).get("quota") is True:
             # Every fifth synthetic routing carries an exploration quota; its
             # answer names the preferred buddy and keeps it.
-            decision.update(preferredBuddyId=BUDDY_ID, reselected=False)
+            decision.update(preferredBuddyId=BUDDY_ID)
         self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=self.board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': decision}})
 
     def _finish(self, run_id, *, disposition="completed", claim=None, historical=False):

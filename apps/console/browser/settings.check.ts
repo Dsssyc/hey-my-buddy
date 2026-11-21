@@ -149,3 +149,23 @@ test.describe("settings browser authorization commands", () => {
     await expect(page.getByRole("list", { name: "已授权的浏览器" })).toHaveCount(0);
   });
 });
+
+test("shows the published version only on visiting Settings and copies its upgrade command", async ({ page, context }) => {
+  let reads = 0;
+  await page.route("**/api/published-version", async route => {
+    reads++;
+    await route.fulfill({ json: { publishedVersion: "90.0.0", checkedAt: "2026-10-09T00:00:00Z" } });
+  });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await open(page, "#tasks");
+  expect(reads).toBe(0);
+  await page.goto("#settings");
+  const hint = page.locator("[data-slot=published-version]");
+  await expect(hint.locator("code")).toHaveText("uvx hey-my-buddy@90.0.0 install");
+  await hint.getByRole("button").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("uvx hey-my-buddy@90.0.0 install");
+  await page.goto("#tasks");
+  await page.goto("#settings");
+  await expect(hint).toBeVisible();
+  expect(reads).toBe(1);
+});

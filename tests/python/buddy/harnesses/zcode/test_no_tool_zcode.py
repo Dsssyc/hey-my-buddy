@@ -126,6 +126,14 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
         outcome = self.execute("unknown")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
 
+    def test_snapshot_tool_stream_is_rejected_without_a_mount(self):
+        outcome = self.execute("unmounted-stream")
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        package = outcome.result["toolEvidence"]
+        self.assertEqual(package["toolCalls"], 0)
+        self.assertFalse(package["streamComplete"])
+
     def test_tool_and_truncated_stream_fail_closed(self):
         for case, code in (("tool", "no-tool-violation"), ("post-close-tool", "no-tool-violation"),
                            ("truncated", "transport-error")):

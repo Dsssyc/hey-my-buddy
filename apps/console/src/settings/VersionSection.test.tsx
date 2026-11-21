@@ -12,7 +12,7 @@ import "../i18n";
 const facts = { softwareVersion: "0.29.0", contractVersion: "0.fixture", schemaVersion: 15, sourceCommit: "installed-commit", installedAt: "2026-10-09T00:00:00Z" };
 const runtime: RuntimeVersionInfo = { running: { ...facts, mode: "runtime" }, installed: facts };
 function apiFor(info: RuntimeVersionInfo = runtime) {
-  return { runtimeVersion: vi.fn(async () => info), command: vi.fn() } as unknown as ConsoleApi;
+  return { runtimeVersion: vi.fn(async () => info), publishedVersion: vi.fn(async () => null), command: vi.fn() } as unknown as ConsoleApi;
 }
 function viewFor(api: ConsoleApi, active = true) {
   const renderView = (visible: boolean, client = api) => <StrictMode><TooltipProvider><VersionSection api={client} active={visible} /></TooltipProvider></StrictMode>;
@@ -25,6 +25,7 @@ it("reads once on first visibility through StrictMode, rerenders and hide/show",
   const api = apiFor();
   const view = viewFor(api, false);
   expect(api.runtimeVersion).not.toHaveBeenCalled();
+  expect(api.publishedVersion).not.toHaveBeenCalled();
   expect(screen.getByRole("status").textContent).toBe("尚未读取版本");
   view.update(true);
   await screen.findByText(facts.softwareVersion);
@@ -33,6 +34,7 @@ it("reads once on first visibility through StrictMode, rerenders and hide/show",
   view.update(false); view.update(true);
   await act(async () => {});
   expect(api.runtimeVersion).toHaveBeenCalledTimes(1);
+  expect(api.publishedVersion).toHaveBeenCalledTimes(1);
   expect(api.command).not.toHaveBeenCalled();
   expect(screen.getByText("安装时间").nextElementSibling?.textContent).toBe(formatDateTime(Date.parse(facts.installedAt)));
   expect(screen.queryByText("契约版本")).toBeNull();
@@ -109,4 +111,29 @@ it.each(["runtime", "source"] as const)("uses independent collapsed Radix disclo
   }
   expect(api.runtimeVersion).toHaveBeenCalledTimes(1);
   expect(api.command).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["0.29.0", "0.30.0", true],
+  ["0.72.0rc2", "0.72.0rc10", true],
+  ["0.72.0rc1", "0.72.0", true],
+  ["0.72.0.dev1", "0.72.0a1", true],
+  ["0.72.0", "0.72.0.post1", true],
+  ["0.72.0.post1.dev1", "0.72.0.post1", true],
+  ["0.72.0", "1!0.1.0", true],
+  ["0.29.0", "0.29.0+metadata", false],
+  ["0.72.0", "0.72.0rc1", false],
+  ["0.72.0", "0.72.0.dev1", false],
+  ["0.29.0", "0.28.10", false],
+  ["0.29.0", "0.30.0-rc.1", false],
+  ["0.29.0", "0.30.0; install", false],
+  ["0.29.0", null, false],
+] as const)("compares the publication against the running version (%s, %s)", async (running, publishedVersion, show) => {
+  const api = apiFor({ ...runtime, running: { ...runtime.running, softwareVersion: running } });
+  vi.mocked(api.publishedVersion).mockResolvedValue({ publishedVersion, checkedAt: null });
+  const view = viewFor(api);
+  await screen.findByText(running);
+  await act(async () => {});
+  const command = view.container.querySelector('[data-slot="published-version"] code');
+  expect(command?.textContent ?? null).toBe(show ? `uvx hey-my-buddy@${publishedVersion} install` : null);
 });

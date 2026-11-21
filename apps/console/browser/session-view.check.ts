@@ -60,6 +60,9 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       expect(gap).toBeLessThan(20);
       const coverageButton = tabs(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true });
       await expect(coverageButton).toBeVisible();
+      const summary = tabsList.locator('[data-slot="session-summary"]');
+      await expect(summary).toHaveText(language === "zh" ? /\d+ 次调用 · \d+ 条消息/ : /\d+ calls · \d+ messages/);
+      await expect(coverageButton.locator("svg")).toHaveAttribute("aria-hidden", "true");
       await overviewTab(page, language).click();
       await expect(coverageButton).toHaveCount(0);
       await sessionTab(page, language).click();
@@ -100,7 +103,21 @@ test.describe("session content and navigation", () => {
 
     await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
     await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
-    await panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"] [data-slot="trace-collapsible-trigger"]').first().click();
+    const group = panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"]');
+    const groupTrigger = group.locator('[data-slot="trace-collapsible-trigger"]').first();
+    const hoverColor = await groupTrigger.evaluate(node => {
+      const probe = node.appendChild(document.createElement("span"));
+      probe.style.backgroundColor = "var(--selected-row)";
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    await groupTrigger.hover();
+    await expect(groupTrigger).toHaveCSS("background-color", hoverColor);
+    await groupTrigger.click();
+    await expect(groupTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect(groupTrigger).toHaveCSS("background-color", hoverColor);
+    await expect(group.locator('[data-slot="session-call-group"]')).toHaveCSS("border-left-width", "1px");
     const failed = await expandTool(page, "codex-failed-command");
     await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
     await expect(failed).toContainText("command not found");
@@ -109,7 +126,7 @@ test.describe("session content and navigation", () => {
 
     const task = row(page, "task");
     await expect(task.locator('[data-slot="session-task"]')).toContainText("设计并实现工作目标时间轴");
-    const prompt = task.getByRole("button", { name: /Expand full text sent to buddy/ });
+    const prompt = task.getByRole("button", { name: /^(Show|Hide) full prompt$/ });
     await expect(prompt).toHaveAttribute("aria-expanded", "false");
     await prompt.click();
     await expect(prompt).toHaveAttribute("aria-expanded", "true");
@@ -309,7 +326,7 @@ test.describe("session content and navigation", () => {
     const switched = page.waitForEvent("requestfailed", { predicate: request => request.url().includes("/session?") });
     await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
     expect((await switched).failure()?.errorText).toContain("ABORTED");
-    const prompt = row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ });
+    const prompt = row(page, "task").getByRole("button", { name: "Show full prompt" });
     await prompt.click();
     await expect(row(page, "task")).toContainText("为合成任务选择执行 buddy。");
   });
@@ -399,15 +416,16 @@ for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) t
     await page.clock.install();
     const message = (text: string) => ({ sessionId: "att-a3-1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
     const row = (index: number) => message(`运行中的第 ${index} 行。\n第二行内容，占一点高度。\n`);
+    let allowGrowth = false;
     let grown = false;
     await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
       const params = new URL(route.request().url()).searchParams;
       const starts = params.get("before") === null && params.get("after") === null;
       const events = starts
         ? opening === 1 ? [message("运行中的唯一一行。")] : Array.from({ length: opening }, (_, index) => row(index + 1))
-        : grown ? [] : Array.from({ length: growth }, (_, index) => row(opening + index + 1));
-      if (!starts) grown = true;
-      const after = starts ? opening : opening + growth;
+        : allowGrowth && !grown ? Array.from({ length: growth }, (_, index) => row(opening + index + 1)) : [];
+      if (!starts && allowGrowth && !grown) grown = true;
+      const after = grown ? opening + growth : opening;
       await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before: 0, after, hasEarlier: false, events } });
     });
     await openSession(page, session("preview-run-a3", 3));
@@ -418,6 +436,7 @@ for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) t
       expect(overflow, "the opening page barely exceeds the viewport").toBeGreaterThan(0);
       expect(overflow).toBeLessThanOrEqual(320);
     }
+    allowGrowth = true;
     await page.clock.fastForward(12_000);
     await expect(panel(page).getByText(`运行中的第 ${opening + growth} 行。`)).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "New content" })).toHaveCount(0);
@@ -491,7 +510,7 @@ test.describe("four harness preview records", () => {
   test("DSH renders a question and answer without tool rows", async ({ page }) => {
     await openSession(page, session("preview-run-b9", 5, B));
     await expect(row(page, "task")).toContainText("核对合成平台路径中的字符编码并交回结果");
-    await row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await row(page, "task").getByRole("button", { name: "Show full prompt" }).click();
     await expect(row(page, "task").locator('[data-slot="session-output"]')).toContainText("合成平台路径的编码是否一致？");
     await expect(row(page, "answer")).toContainText("合成样例里的路径可以正常读取");
     await expect(row(page, "calls")).toHaveCount(0);
@@ -503,7 +522,7 @@ test.describe("four harness preview records", () => {
     await openSession(page, session("preview-run-a1", 2));
     const task = row(page, "task");
     await expect(task.locator("h3")).toHaveText("Choose a buddy for this micro task");
-    await task.getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await task.getByRole("button", { name: "Show full prompt" }).click();
     await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
     await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
     const answer = row(page, "answer");

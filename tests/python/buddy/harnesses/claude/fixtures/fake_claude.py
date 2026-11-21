@@ -118,6 +118,10 @@ def result_frame(case, session_id):
                   if case in ("permission", "result-denials") else [],
               "modelUsage": {"claude-opus-5-5[1m]": {"inputTokens": 10}, "claude-haiku-4-5-20251001": {"inputTokens": 2}},
               "total_cost_usd": 0.01}
+    if case == "snapshot":
+        result["structured_output"] = {"choice": "a"} if read_state()["runs"] > 1 else {"wrong": 1}
+        result["usage"] = {"input_tokens": 12, "output_tokens": 4,
+                           "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     if case == "terminal-only":
         result.pop("result")
         result.pop("structured_output")
@@ -297,6 +301,19 @@ def run_turn(case):
             "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z"}})
     if case not in ("input-too-large", "terminal-only"):
         send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case == "snapshot":
+        from hey_my_buddy.buddy.roles.snapshot_mcp import SnapshotService
+
+        server = json.loads(Path(argv_value("--mcp-config")).read_text())["mcpServers"]["hey_my_buddy_snapshot"]
+        service = SnapshotService.from_file(Path(server["args"][-1]))
+        for call_id, args in (("page", {"limit": 5}), ("error", {"offset": 999})):
+            reply = service.mcp_call("query_task", args)
+            send({"type": "assistant", "session_id": session_id, "message": {"content": [
+                {"type": "tool_use", "id": call_id,
+                 "name": "mcp__hey_my_buddy_snapshot__query_task", "input": args}]}})
+            send({"type": "user", "session_id": session_id, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call_id, "content": reply["content"],
+                 "is_error": reply["isError"]}]}})
     if case == "long-tool-name":
         send({"type": "assistant", "session_id": session_id, "message": {
             "role": "assistant", "content": [{"type": "tool_use", "id": "long-tool-call",
@@ -448,6 +465,7 @@ def main():
         elif frame.get("type") == "user":
             state = read_state()
             state["userTurns"] = state.get("userTurns", 0) + 1
+            state["inputs"] = [*state.get("inputs", []), frame["message"]["content"][0]["text"]]
             write_state(state)
             run_turn(case)
 

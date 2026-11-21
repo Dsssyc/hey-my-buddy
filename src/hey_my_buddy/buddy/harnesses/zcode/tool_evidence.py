@@ -20,8 +20,11 @@ from pathlib import Path
 
 from ....paths import native_path
 from ....private_files import open_read
-
-from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
+from ....protocol.tool_evidence import (
+    PERMISSION_TOOL_CATEGORIES, ToolEventEvidence, classify_tool_name, normalize_tool_event,
+)
+from ..session_receipts import snapshot_result_failed
+from ..snapshot_mount import ObservedSnapshotCalls
 
 HARNESS = "zcode"
 
@@ -30,6 +33,8 @@ HARNESS = "zcode"
 #: that is retained as an incomplete fact, never guessed into a phase.
 _START_KINDS = frozenset({"scheduled"})
 _END_KINDS = frozenset({"result", "error"})
+_METADATA_PHASES = ("scheduled", "started", "progress", "completed", "failed")
+_STREAMED_TOOL_KINDS = ("tool_call", "tool_input_start", "tool_input_delta", "tool_input_end")
 
 
 def _identity_of(params: dict) -> dict | None:
@@ -46,6 +51,37 @@ def _identity_of(params: dict) -> dict | None:
     return identity if len(identity) == 2 else None
 
 
+def _child_tool_frame(params: dict) -> bool:
+    return any(record.get(field) not in (None, False, "")
+               for record in (params, params.get("payload")) if isinstance(record, dict)
+               for field in ("source", "parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background"))
+
+
+def _tool_call_id(frame: dict) -> str | None:
+    call_id = frame.get("toolCallId")
+    return call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
+
+
+def carries_tool_marker(value) -> bool:
+    """Native tool parts count even without ids or inside child envelopes."""
+    if isinstance(value, dict):
+        kinds = (value.get('type', ''), value.get('kind', ''))
+        if (any(isinstance(kind, str) and kind.startswith(
+                ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
+                or value.get('toolCallId') is not None or value.get('role') == 'tool'
+                or any(key in value and value[key] is not None
+                       and not (type(value[key]) is int and value[key] == 0)
+                       for key in ('toolCalls', 'toolCallCount'))
+                or any(key in value and value[key] is not None
+                       and not (isinstance(value[key], list) and not value[key])
+                       for key in ('toolCallIds', 'committedToolCallIds'))):
+            return True
+        return any(carries_tool_marker(item) for item in value.values())
+    if isinstance(value, list):
+        return any(carries_tool_marker(item) for item in value)
+    return False
+
+
 class ZcodeToolFacts:
     """One no-tool call's tool-fact projection across its correction sessions.
 
@@ -56,16 +92,26 @@ class ZcodeToolFacts:
     projection cannot name, keeping the receipt's call count at least one.
     """
 
-    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path):
-        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
+    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path,
+                 session_tools: Iterable[str] = ()):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir,
+                                          session_service_tools=session_tools)
         self.roots: list[dict] = []
         self.close_pending = False
         self.violation = False
+        #: The mounted snapshot service's qualified tool names, with the
+        #: observed native calls the driver later verifies against the ledger.
+        self.session_tools = frozenset(session_tools)
+        self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
+        self._streamed_names: dict[tuple[str, str, str], str] = {}
+        self._snapshot_inputs: dict[tuple[str, str, str], tuple[str, dict]] = {}
+        self._session_starts: set[tuple[str, str, str]] = set()
         self._names: dict[tuple[str, str, str], str] = {}
         self._ended = set()
         self._closed = set()
         self._canonical_starts = set()
         self._metadata_starts = set()
+        self._explained_session_counts: dict[tuple[str, str], tuple[int, bool]] = {}
         self._metadata_outcomes = {}
         self._outcomes = {}
         self._batched = set()
@@ -110,6 +156,9 @@ class ZcodeToolFacts:
                 self.evidence.close_root(identity)
                 self._closed.add((identity['sessionId'], identity['turnId']))
             return
+        if isinstance(params, dict) and params.get("type") == "model.streaming":
+            self._streamed_tool(params)
+            return
         if not isinstance(params, dict) or params.get("type") != "tool.updated":
             return
         payload = params.get("payload")
@@ -146,18 +195,34 @@ class ZcodeToolFacts:
                 self._names.setdefault(key, name)
                 if kind == "scheduled":
                     self._canonical_starts.add(key)
+                if name in self.session_tools:
+                    # A mounted snapshot call keeps its native arguments beside
+                    # the shared facts; the driver verifies them against the
+                    # signed ledger after the run ends.
+                    self._session_starts.add(key)
+                    streamed = self._snapshot_inputs.get(key)
+                    arguments = payload.get("input", payload.get("arguments"))
+                    if arguments is None and streamed is not None and streamed[0] == name:
+                        arguments = streamed[1]
+                    self.snapshot_calls.observe(identity, call_id, name, arguments=arguments, started=True)
         elif phase == "end" and identity is not None and call_id is not None:
             key = (identity["sessionId"], identity["turnId"], call_id)
             name = self._names.get(key)
             self._ended.add(key)
             result = payload.get("result")
-            outcome = False if kind == "error" else result.get("success") if isinstance(result, dict) else None
-            outcome = outcome if type(outcome) is bool else None
-            if key in self._outcomes and self._outcomes[key] is not outcome:
+            failed = None
+            if name in self.session_tools:
+                failed = snapshot_result_failed(result)
+                self.snapshot_calls.observe(identity, call_id, name, result=result, completed=True,
+                                            ok=(not failed) if failed is not None else None)
+            native_outcome = False if kind == "error" else result.get("success") if isinstance(result, dict) else None
+            native_outcome = native_outcome if type(native_outcome) is bool else None
+            if key in self._outcomes and self._outcomes[key] is not native_outcome:
                 self._incomplete(params, identity, call_id, phase, name)
-            self._outcomes.setdefault(key, outcome)
-            if key in self._metadata_outcomes and self._metadata_outcomes[key] is not self._outcomes[key]:
+            self._outcomes.setdefault(key, native_outcome)
+            if key in self._metadata_outcomes and self._metadata_outcomes[key] is not native_outcome:
                 self._incomplete(params, identity, call_id, phase, name)
+            outcome = not failed if failed is not None else native_outcome
         if identity is not None and phase is not None and call_id is not None and name is not None:
             # The envelope type is not an operation type and is never passed as
             # one; the shared table classifies the scheduled tool name alone.
@@ -168,6 +233,34 @@ class ZcodeToolFacts:
                             else "unknown") if phase == "end" else "unknown"}))
             return
         self._incomplete(params, identity, call_id, phase, name)
+
+    def _streamed_tool(self, params: dict) -> None:
+        identity = _identity_of(params)
+        payload = params.get("payload")
+        if (identity not in self.roots or not isinstance(payload, dict)
+                or _child_tool_frame(params)
+                or payload.get("kind") not in ("tool_input_start", "tool_call")):
+            return
+        call_id, name = _tool_call_id(payload), payload.get("toolName")
+        if call_id is None or not isinstance(name, str) or not name:
+            return
+        key = (identity["sessionId"], identity["turnId"], call_id)
+        self._streamed_names.setdefault(key, name)
+        arguments = payload.get("input")
+        if payload["kind"] == "tool_call" and name in self.session_tools and isinstance(arguments, dict):
+            self._snapshot_inputs[key] = (name, arguments)
+
+    def _metadata_key(self, params: dict, identity: dict | None,
+                      call_id: str | None) -> tuple[str, str, str] | None:
+        if call_id is None:
+            return None
+        if identity is not None:
+            return identity["sessionId"], identity["turnId"], call_id
+        if params.get("turnId") is None and isinstance(params.get("sessionId"), str):
+            matches = [key for key in self._names if key[0] == params["sessionId"] and key[2] == call_id]
+            if len(matches) == 1:
+                return matches[0]
+        return None
 
     def _metadata_tool(self, method: str, params: dict) -> None:
         """Pair native projections with canonical facts, never manufacture an end.
@@ -187,20 +280,14 @@ class ZcodeToolFacts:
                 return
             phase = params.get("phase")
         identity = _identity_of(params)
-        call_id = params.get("toolCallId")
-        call_id = call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
+        call_id = _tool_call_id(params)
         raw = params.get("toolName")
         name = raw if isinstance(raw, str) and 0 < len(raw) <= 512 else None
-        key = (identity["sessionId"], identity["turnId"], call_id) if identity and call_id else None
-        if (key is None and params.get("turnId") is None and call_id
-                and isinstance(params.get("sessionId"), str)):
-            matches = [known for known in self._names
-                       if known[0] == params["sessionId"] and known[2] == call_id]
-            key = matches[0] if len(matches) == 1 else None
-        if any(params.get(field) not in (None, False, "") for field in (
-                "parentToolCallId", "childToolCallId", "childSessionId", "agentId", "background")):
+        key = self._metadata_key(params, identity, call_id)
+        if _child_tool_frame(params):
             self._incomplete(params, identity, call_id, None, name)
-        if (phase not in ("scheduled", "started", "progress", "completed", "failed")
+            return
+        if (phase not in _METADATA_PHASES
                 or key is None or key[:2] in self._closed or key in self._ended
                 or raw is not None and name is None):
             self._incomplete(params, identity, call_id, None, name)
@@ -214,6 +301,8 @@ class ZcodeToolFacts:
             self._names.setdefault(key, name)
             self._metadata_starts.add(key)
             if identity is not None:
+                if name in self.session_tools:
+                    self._session_starts.add(key)
                 self.evidence.observe(normalize_tool_event(HARNESS, {
                     "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": "start"}))
             return
@@ -321,13 +410,150 @@ class ZcodeToolFacts:
             "nativeIdentity": bounded, "callId": call_id, "toolName": name, "phase": phase})
 
     # -- receipt ---------------------------------------------------------------
+    def _allowed_tool(self, tool_name: str | None, *, read: bool) -> bool:
+        return isinstance(tool_name, str) and (
+            tool_name in self.session_tools
+            or read and classify_tool_name(HARNESS, tool_name) in PERMISSION_TOOL_CATEGORIES["read"]
+        )
+
+    def explains_terminal_metadata(self, message: dict, *, read: bool) -> bool:
+        params = message.get("params")
+        if not isinstance(params, dict) or _child_tool_frame(params):
+            return False
+        method = message.get("method")
+        identity = _identity_of(params)
+        if identity not in self.roots:
+            return False
+        root = (identity["sessionId"], identity["turnId"])
+        payload = params.get("payload")
+        kind = params.get("type")
+        if not (method == "v4/telemetry/event" and params.get("kind") == "turn.terminal"
+                or method == "session/event" and kind == "turn.completed"):
+            return False
+        counts = [record[field] for record in (params, payload) if isinstance(record, dict)
+                  for field in ("toolCallCount", "toolCalls") if field in record]
+        if not counts:
+            return False
+        names = self._names if read else self._session_starts
+        observed = sum(key[:2] == root and self._allowed_tool(self._names.get(key), read=read) for key in names)
+        if not all(type(count) is int and 0 <= count <= observed for count in counts):
+            return False
+        rest_params = {k: v for k, v in params.items() if k not in ("payload", "toolCallCount", "toolCalls")}
+        rest_payload = ({k: v for k, v in payload.items() if k not in ("toolCallCount", "toolCalls")}
+                        if isinstance(payload, dict) else payload)
+        return not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload)
+
+    def explains_tool_frame(self, message: dict, *, read: bool) -> bool:
+        params = message.get("params")
+        if not isinstance(params, dict) or _child_tool_frame(params):
+            return False
+        method = message.get("method")
+        identity = _identity_of(params)
+        names = self._names if read else self._session_starts
+        if (method == "computer-use/operation-event" and params.get("kind") in ("tool-scheduled", "tool-started")
+                or method == "v4/telemetry/event" and params.get("kind") == "tool.lifecycle"
+                and params.get("phase") in _METADATA_PHASES):
+            key = self._metadata_key(params, identity, _tool_call_id(params))
+            if key not in names or {"sessionId": key[0], "turnId": key[1]} not in self.roots:
+                return False
+            known, name = self._names[key], params.get("toolName")
+            if not ((name is None or name == known) and self._allowed_tool(known, read=read)):
+                return False
+            rest_params = {k: v for k, v in params.items() if k not in ("kind", "phase", "toolCallId", "toolName")}
+            return not carries_tool_marker(rest_params)
+
+        if identity not in self.roots:
+            return False
+        root = (identity["sessionId"], identity["turnId"])
+        payload = params.get("payload")
+        kind = params.get("type")
+        if (method == "v4/telemetry/event" and params.get("kind") == "turn.terminal"
+                or method == "session/event" and kind == "turn.completed"):
+            return self.explains_terminal_metadata(message, read=read)
+
+        if method != "session/event" or not isinstance(payload, dict):
+            return False
+
+        if kind == "session.updated":
+            if root in self._closed:
+                return False
+            counts = [record[field] for record in (params, payload) if isinstance(record, dict)
+                      for field in ("toolCallCount", "toolCalls") if field in record]
+            if not counts:
+                return False
+            allowed_keys = {
+                key for key in names if key[:2] == root and self._allowed_tool(self._names.get(key), read=read)
+            } | {
+                key for key, streamed_name in self._streamed_names.items()
+                if key[:2] == root and self._allowed_tool(streamed_name, read=read)
+            }
+            rest_params = {k: v for k, v in params.items() if k not in ("payload", "toolCallCount", "toolCalls")}
+            rest_payload = {k: v for k, v in payload.items() if k not in ("toolCallCount", "toolCalls")}
+            ok = (all(type(count) is int and 0 <= count <= len(allowed_keys) for count in counts)
+                  and not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload))
+            if ok and max(counts) > 0:
+                prev_count, prev_read = self._explained_session_counts.get(root, (0, read))
+                self._explained_session_counts[root] = (max(prev_count, max(counts)), prev_read and read)
+            return ok
+        if kind == "streamRecovery.updated":
+            if root in self._closed or payload.get("kind") not in ("tool_result", "tool_error"):
+                return False
+            call_id = _tool_call_id(payload)
+            if call_id is None or (*root, call_id) not in names:
+                return False
+            known = self._names.get((*root, call_id))
+            raw_name = payload.get("toolName")
+            if known is None or (raw_name is not None and raw_name != known) or not self._allowed_tool(known, read=read):
+                return False
+            committed = payload.get("committedToolCallIds")
+            if committed is not None and not (
+                    isinstance(committed, list)
+                    and all(isinstance(cid, str) and (*root, cid) in names
+                            and self._allowed_tool(self._names.get((*root, cid)), read=read) for cid in committed)):
+                return False
+            rest_params = {k: v for k, v in params.items() if k != "payload"}
+            rest_payload = {k: v for k, v in payload.items()
+                            if k not in ("kind", "toolCallId", "toolName", "committedToolCallIds")}
+            return not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload)
+        if kind == "model.streaming" and payload.get("kind") in _STREAMED_TOOL_KINDS:
+            if root in self._closed:
+                return False
+            call_id = _tool_call_id(payload)
+            if call_id is None:
+                return False
+            known = self._streamed_names.get((*root, call_id))
+            raw_name = payload.get("toolName")
+            name = known if raw_name is None else raw_name
+            if not (isinstance(name, str) and (known is None or name == known)
+                    and self._allowed_tool(name, read=read)):
+                return False
+            rest_params = {k: v for k, v in params.items() if k != "payload"}
+            rest_payload = {k: v for k, v in payload.items() if k not in ("kind", "toolCallId", "toolName")}
+            return not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload)
+        if kind != "tool.updated":
+            return False
+        ids = payload.get("toolCallIds") if payload.get("kind") == "batch" else [payload.get("toolCallId")]
+        if not (isinstance(ids, list) and bool(ids) and all(
+                isinstance(call_id, str) and (*root, call_id) in names
+                and self._allowed_tool(self._names.get((*root, call_id)), read=read) for call_id in ids)):
+            return False
+        rest_params = {k: v for k, v in params.items() if k not in ("payload", "type")}
+        rest_payload = {k: v for k, v in payload.items() if k not in ("toolCallId", "toolCallIds", "toolName")}
+        return not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload)
+
     @property
     def tool_calls(self) -> int:
         """Observed unique call starts, for the receipt's cumulative count."""
         return self.evidence.tool_calls
 
+    @property
+    def session_tool_calls(self) -> int:
+        """Observed starts of mounted snapshot service calls, verbatim."""
+        return len(self._session_starts)
+
     def finish(self, stream_complete: bool, *,
-               exclude_calls: Iterable[tuple[str, str]] | None = None) -> dict:
+               exclude_calls: Iterable[tuple[str, str]] | None = None,
+               verified_session_calls: Iterable[tuple[str, str]] = ()) -> dict:
         """Close the collector and return the receipt's ``toolEvidence`` package.
 
         ``stream_complete`` is true only when the real native stream drained to
@@ -337,7 +563,9 @@ class ZcodeToolFacts:
         own full ``(canonical_json(native_identity), callId)`` keys: the shared collector
         removes exactly those calls' events and counts from its complete call
         table, while every unverified, foreign or conflicting fact the
-        projection observed stays.
+        projection observed stays. ``verified_session_calls`` names the mounted
+        snapshot calls whose signed ledger receipts the driver verified in both
+        directions; only those rows carry ``sessionServiceVerified``.
         """
         self.read_denials()
         for params, identity, payload, missing in self._pending_denial_batches:
@@ -348,8 +576,18 @@ class ZcodeToolFacts:
         for key in self._metadata_starts - self._canonical_starts:
             self._incomplete({"sessionId": key[0], "turnId": key[1]},
                              {"sessionId": key[0], "turnId": key[1]}, key[2], None, self._names.get(key))
+        for root, (explained_count, read) in self._explained_session_counts.items():
+            scheduled = sum(
+                key[:2] == root and (key in self._session_starts
+                                     or (read and self._allowed_tool(self._names.get(key), read=True)))
+                for key in self._canonical_starts
+            )
+            if explained_count > scheduled:
+                self._incomplete({"sessionId": root[0], "turnId": root[1]},
+                                 {"sessionId": root[0], "turnId": root[1]}, None, None, None)
         return self.evidence.finish(list(self.roots), stream_complete is True,
-                                    exclude_calls=exclude_calls)
+                                    exclude_calls=exclude_calls,
+                                    verified_session_calls=verified_session_calls)
 
 
 __all__ = ["HARNESS", "ZcodeToolFacts"]

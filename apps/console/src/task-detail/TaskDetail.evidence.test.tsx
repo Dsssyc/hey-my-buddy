@@ -207,10 +207,11 @@ describe("a route", () => {
 });
 
 describe("the turns and what the compact record leaves out", () => {
-  it("counts the turns by the record's count, not by the ones it lists", async () => {
-    open({ replies: { workflow: workflow({ counts: { turns: 12, openRequests: 0 } }) } });
+  it("reads step totals from the timeline even when the workflow reports more turns", async () => {
+    open({ step: 3, replies: { workflow: workflow({ counts: { turns: 12, openRequests: 0 } }) } });
     await ready();
-    expect(head().textContent).toContain("回合12");
+    expect(strip().querySelector('[data-slot=step-counter]')?.textContent).toBe("步骤 3 / 8");
+    expect(within(head()).queryByText("回合")).toBeNull();
   });
 
   it("takes a turn the compact record no longer lists from the audit: its session, usage, expected time and route", async () => {
@@ -360,7 +361,7 @@ describe("the head", () => {
     expect(f.onBack).toHaveBeenCalledOnce();
     expect(titled.textContent).not.toContain("等待验收");
     const right = children[1] as HTMLElement;
-    expect(right.textContent).toMatch(/历时.*回合/);
+    expect(within(right).getByText("历时")).toBeTruthy();
     expect(within(right).queryByText("开始")).toBeNull();
     expect(within(right).getByText("等待验收")).toBeTruthy();
     expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();

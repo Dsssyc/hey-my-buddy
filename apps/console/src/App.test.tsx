@@ -55,7 +55,7 @@ describe("console interactions", () => {
   it("keeps a local Buddy setting across pages without sending a write", async () => {
     const state = initial();
     const api = {
-      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+      publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(), task: vi.fn(), macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
@@ -78,7 +78,7 @@ describe("console interactions", () => {
   it("addresses each page by its own name and opens the tasks for any other hash", async () => {
     const state = initial();
     const api = {
-      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+      publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
@@ -112,7 +112,7 @@ describe("console interactions", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     const api = {
-      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+      publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),

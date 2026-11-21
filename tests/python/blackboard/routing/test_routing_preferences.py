@@ -17,6 +17,9 @@ from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
+from blackboard.routing.fixtures.selection import frozen_input
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
@@ -103,7 +106,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
             document = {"domainNodes": [], "buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "executionWorkspaceForm": "archived-inline-v1",
-                        "outputSchema": router.answer_schema([BUDDY_ID]),
+                        "outputSchema": router_selection.answer_schema("review"),
                         "buddies": [{"buddyId": BUDDY_ID, "load": {"wait": {"seconds": 0, "atLeast": False}},
                                      "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
                         "task": "bounded read"}
@@ -125,7 +128,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)
             self.assertEqual(request.cwd, str(frozen))
-            body = router.render_prompt(document)
+            body = render_selection_prompt(document)
             self.assertEqual(request.prompt, router_prompt(body))
             role = resource_path("roles.router").read_text(encoding="utf-8")
             self.assertTrue(request.prompt.startswith(role + "\n"))
@@ -138,7 +141,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
     def test_router_prompt_carries_no_task_preference_slot(self):
-        prompt = router.render_prompt({"domainNodes": [], "routingMode": "review", "task": "choose", "buddies": [],
+        prompt = render_selection_prompt({"domainNodes": [], "routingMode": "review", "task": "choose", "buddies": [],
                                        "policyFacts": {"hardConstraints": {}, "userPreferredBuddyIds": []}})
         self.assertNotIn("routingPreferences", prompt)
 
@@ -238,7 +241,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertEqual(view["routing"]["constraints"], {})
         pass  # Admission is owned by the service.
         owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="cap-claim")
-        document = owned["claim"]["decisionInput"]
+        document = frozen_input(board, owned["claim"]["decisionInput"])
         self.assertIn(SECOND_BUDDY_ID, [entry["buddyId"] for entry in document["buddies"]])
         self.assertIn(THIRD_BUDDY_ID, [entry["buddyId"] for entry in document["buddies"]])
         board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})

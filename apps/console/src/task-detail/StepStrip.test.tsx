@@ -1,4 +1,4 @@
-import { cleanup, fireEvent } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { at, event, row, timeline } from "./task-detail.fixtures";
 import { open, pane, ready, strip, stripSlice } from "./task-detail.testing";
@@ -12,6 +12,24 @@ const scroll = () => document.querySelector<HTMLElement>('[data-slot=detail-stri
 const trackSvg = () => document.querySelector<SVGElement>('[data-slot=detail-strip] [data-slot=timeline-track]')!;
 
 describe("the step strip along the top of a micro task's detail", () => {
+  it("starts folded on Session and opens or closes from the same control", async () => {
+    const f = open({ step: 3 });
+    await ready();
+    const toggle = strip().querySelector<HTMLButtonElement>('[data-slot="timeline-toggle"]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await f.user.click(screen.getByRole("tab", { name: "会话" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.querySelector('[data-slot="timeline-thumbnail"]')).toBeTruthy();
+    expect(toggle.querySelector('[data-slot="thumbnail-selection"]')).toBeTruthy();
+    await f.user.click(toggle);
+    expect(toggle.textContent).toContain("收起时间轴");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await f.user.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await f.user.click(screen.getByRole("tab", { name: "概述" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("centres the step the detail opened with once; a later read never recentres it", async () => {
     const f = open({ origin: "span:e2" });
     await ready();

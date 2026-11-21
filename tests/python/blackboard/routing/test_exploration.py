@@ -8,13 +8,16 @@ from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, S
                                          THIRD_BUDDY, THIRD_BUDDY_ID, BUDDY_ID, SECOND_BUDDY_ID)
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
+from blackboard.routing.fixtures.selection import frozen_input
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.errors import BoardError
 
 
-def quota_decision(*, preferred, buddy_id, reselected, domain_node_id=None) -> dict:
+def quota_decision(*, preferred, buddy_id, domain_node_id=None) -> dict:
     return {"domainNodeId": domain_node_id, "taskType": "change", "buddyId": buddy_id,
-            "preferredBuddyId": preferred, "reselected": reselected,
+            "preferredBuddyId": preferred,
             "note": "explore the least sampled kind", "evidence": []}
 
 
@@ -107,12 +110,11 @@ class ExplorationRoutingTests(WorkflowTestCase):
         quota_free, quota_input = snapshots[0]["baseInput"], snapshots[1]["baseInput"]
         self.assertNotIn("exploration", quota_free)
         self.assertEqual(quota_input["exploration"], {"quota": True})
-        self.assertNotIn("preferredBuddyId", quota_free["outputSchema"]["properties"])
-        self.assertEqual(sorted(quota_input["outputSchema"]["required"]),
-                         ["buddyId", "domainNodeId", "evidence", "note", "preferredBuddyId",
-                          "reselected", "taskType"])
-        self.assertNotIn('"exploration"', router.render_prompt(quota_free))
-        self.assertIn('"exploration":{"quota":true}', router.render_prompt(quota_input))
+        self.assertNotIn("outputSchema", quota_free)
+        self.assertEqual(sorted(router_selection.answer_schema(quota_input["routingMode"], exploration=True)["required"]),
+                         ["buddyId", "domainNodeId", "evidence", "note", "preferredBuddyId", "taskType"])
+        self.assertNotIn('"exploration"', render_selection_prompt(quota_free))
+        self.assertIn('"exploration":{"quota":true}', render_selection_prompt(quota_input))
 
     def test_the_default_interval_is_five_and_null_turns_exploration_off(self):
         board = self.board()
@@ -179,12 +181,12 @@ class ExplorationRoutingTests(WorkflowTestCase):
         self.assertEqual(self.route_state(board, second)[0]["exploration"], "quota-kept")
         claim = self.router_claim(board, second)
         self.assertEqual(claim["claim"]["decisionInput"]["exploration"], {"quota": True})
-        self.assertEqual(claim["claim"]["decisionInput"]["domainNodes"], [
-            {"nodeId": "concurrency", "name": "Concurrency", "parentId": "systems"},
-            {"nodeId": "ipc", "name": "IPC", "parentId": "systems"},
-            {"nodeId": "systems", "name": "Systems", "parentId": None}])
+        self.assertEqual(frozen_input(board, claim["claim"]["decisionInput"])["domainNodes"], [
+            {"nodeId": "concurrency", "name": "Concurrency", "definition": "Concurrency expertise", "parentId": "systems"},
+            {"nodeId": "ipc", "name": "IPC", "definition": "IPC expertise", "parentId": "systems"},
+            {"nodeId": "systems", "name": "Systems", "definition": "Systems expertise", "parentId": None}])
         self.select(board, claim, quota_decision(
-            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True, domain_node_id="ipc"))
+            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, domain_node_id="ipc"))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["buddyId"], SECOND_BUDDY_ID)
@@ -212,7 +214,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         second = self.routed(board, "quota")
         claim = self.router_claim(board, second)
         self.select(board, claim, quota_decision(
-            preferred=BUDDY_ID, buddy_id=THIRD_BUDDY_ID, reselected=True, domain_node_id="ipc"))
+            preferred=BUDDY_ID, buddy_id=THIRD_BUDDY_ID, domain_node_id="ipc"))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["buddyId"], THIRD_BUDDY_ID)
@@ -231,7 +233,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         second = self.routed(board, "quota")
         claim = self.router_claim(board, second)
         self.select(board, claim, quota_decision(
-            preferred=SECOND_BUDDY_ID, buddy_id=BUDDY_ID, reselected=True, domain_node_id="ipc"))
+            preferred=SECOND_BUDDY_ID, buddy_id=BUDDY_ID, domain_node_id="ipc"))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["reason"]["code"], "router-exploration-out-of-bounds")
@@ -254,7 +256,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         accepted = self.routed(board, "quota-accepted")
         claim = self.router_claim(board, accepted)
         self.select(board, claim, quota_decision(
-            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True))
+            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID))
         decision = board.call("selection_get", {"decisionId": accepted["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["buddyId"], SECOND_BUDDY_ID)
@@ -263,7 +265,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         refused = self.routed(board, "quota-refused")
         claim = self.router_claim(board, refused, claim_id="router-2")
         self.select(board, claim, quota_decision(
-            preferred=SECOND_BUDDY_ID, buddy_id=BUDDY_ID, reselected=True))
+            preferred=SECOND_BUDDY_ID, buddy_id=BUDDY_ID))
         decision = board.call("selection_get", {"decisionId": refused["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["reason"]["code"], "router-exploration-out-of-bounds")
@@ -276,7 +278,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         second = self.routed(board, "quota")
         claim = self.router_claim(board, second)
         self.select(board, claim, quota_decision(
-            preferred=BUDDY_ID, buddy_id=BUDDY_ID, reselected=False))
+            preferred=BUDDY_ID, buddy_id=BUDDY_ID))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["buddyId"], BUDDY_ID)
@@ -310,50 +312,19 @@ class ExplorationRoutingTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (SECOND_BUDDY_ID,))
         self.select(board, claim, quota_decision(
-            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True))
+            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"],
                                                 "includeAudit": True})["decision"]
         self.assertTrue(decision["requested"].get("selectionRetry"))
         self.assertEqual(decision["input"]["exploration"], {"quota": True})
-        self.assertIn("preferredBuddyId", decision["input"]["outputSchema"]["properties"])
+        self.assertEqual(decision["input"]["protocolVersion"], 20)
+        self.assertNotIn("outputSchema", decision["input"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT exploration FROM workflow_routes WHERE decision_id=?",
                                                 (second["routing"]["decisionId"],)).fetchone()[0],
                              "quota-kept")
 
-    def test_a_quota_answer_may_only_reselect_or_keep_the_preferred_buddy(self):
-        candidates = [BUDDY_ID, SECOND_BUDDY_ID]
-        for answer in (
-                quota_decision(preferred=BUDDY_ID, buddy_id=None, reselected=True),
-                quota_decision(preferred=BUDDY_ID, buddy_id=BUDDY_ID, reselected=True),
-                quota_decision(preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=False),
-                {**quota_decision(preferred=BUDDY_ID, buddy_id=BUDDY_ID, reselected=False),
-                 "preferredBuddyId": "outsider"},
-                {key: value for key, value in
-                 quota_decision(preferred=BUDDY_ID, buddy_id=BUDDY_ID, reselected=False).items()
-                 if key != "reselected"},
-        ):
-            with self.subTest(answer=answer), self.assertRaises(BoardError) as failure:
-                router.validate_answer(answer, candidates, "review", domain_node_ids=["ipc"],
-                                       exploration=True)
-            self.assertIn(failure.exception.code, ("answer-shape", "router-out-of-bounds"))
-        kept = quota_decision(preferred=BUDDY_ID, buddy_id=BUDDY_ID, reselected=False, domain_node_id="ipc")
-        self.assertEqual(router.validate_answer(kept, candidates, "review",
-                                                domain_node_ids=["ipc"], exploration=True), kept)
-        moved = quota_decision(preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True,
-                               domain_node_id="ipc")
-        self.assertEqual(router.validate_answer(moved, candidates, "review",
-                                                domain_node_ids=["ipc"], exploration=True), moved)
-        # Without a quota the two fields stay outside the Schema entirely.
-        without = {key: value for key, value in kept.items()
-                   if key not in ("preferredBuddyId", "reselected")}
-        self.assertEqual(router.validate_answer(without, candidates, "review",
-                                                domain_node_ids=["ipc"]), without)
-        with self.assertRaises(BoardError) as failure:
-            router.validate_answer({**without, "reselected": False}, candidates, "review",
-                                   domain_node_ids=["ipc"])
-        self.assertEqual(failure.exception.code, "answer-shape")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_quota_model_schema_has_no_redundant_reselection_field(self):
+        schema = router_selection.answer_schema("review", exploration=True)
+        self.assertIn("preferredBuddyId", schema["required"])
+        self.assertNotIn("reselected", schema["properties"])

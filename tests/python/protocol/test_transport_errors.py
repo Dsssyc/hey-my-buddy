@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from c_two.error import ClientCallResource, ContractMismatch, CoreError
+from c_two.error import CCError, ContractMismatch, CoreError, ErrorCode
 
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import transport
@@ -17,12 +17,15 @@ CLEAR_SHUTDOWN = {'completed': True, 'runtime_barrier_error': None, 'route_close
                   'ipc_client_close_error': None, 'relay_errors': [], 'route_outcomes': []}
 
 
-def core_failure(kind: str | None) -> CoreError:
+def core_failure(kind: str | None, *, phase: str | None = None) -> CoreError:
     failure = CoreError('transport', 'native connection failed')
     failure.transport_kind = 'ipc'
     failure.io_kind = kind
     failure.raw_os_error = errno.EACCES if kind == 'permission_denied' else errno.ENOENT
     failure.io_operation = 'connect'
+    # The dispatch phase is a read-only property whose backing field init writes.
+    if phase is not None:
+        failure._transport_phase = phase
     return failure
 
 
@@ -95,18 +98,17 @@ class StructuredRpcFailureTests(unittest.TestCase):
     def test_client_call_keeps_its_wrapped_core_failure(self):
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
         for kind, phase, code in (
-                (None, 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                (None, 'dispatch_uncertain', 'C_TWO_CLIENT_CALLING_RESOURCE'),
                 ('not_found', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
-                ('not_found', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('not_found', 'dispatch_uncertain', 'C_TWO_CLIENT_CALLING_RESOURCE'),
                 ('connection_refused', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
-                ('connection_refused', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('connection_refused', 'dispatch_uncertain', 'C_TWO_CLIENT_CALLING_RESOURCE'),
                 ('permission_denied', 'pre_dispatch', 'LAUNCH_ACCESS_DENIED'),
-                ('other', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE')):
+                ('other', 'dispatch_uncertain', 'C_TWO_CLIENT_CALLING_RESOURCE')):
             with self.subTest(kind=kind):
-                cause = core_failure(kind)
-                cause.transport_phase = phase
+                cause = core_failure(kind, phase=phase)
                 cause.details.update({'route': 'control', 'stage': 'inner'})
-                error = ClientCallResource(str(cause), details={'stage': 'outer'})
+                error = CCError(ErrorCode.ClientCallingResource, str(cause), details={'stage': 'outer'})
                 error.__cause__ = cause
                 error.io_operation = 'bind'
                 service = Mock()
@@ -126,11 +128,10 @@ class StructuredRpcFailureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'state'
             directory.mkdir(mode=0o700)
-            cause = core_failure(None)
-            cause.transport_phase = 'dispatch_uncertain'
+            cause = core_failure(None, phase='dispatch_uncertain')
             cause.raw_os_error = None
             cause.io_operation = None
-            torn = ClientCallResource(str(cause))
+            torn = CCError(ErrorCode.ClientCallingResource, str(cause))
             torn.__cause__ = cause
             calls = []
 
@@ -154,26 +155,24 @@ class StructuredRpcFailureTests(unittest.TestCase):
                               side_effect=AssertionError('autostart must not enter cold-start preflight')) as preflight, \
                  self.assertRaises(transport.ServiceError) as autostart_caught:
                 transport._ensure_service(directory)
-            self.assertEqual(autostart_caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            self.assertEqual(autostart_caught.exception.code, 'C_TWO_CLIENT_CALLING_RESOURCE')
             preflight.assert_not_called()
 
-            other = core_failure('other')
-            other.transport_phase = 'dispatch_uncertain'
-            unclassified = ClientCallResource(str(other))
+            other = core_failure('other', phase='dispatch_uncertain')
+            unclassified = CCError(ErrorCode.ClientCallingResource, str(other))
             unclassified.__cause__ = other
             with patch.object(transport, '_read_endpoint', return_value=endpoint), \
                  patch.object(transport.private_dirs, 'linked', return_value=True), \
                  patch.object(transport, '_request', side_effect=transport.local_rpc_error(unclassified)), \
                  self.assertRaises(transport.ServiceError) as caught:
                 transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
-            self.assertEqual(caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            self.assertEqual(caught.exception.code, 'C_TWO_CLIENT_CALLING_RESOURCE')
             self.assertEqual(caught.exception.details['io_kind'], 'other')
 
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
         # C-Two rejects a Windows peer's identity before sending bytes.
         # That permission denial has no OS errno and is not an absent listener.
-        failure = core_failure('permission_denied')
-        failure.transport_phase = 'pre_dispatch'
+        failure = core_failure('permission_denied', phase='pre_dispatch')
         failure.raw_os_error = None
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
         with tempfile.TemporaryDirectory() as temporary:
@@ -327,9 +326,9 @@ class PreflightFailureTests(unittest.TestCase):
     def test_public_runtime_probe_cleans_coordination_files_and_leaves_default_domain(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            before = transport.cc.local_endpoint_context()
+            before = transport.cc.endpoint.local_endpoint_context()
             transport._probe_local_ipc(root)
-            after = transport.cc.local_endpoint_context()
+            after = transport.cc.endpoint.local_endpoint_context()
             self.assertEqual((after.platform, after.namespace_id, after.root),
                              (before.platform, before.namespace_id, before.root))
             self.assertEqual(list(root.iterdir()), [])

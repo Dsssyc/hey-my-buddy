@@ -18,7 +18,9 @@ import hmac
 from typing import Callable
 
 from ...json_codec import canonical_json, decode_strict_json
+from ...protocol.snapshot_query import MAX_QUERY_RESULT_BYTES
 from ...protocol.schemas import MAX_ANSWER_BYTES, MAX_INQUIRIES_PER_RUN as MAX_INQUIRIES, MAX_QUESTION_BYTES
+from ...protocol.tool_evidence import TOOL_EVIDENCE_UNVERIFIED
 from ...protocol.turn_output import MAX_OUTCOME_BYTES, TURN_OUTPUT_VERSION
 
 #: Inquiry budgets come from the board operation contract; both native bridges
@@ -272,3 +274,114 @@ def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
         raise
     except (ValueError, TypeError, KeyError, RecursionError):
         raise ReceiptError("invalid-inquiry-receipt", f"the {kind} receipt was malformed") from None
+
+
+SNAPSHOT_MCP_SERVER_NAME = "hey_my_buddy_snapshot"
+MAX_SNAPSHOT_RESULT_BYTES = MAX_QUERY_RESULT_BYTES
+_SNAPSHOT_ERROR_PREFIXES = ("Error: ", "MCP tool returned an error:\n")
+
+
+def snapshot_digest(value: object) -> str:
+    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+
+
+def sign_snapshot_reply(configuration: dict, row: dict, response: dict) -> dict:
+    """Sign a reply and its exact delivery claim as separate facts."""
+    receipt = {
+        "version": 1,
+        "identity": configuration["identity"],
+        "inputSha256": configuration["inputSha256"],
+        "toolName": row["toolName"],
+        "receiptSeq": row["receiptSeq"],
+        "status": "ok" if row["ok"] else "error",
+        "coverageDigest": snapshot_digest(row["coverage"]),
+        "argsDigest": row["argsDigest"],
+        "responseDigest": snapshot_digest(response),
+    }
+    return {"response": response, "receipt": {**receipt, "signature": sign_receipt(receipt, configuration["key"])}}
+
+
+def _snapshot_transport(raw: object) -> tuple[str, bool | None]:
+    """Unwrap only the native result forms observed for snapshot queries."""
+    failed = None
+    if isinstance(raw, dict):
+        flags = {"success", "is_error", "isError"} & raw.keys()
+        if len(flags) > 1 or any(type(raw[flag]) is not bool for flag in flags):
+            raise ValueError("invalid snapshot result status")
+        if "contentItems" in raw:
+            items = raw["contentItems"]
+            content_type = "inputText"
+            failed = not raw["success"]
+        elif "content" in raw:
+            items = raw["content"]
+            content_type = "text"
+            if "is_error" in raw:
+                failed = bool(raw["is_error"])
+            elif "isError" in raw:
+                failed = bool(raw["isError"])
+            elif "success" in raw:
+                failed = (not raw["success"] or isinstance(items, str)
+                          and items.startswith(_SNAPSHOT_ERROR_PREFIXES[1]))
+        else:
+            raise ValueError("unknown snapshot result wrapper")
+        if isinstance(items, list):
+            if len(items) != 1 or items[0]["type"] != content_type:
+                raise ValueError("expected one snapshot text result")
+            raw = items[0]["text"]
+        else:
+            raw = items
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_SNAPSHOT_RESULT_BYTES + MAX_TOOL_REFUSAL_PREFIX_BYTES:
+        raise ValueError("expected a bounded snapshot text result")
+    for prefix in _SNAPSHOT_ERROR_PREFIXES:
+        if raw.startswith(prefix):
+            if failed is False:
+                raise ValueError("successful snapshot wrapper carries an error prefix")
+            return raw[len(prefix):], True
+    return raw, failed
+
+
+def snapshot_result_failed(raw: object) -> bool | None:
+    """The transport's own failure conclusion for one native result form.
+
+    The native drivers feed their observed snapshot tool result through the
+    same unwrapping rule the verifier applies, so the ``ok`` fact they retain
+    can never disagree with the receipt status the ledger signed. ``None``
+    means the form carries no status at all; an unusable form is also ``None``
+    and fails verification later on its own.
+    """
+    try:
+        return _snapshot_transport(raw)[1]
+    except ValueError:
+        return None
+
+
+def verify_snapshot_reply(raw: object, configuration: dict, tool_name: str, *, ok: bool) -> dict:
+    """Verify one reply. The ledger verifier separately consumes its sequence."""
+    try:
+        text, failed = _snapshot_transport(raw)
+        envelope = decode_strict_json(text)
+        if set(envelope) != {"response", "receipt"}:
+            raise ValueError
+        receipt = dict(envelope["receipt"])
+        signature = receipt.pop("signature")
+        if (not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(receipt, configuration["key"]))
+                or set(receipt) != {"version", "identity", "inputSha256", "toolName", "receiptSeq",
+                                    "status", "coverageDigest", "argsDigest", "responseDigest"}
+                or type(receipt["version"]) is not int or receipt["version"] != 1
+                or receipt["identity"] != configuration["identity"]
+                or receipt["inputSha256"] != configuration["inputSha256"]
+                or receipt["toolName"] != tool_name
+                or type(receipt["receiptSeq"]) is not int or receipt["receiptSeq"] < 1
+                or type(ok) is not bool
+                or receipt["status"] != ("ok" if ok else "error")
+                or (failed is not None and failed == ok)
+                or not all(_valid_question_sha(receipt[field])
+                           for field in ("coverageDigest", "argsDigest", "responseDigest"))
+                or receipt["responseDigest"] != snapshot_digest(envelope["response"])):
+            raise ValueError
+        response = envelope["response"]
+        if not isinstance(response, dict) or set(response) != ({"data"} if ok else {"error"}):
+            raise ValueError
+        return receipt
+    except (ValueError, KeyError, TypeError, IndexError, RecursionError):
+        raise ReceiptError(TOOL_EVIDENCE_UNVERIFIED, "Snapshot reply failed its signature, status or attempt binding") from None

@@ -7,9 +7,11 @@ export function useTimelineGestures(
   zoomAt: (factor: number, clientX: number) => void,
   fit: () => void,
   wholeWheel = false,
+  preview?: { element: HTMLElement | null; reveal: () => void },
 ) {
-  const callbacks = useRef({ zoomAt, fit });
-  callbacks.current = { zoomAt, fit };
+  const callbacks = useRef({ zoomAt, fit, reveal: preview?.reveal });
+  callbacks.current = { zoomAt, fit, reveal: preview?.reveal };
+  const previewElement = preview?.element;
   useEffect(() => {
     if (!viewport || !ruler) return;
     let pinchDistance: number | null = null;
@@ -20,7 +22,9 @@ export function useTimelineGestures(
         || !(event.ctrlKey || wholeWheel || ruler.contains(event.target as Node))) return;
       event.preventDefault();
       const delta = event.deltaY || event.deltaX;
-      if (delta !== 0) callbacks.current.zoomAt(Math.exp(-Math.max(-400, Math.min(400, delta)) * .002), event.clientX);
+      if (delta === 0) return;
+      if (event.currentTarget === previewElement) callbacks.current.reveal?.();
+      callbacks.current.zoomAt(Math.exp(-Math.max(-400, Math.min(400, delta)) * .002), event.clientX);
     };
     const distance = (touches: TouchList) => Math.hypot(
       touches[0]!.clientX - touches[1]!.clientX,
@@ -58,6 +62,7 @@ export function useTimelineGestures(
     const onDoubleClick = (event: MouseEvent) => {
       if (ruler.contains(event.target as Node)) { event.preventDefault(); callbacks.current.fit(); }
     };
+    previewElement?.addEventListener("wheel", onWheel, { passive: false });
     viewport.addEventListener("wheel", onWheel, { passive: false });
     viewport.addEventListener("touchstart", onTouchStart, { passive: true });
     viewport.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -65,6 +70,7 @@ export function useTimelineGestures(
     viewport.addEventListener("touchcancel", onTouchCancel);
     viewport.addEventListener("dblclick", onDoubleClick);
     return () => {
+      previewElement?.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("touchstart", onTouchStart);
       viewport.removeEventListener("touchmove", onTouchMove);
@@ -72,5 +78,5 @@ export function useTimelineGestures(
       viewport.removeEventListener("touchcancel", onTouchCancel);
       viewport.removeEventListener("dblclick", onDoubleClick);
     };
-  }, [viewport, ruler, wholeWheel]);
+  }, [viewport, ruler, wholeWheel, previewElement]);
 }

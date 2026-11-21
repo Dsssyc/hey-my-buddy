@@ -92,7 +92,7 @@ class CodexSchemaTests(unittest.TestCase):
         expected = {
             "codex": ("codex", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                       "permission:none", "permission:web", "permission:read", "permission:write", "permission:full"),
-            "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:web", "permission:read", "permission:write", "permission:full"),
+            "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:none", "permission:web", "permission:read", "permission:write", "permission:full"),
             "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                     "permission:none", "permission:web", "permission:read", "permission:write", "permission:full"),
             "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
@@ -115,7 +115,7 @@ class CodexSchemaTests(unittest.TestCase):
     def test_permission_levels_declare_enforcement(self):
         expected = {
             "codex": {"none": "convention", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
-            "claude": {"web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "claude": {"none": "enforced", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
             "dsh": {"none": "enforced", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
             "zcode": {"none": "enforced", "read": "convention", "write": "convention", "full": "enforced"},
         }

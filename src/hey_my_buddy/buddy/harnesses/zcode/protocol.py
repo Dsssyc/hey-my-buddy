@@ -53,11 +53,13 @@ NATIVE_EVENT_TYPES = frozenset({
     "message.upserted", "message.removed", "part.started", "part.delta",
     "part.upserted", "part.removed", "model.streaming", "permission.requested",
     "userInput.requested", "session.created", "session.resumed", "session.updated",
-    "session.titleUpdated", "session.closed",
+    "session.titleUpdated", "session.closed", "streamRecovery.updated",
 })
 NATIVE_NOTIFICATION_METHODS = frozenset({
     "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
-    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event", "v4/conversation/frame",
+    "session/event", "session/lifecycle/changed", "state.updated",
+    "computer-use/operation-event", "v4/telemetry/event", "v4/telemetry/model-request-metrics",
+    "v4/conversation/frame", "v4/conversation/contextCompositionChanged",
 })
 
 
@@ -715,6 +717,14 @@ class NativeConnection:
         if "id" in message and "method" in message:
             if message["method"] == "session/requestRuntimePreferences":
                 self.answer_runtime_preferences(message)
+                return
+            if message["method"] == "interaction/requestOfficialMcpAuthHeaders":
+                # ZCode CLI 0.17.1 requests bundled official-plugin MCP auth
+                # headers during session/create even in a no-tool session. No
+                # Host answer exists (ADR-030), so refuse with -32601 and
+                # retain unsupported evidence instead of a denied interaction.
+                self.unsupported_request(message)
+                self.send({"id": message["id"], "error": {"code": -32601, "message": "This host does not support this request"}})
                 return
             if self.no_tools:
                 # Every native interaction in a no-tool call — provider headers

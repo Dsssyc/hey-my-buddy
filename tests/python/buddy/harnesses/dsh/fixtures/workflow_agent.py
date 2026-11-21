@@ -35,6 +35,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -231,6 +232,17 @@ def main() -> int:
     # derived from session/new instead.
     parser.set_defaults(prompt_mode="micro-task")
     args = parser.parse_args()
+    if args.dump_default_config:
+        log_path = Path(args.log) if args.log else Path(args.fixture_root) / "fixture-agent-inventory.log"
+        native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
+        if not fake_agent.check_private_home(log_path, Path(args.fixture_root)):
+            return 3
+        if args.inventory_failure:
+            print("synthetic-private-secret", file=sys.stderr)
+            return 1
+        print(args.inventory_output if args.inventory_output is not None else
+              "\n".join("- id: " + row + "\n  name: fake" for row in fake_agent.TOOL_ROWS))
+        return 0
     if not args.log:
         args.log = str(Path(args.patch).parent / "fixture-agent.log")
     log_path = Path(args.log)

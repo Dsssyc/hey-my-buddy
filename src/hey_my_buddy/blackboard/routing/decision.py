@@ -23,8 +23,8 @@ from ...protocol import schemas
 from ...protocol.workspace_manifest import manifest_ref
 from ...protocol.task_types import TASK_TYPES
 from ..evaluation import user_policy
-from . import selection_policy, router, router_sequence, router_failover, evidence
-from ...protocol import tool_evidence
+from . import evidence, router, router_failover, router_sequence, selection_policy, snapshot_files
+from ...protocol import router_selection, tool_evidence
 from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ..store.db import canonical_json, sha256_text
@@ -55,10 +55,8 @@ _ROW_COLUMNS = (
 )
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
-ANSWER_VALIDATION_CODES = frozenset({
-    "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
-    "answer-unexpected-field",
-})
+ANSWER_VALIDATION_CODES = (router_selection.FORMAT_ERROR_CODES | router_selection.HARD_BOUND_CODES
+                           | {"answer-not-json", "answer-unexpected-field"})
 #: The exploration counter, derived from the recorded routes and served by the
 #: ``workflow_routes(exploration)`` index: the greatest route row carrying a
 #: quota, then the ``counted`` routes after it. Every step is an index seek on
@@ -70,14 +68,6 @@ SELECT COUNT(*) FROM workflow_routes
    COALESCE((SELECT max(rowid) FROM workflow_routes WHERE exploration='quota-reselected'), 0))
 """
 
-
-def _first_level_domain(nodes: list[dict], node_id: str) -> str:
-    """The first-level ancestor of one node, from a frozen domain tree alone."""
-    by_id = {node["nodeId"]: node for node in nodes}
-    current = node_id
-    while by_id[current]["parentId"] is not None:
-        current = by_id[current]["parentId"]
-    return current
 
 def decision_spec(spec: dict) -> dict | None:
     """The decision descriptor of a task specification, when this is a decision task."""
@@ -237,11 +227,7 @@ class DecisionCoordinator:
         include_preferences: bool,
         now: str,
     ) -> dict:
-        """The complete bounded table slice for one request — never a silent truncation.
-
-        Every legal candidate and preference is included. The final
-        dispatch checks its byte ceiling without dropping entries.
-        """
+        """Freeze every legal candidate, preference and active domain for one request."""
         buddy_ids = [row["buddy_id"] for row in buddies]
         preferences: list[dict] = []
         if include_preferences:
@@ -254,9 +240,9 @@ class DecisionCoordinator:
             # A node's parent is its own unless that parent was merged away, in
             # which case it follows the merge target, as the statistics rollup
             # does; the tree is complete, so the first level derives from it.
-            "domainNodes": [{"nodeId": row["node_id"], "name": row["name"], "parentId": row["parent_id"]}
+            "domainNodes": [{"nodeId": row["node_id"], "name": row["name"], "definition": row["definition"], "parentId": row["parent_id"]}
                             for row in connection.execute(
-                                "SELECT node_id,name,"
+                                "SELECT node_id,name,definition,"
                                 " COALESCE((SELECT merged.merged_into_id FROM domain_nodes merged"
                                 "           WHERE merged.node_id = domain_nodes.parent_id),"
                                 "          parent_id) AS parent_id"
@@ -268,10 +254,7 @@ class DecisionCoordinator:
         table = self._table_input(
             connection, buddies=candidates, include_preferences=True, now=now
         )
-        # The program-computed preference truth for this request. It is request-local
-        # (it depends on this candidate slice and the user's published prefer entries),
-        # so it is part of the variable suffix the model sees after the stable table
-        # snapshot. Task-local routing preferences are retired Host input (ADR-021).
+        # Freeze the program's preference truth for this candidate set.
         table["policyFacts"] = selection_policy.policy_facts(
             buddies=table["buddies"],
             prefer_buddy_ids=[
@@ -279,7 +262,8 @@ class DecisionCoordinator:
             ],
             hard_constraints=hard_constraints or {},
         )
-        return {"operation": "select", "requestId": request_id, "task": task_text,
+        return {"operation": "select", "protocolVersion": router_selection.VERSION,
+                "requestId": request_id, "task": task_text,
                 "expectedSeconds": expected_seconds, "project": project, **table}
 
     # -- request operations --------------------------------------------------
@@ -340,7 +324,7 @@ class DecisionCoordinator:
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "modelResponseWaitSeconds": None, "routerCalled": False}
             expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
-            snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
+            snapshot: dict = {"facts": facts, "baseInput": {"protocolVersion": router_selection.VERSION, "task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
@@ -375,11 +359,6 @@ class DecisionCoordinator:
                 # Review routing includes the frozen execution workspace.
                 if facts["routingMode"] != "fast":
                     base_input["executionWorkspace"] = request.get("executionWorkspace")
-                if facts["routingMode"] is not None:
-                    base_input["outputSchema"] = router.answer_schema(
-                        [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"],
-                        domain_node_ids=[node["nodeId"] for node in base_input["domainNodes"]],
-                        exploration=quota)
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 if facts["routingMode"] is None or resolution.buddy is None:
@@ -654,7 +633,7 @@ class DecisionCoordinator:
         from .router_history import router_state
         state = router_state(connection, buddy_id=dispatch["buddyId"],
                              interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
-        if state["retryInProgress"]:
+        if not state["inSkipWindow"] and state["retryInProgress"]:
             # One in-flight retry per buddy: this request queues behind it without
             # consuming a slot and without recording anything about the item.
             return "router-retry-in-progress"
@@ -706,19 +685,19 @@ class DecisionCoordinator:
             return descriptor["document"]
         row = self._row(connection, descriptor["decisionId"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
-        document = dispatch["document"]
+        digest = sha256_text(canonical_json(dispatch["document"]))
+        reference = snapshot_files.publish_round(self.board, connection, row["decision_id"], dispatch["round"])
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
-            document=document, now=now,
+            digest=digest, now=now,
         )
         # The attempt's Router binding and its ``router.claimed`` fact commit in
         # this same claim transaction: one atomic dispatch-to-attempt binding.
         router_sequence.record_claim(
             connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
-        return document
+        return router_sequence.execution_document(dispatch, reference, digest)
 
-    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
-        digest = sha256_text(canonical_json(document))
+    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, digest: str, now: str) -> None:
         connection.execute(
             "UPDATE decision_requests SET attempt_id=?, generation=?, updated_at=? WHERE decision_id=?",
             (attempt_id, generation, now, row["decision_id"]),
@@ -932,7 +911,7 @@ class DecisionCoordinator:
             connection.execute(
                 "INSERT INTO routing_judgments(decision_id,domain_node_id,task_type) VALUES(?,?,?)",
                 (row["decision_id"], judgment["domainNodeId"], judgment["taskType"]))
-            if judgment.get("reselected") is True:
+            if router_selection.reselected(judgment):
                 # A quota-carrying routing that reselected records it once, in
                 # the same transaction as its published answer.
                 connection.execute(
@@ -983,21 +962,20 @@ class DecisionCoordinator:
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
                                                                "modelResponseWaitSeconds": None, "routerCalled": False},
-                                                     "baseInput": {"task": request["task"]}, "inspections": []},
+                                                     "baseInput": {"protocolVersion": router_selection.VERSION, "task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
-            connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
-                               (canonical_json(request), row["decision_id"]))
+            connection.execute(
+                "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
+                " output_json=NULL,selected_json=NULL,requested_json=? WHERE decision_id=?",
+                (canonical_json(request), row["decision_id"]),
+            )
+            current = self._row(connection, row["decision_id"])
             if candidates:
-                connection.execute(
-                    "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
-                    " output_json=NULL,selected_json=NULL,requested_json=? WHERE decision_id=?",
-                    (canonical_json(request), row["decision_id"]),
-                )
-                self._adopt_sole_candidate(connection, self._row(connection, row["decision_id"]),
+                self._adopt_sole_candidate(connection, current,
                                            candidate=candidates[0], request=request, now=now)
             else:
                 no_candidates = self._no_candidates_reason(cooling_buddies) if cooling_buddies else reason
-                self._finish(connection, row, status="needs-host", now=now,
+                self._finish(connection, current, status="needs-host", now=now,
                              reason=no_candidates, output={"code": no_candidates["code"]})
             return
         resolution = router.current_router(connection, now=now)
@@ -1020,26 +998,24 @@ class DecisionCoordinator:
             document["executionWorkspace"] = (
                 manifest_ref(manifest) if row["request_form"] == "archived-inline-v1" and manifest is not None
                 else manifest)
-        if resolution.facts["routingMode"] is not None:
-            document["outputSchema"] = router.answer_schema(
-                [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"],
-                domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
-                exploration=quota)
         next_round = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM router_requests WHERE decision_id=?",
                                         (row["decision_id"],)).fetchone()[0]
         router_sequence.freeze_request(connection, row["decision_id"],
                                        snapshot={"facts": resolution.facts, "baseInput": document,
                                                  "inspections": [dict(entry) for entry in resolution.inspections]},
                                        now=now, round=next_round)
-        connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
-                           (canonical_json(request), row["decision_id"]))
+        connection.execute(
+            "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
+            " requested_json=? WHERE decision_id=?",
+            (canonical_json(request), row["decision_id"]),
+        )
+        self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
         if resolution.buddy is None:
             problem = resolution.problem
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
                          reason=problem,
                          output={"code": problem["code"]})
             return
-        self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
         _task_id, problem = self._queue_router_dispatch(connection, self._row(connection, row["decision_id"]), resolution=resolution, now=now)
         if problem is not None:
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
@@ -1065,7 +1041,10 @@ class DecisionCoordinator:
             "attemptId": row["decision_attempt_id"],
             "generation": row["decision_generation"],
         }
-        if not isinstance(evidence, dict) or evidence.get("binding") != expected_binding:
+        requires_session_evidence = (document.get("kind") == "maintain"
+                                     or document.get("protocolVersion") == router_selection.VERSION)
+        if (not isinstance(evidence, dict) or evidence.get("binding") != expected_binding
+                or (requires_session_evidence and evidence.get("version") != tool_evidence.TOOL_EVIDENCE_VERSION)):
             return {"code": unverified}
         roots = evidence.get("nativeIdentity")
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
@@ -1075,39 +1054,6 @@ class DecisionCoordinator:
         if judged is None:
             return None
         return {"code": judged}
-
-    @staticmethod
-    def _exploration_problem(document: dict, decision: dict) -> dict | None:
-        """The quota's program fact: a reselection is less sampled than the preferred kind.
-
-        Candidates are compared as kinds (harness, modelId, effort) at the level
-        the frozen input states: the first-level domain ancestor of the answer's
-        judged node — traced through the input's own parent links — or the
-        overall statistics when the judgment is unclassified. Sample counts
-        come from the same input's per-kind statistics, never a live table; a
-        kind absent from that level has no samples there. The reselected kind
-        must hold fewer samples than the preferred kind.
-        """
-        if not decision["reselected"]:
-            return None
-        if decision["domainNodeId"] is None:
-            def level_samples(candidate):
-                return (candidate.get("statistics") or {}).get("overall", {}).get("samples", 0)
-        else:
-            level = _first_level_domain(document["domainNodes"], decision["domainNodeId"])
-
-            def level_samples(candidate):
-                return ((candidate.get("statistics") or {}).get("byDomain") or {}).get(level, {}).get("samples", 0)
-        samples = {}
-        for candidate in document["buddies"]:
-            samples.setdefault((candidate["harness"], candidate["modelId"], candidate["effort"]), level_samples(candidate))
-        chosen = next(item for item in document["buddies"] if item["buddyId"] == decision["buddyId"])
-        preferred = next(item for item in document["buddies"] if item["buddyId"] == decision["preferredBuddyId"])
-        chosen_kind = (chosen["harness"], chosen["modelId"], chosen["effort"])
-        preferred_kind = (preferred["harness"], preferred["modelId"], preferred["effort"])
-        if not samples[chosen_kind] < samples[preferred_kind]:
-            return {"code": "router-exploration-out-of-bounds", "params": {"bound": "not-less-sampled"}}
-        return None
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, dispatch: dict, output: dict, now: str) -> dict:
         """Check program facts without settling the request or judging the choice."""
@@ -1134,15 +1080,28 @@ class DecisionCoordinator:
         if (not isinstance(stop, dict) or stop.get("shutdownConfirmed") is not True
                 or not isinstance(stop.get("native"), dict) or stop["native"].get("shutdownConfirmed") is not True):
             return refuse("router-stop-unconfirmed")
-        if output.get("status") != "ok":
-            code = output.get("code")
-            code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
-                            and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
+        succeeded = output.get("status") == "ok"
+        code = output.get("code")
+        if succeeded or isinstance(code, str) and code in ANSWER_VALIDATION_CODES:
+            problem = self._tool_evidence_problem(row, document, output)
+            if problem is not None:
+                return refuse(problem["code"])
+            usage = output.get("usage")
+            if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int or usage["elapsedMs"] < 0
+                    or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != output["toolEvidence"]["toolCalls"]):
+                return refuse("router-tool-evidence-unverified")
+        if not succeeded:
+            if (not isinstance(code, str) or not code.strip() or len(code) > 128
+                    or any(ord(c) < 32 or ord(c) == 127 for c in code)):
+                code = "router-no-answer"
             if code == WorkingDirectoryRejected.code:
                 params = WorkingDirectoryRejected.reason_params(output.get("reason"))
                 return refuse(code, changed=True, **params)
+            bound = output.get("bound")
             params = ({"seconds": document["modelResponseWaitSeconds"]} if code == "router-not-responding"
-                      else {"bound": "not-a-candidate"} if code == "router-out-of-bounds" else {})
+                      else {"bound": bound if bound in ("not-a-candidate", "not-an-active-domain") else "not-a-candidate"}
+                      if code == "router-out-of-bounds"
+                      else {"bound": "not-less-sampled"} if code == "router-exploration-out-of-bounds" else {})
             return refuse(code, **params)
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
                        or not isinstance(verification.get("snapshotSha256"), str) or not verification["snapshotSha256"]
@@ -1152,27 +1111,12 @@ class DecisionCoordinator:
             return refuse("router-input-changed")
         if output.get("operation") != "select":
             return refuse("answer-shape")
-        usage = output.get("usage")
-        if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int
-                or usage["elapsedMs"] < 0 or type(usage.get("toolCalls")) is not int or usage["toolCalls"] < 0):
-            return refuse("router-tool-evidence-unverified")
-        problem = self._tool_evidence_problem(row, document, output)
-        if problem is None and usage["toolCalls"] != output["toolEvidence"]["toolCalls"]:
-            problem = {"code": "router-tool-evidence-unverified"}
-        if problem is not None:
-            return refuse(problem["code"])
         buddies = document.get("buddies") or []
-        quota = (document.get("exploration") or {}).get("quota") is True
         try:
-            decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document["routingMode"],
-                                              domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
-                                              exploration=quota)
+            decision = router_selection.validate_answer(output.get("decision"), document)
         except BoardError as failure:
-            return refuse(failure.code, **failure.details)
-        if quota:
-            problem = self._exploration_problem(document, decision)
-            if problem is not None:
-                return refuse(problem["code"], **problem["params"])
+            params = {"bound": failure.details["bound"]} if "bound" in failure.details else {}
+            return refuse(failure.code, **params)
         note, buddy_id = decision["note"], decision["buddyId"]
         if buddy_id is None:
             return {**checked, "answer_valid": True, "abstained": True, "note": note,
@@ -1552,7 +1496,7 @@ class DecisionCoordinator:
                     "attemptId": row["decision_attempt_id"],
                     "generation": row["decision_generation"],
                     "requested": request,
-                    # The exact bounded fields sent to the model, retained for audit.
+                    # The full immutable dispatch, including the query data.
                     "input": input_document,
                     "output": output,
                     # The decision call's own buddy, kept separate from the

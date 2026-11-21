@@ -49,6 +49,21 @@ class StateRootTests(BoardTestCase):
         self.assertTrue(root.is_dir())
         self.assertEqual(state_root.check_state_root(root), root)
 
+    def test_windows_does_not_cache_read_only_failure_and_caches_successful_repair(self):
+        root = self.directory / 'state-to-repair'
+        windows = SimpleNamespace(name='nt', path=os.path, environ=os.environ)
+        refused = BoardError('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE',
+                             path=str(root), aceType=0, aceFlags=16, trusteeKind='everyone')
+        with mock.patch.object(state_root, 'os', windows), \
+                mock.patch.object(windows_files, 'check_state_root', side_effect=[refused, None]) as check:
+            with self.assertRaises(BoardError) as raised:
+                state_root.check_state_root(root, create=False)
+            self.assertIs(raised.exception, refused)
+            self.assertEqual(state_root.check_state_root(root, create=True), root)
+            self.assertEqual(state_root.check_state_root(root, create=False), root)
+            self.assertEqual(state_root.check_state_root(root, create=True), root)
+        self.assertEqual(check.call_args_list, [mock.call(root, create=False), mock.call(root, create=True)])
+
     def test_windows_root_normalizes_dotdot_without_resolving_links(self):
         target = self.directory / 'actual'
         target.mkdir()

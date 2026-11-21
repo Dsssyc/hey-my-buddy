@@ -54,11 +54,12 @@ def settled_events(category, call_id="call-1", identity=None, tool="native-tool"
     ]
 
 
-def collect(events, roots=None, stream_complete=True, binding=BINDING):
-    evidence = tool_evidence.ToolEventEvidence(binding, state_dir=STATE_DIR)
+def collect(events, roots=None, stream_complete=True, binding=BINDING, *, tools=(), verified=()):
+    evidence = tool_evidence.ToolEventEvidence(binding, state_dir=STATE_DIR, session_service_tools=tools)
     for event in events:
         evidence.observe(event)
-    return evidence.finish(list(roots if roots is not None else [IDENTITY]), stream_complete)
+    return evidence.finish(list(roots if roots is not None else [IDENTITY]), stream_complete,
+                           verified_session_calls=verified)
 
 
 def call_rows(package):
@@ -291,7 +292,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_native_ids_are_retained_without_inventing_a_call(self):
-        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR, session_service_tools=[])
         tracker.observe_incomplete("codex", {"toolName": "shell", "phase": "start",
                                              "arguments": {"text": "private body"}})
         package = tracker.finish([IDENTITY], True)
@@ -299,8 +300,8 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "nativeIdentity": {}, "callId": None, "categories": ["execute"], "phases": ["start"],
             "facts": [{"toolName": "shell", "category": "execute"}],
             "consistent": True, "endBeforeStart": False, "incomplete": True,
-            "malformed": True, "belongsToRoot": False,
-         "outcome": "unknown"}])
+            "malformed": True, "belongsToRoot": False, "sessionServiceVerified": False,
+            "outcome": "unknown"}])
         self.assertFalse(package["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -326,8 +327,9 @@ class ToolEventEvidenceTests(unittest.TestCase):
 
     def test_package_carries_exactly_the_fixed_fields_and_digest_file(self):
         package = collect(settled_events("read"))
-        self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
-        self.assertEqual(package["version"], 3)
+        self.assertEqual(set(package), tool_evidence.SESSION_PACKAGE_FIELDS)
+        self.assertEqual(package["version"], 4)
+        self.assertEqual(package["sessionServiceTools"], [])
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [IDENTITY])
         self.assertTrue(package["streamComplete"])
@@ -338,7 +340,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "phases": ["end", "start"], "facts": [{"toolName": "native-tool", "category": "read"}],
             "consistent": True, "endBeforeStart": False,
             "incomplete": False, "malformed": False, "belongsToRoot": True,
-         "outcome": "unknown"}])
+            "sessionServiceVerified": False, "outcome": "unknown"}])
 
     def test_a_settled_call_counts_once_and_raw_high_level_duplicates_collapse(self):
         package = collect(settled_events("read") * 3)
@@ -476,6 +478,110 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events("read")), "none", state_dir=STATE_DIR),
                          tool_evidence.TOOLS_FORBIDDEN)
 
+    def test_verified_session_calls_are_retained_and_allowed_on_none_and_read(self):
+        tool = "mcp__hey_my_buddy_snapshot__query_task"
+        events = settled_events("other", tool=tool, outcome="failure")
+        package = collect(events, tools=[tool], verified=[(canonical_json(IDENTITY), "call-1")])
+        self.assertEqual(package["sessionServiceTools"], [tool])
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual(package["toolSummary"], [{"toolName": tool, "calls": 1, "failed": 1, "unknown": 0}])
+        self.assertTrue(call_rows(package)[0]["sessionServiceVerified"])
+        for permission in ("none", "read"):
+            with self.subTest(permission=permission):
+                self.assertIsNone(tool_evidence.judge_tool_evidence(package, permission, state_dir=STATE_DIR))
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_same_named_service_call_without_verified_binding_is_forbidden(self):
+        tool = "mcp__hey_my_buddy_snapshot__query_task"
+        events = (settled_events("other", tool=tool, outcome="success")
+                  + settled_events("other", call_id="external-call", tool=tool, outcome="success"))
+        package = collect(events, tools=[tool], verified=[(canonical_json(IDENTITY), "call-1")])
+        self.assertEqual(package["toolCalls"], 2)
+        self.assertEqual([row["sessionServiceVerified"] for row in call_rows(package)], [True, False])
+        for permission in ("none", "read"):
+            with self.subTest(permission=permission):
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, permission, state_dir=STATE_DIR),
+                                 tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_receipt_cannot_verify_a_foreign_open_late_or_unobserved_call(self):
+        tool = "query_task"
+        for case in ("foreign", "open", "late", "out-of-order", "unobserved"):
+            with self.subTest(case=case):
+                identity = SECOND_IDENTITY if case == "foreign" else IDENTITY
+                collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR, session_service_tools=[tool])
+                start, end = settled_events("other", identity=identity, tool=tool, outcome="success")
+                if case == "late":
+                    collector.close_root(identity)
+                events = {"open": [start], "out-of-order": [end, start], "unobserved": []}.get(case, [start, end])
+                for event in events:
+                    collector.observe(event)
+                package = collector.finish([IDENTITY], True,
+                                           verified_session_calls=[(canonical_json(identity), "call-1")])
+                self.assertFalse(package["streamComplete"])
+                self.assertFalse(any(row["sessionServiceVerified"] for row in call_rows(package)))
+                expected = tool_evidence.TOOLS_FORBIDDEN if events else tool_evidence.TOOL_EVIDENCE_UNVERIFIED
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=STATE_DIR), expected)
+
+    def test_codex_dynamic_pair_names_the_registered_raw_tool(self):
+        binding = {**BINDING, "harness": "codex"}
+        raw = "query_task"
+        events = (settled_events("other", tool="dynamicToolCall", outcome="success")
+                  + settled_events("other", tool=raw, outcome="success"))
+        verified = [(canonical_json(IDENTITY), "call-1")]
+        package = collect(events, binding=binding, tools=[raw], verified=verified)
+        self.assertTrue(call_rows(package)[0]["consistent"])
+        self.assertEqual(package["toolSummary"], [{"toolName": raw, "calls": 1, "failed": 0, "unknown": 0}])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "none", state_dir=STATE_DIR))
+        for projections, tools in ((events, []), (events, ["query_domains"]),
+                                   (settled_events("other", tool="mcpToolCall") + events[2:], [raw])):
+            with self.subTest(projections=projections, tools=tools):
+                package = collect(projections, binding=binding, tools=tools, verified=verified)
+                self.assertFalse(call_rows(package)[0]["consistent"])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_session_claims_must_be_typed_complete_and_registered(self):
+        tool = "query_task"
+        package = collect(settled_events("other", tool=tool), tools=[tool])
+        row = call_rows(package)[0]
+        for patch, tools in (({"sessionServiceVerified": 1}, [tool]),
+                             ({"sessionServiceVerified": True, "incomplete": True}, [tool]),
+                             ({"sessionServiceVerified": True}, [])):
+            with self.subTest(patch=patch, tools=tools):
+                reference = tool_evidence.write_tool_calls(BINDING, [{**row, **patch}], state_dir=STATE_DIR)
+                forged = {**package, "calls": reference, "sessionServiceTools": tools}
+                self.assertEqual(tool_evidence.judge_tool_evidence(forged, "none", state_dir=STATE_DIR),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+        for tools in (None, [tool, tool], [True]):
+            with self.subTest(tools=tools), self.assertRaises(BoardError):
+                tool_evidence.validate_tool_evidence_package({**package, "sessionServiceTools": tools})
+
+    def test_sealed_version_3_is_read_without_rewriting_its_envelope_or_calls(self):
+        current = collect(settled_events("fetch", tool="web_fetch", outcome="success"))
+        legacy = dict(current, version=3)
+        del legacy["sessionServiceTools"]
+        rows = call_rows(current)
+        del rows[0]["sessionServiceVerified"]
+        legacy["calls"] = tool_evidence.write_tool_calls(BINDING, rows, state_dir=STATE_DIR)
+        stored = native_path(legacy["calls"]["path"])
+        original = stored.read_bytes()
+        self.assertEqual(call_rows(legacy), rows)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(legacy, "web", state_dir=STATE_DIR))
+        self.assertEqual(tool_evidence.judge_tool_evidence(legacy, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        self.assertEqual(stored.read_bytes(), original)
+        self.assertNotIn("sessionServiceTools", legacy)
+
+    def test_unmounted_version_4_web_evidence_requires_the_empty_service_list(self):
+        events = (settled_events("fetch", tool="WebFetch", outcome="success")
+                  + settled_events("fetch", identity=SECOND_IDENTITY, tool="WebFetch", outcome="failure"))
+        package = collect(events, roots=[IDENTITY, SECOND_IDENTITY])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR))
+        del package["sessionServiceTools"]
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
     def test_read_level_allows_read_search_execute_and_network(self):
         for category in ("read", "search", "execute", "fetch"):
             with self.subTest(category=category):
@@ -566,6 +672,39 @@ class JudgeToolEvidenceTests(unittest.TestCase):
             with self.subTest(events=events):
                 package = collect(events, binding=binding)
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR), expected)
+
+    def test_codex_none_allows_code_mode_dispatch_only_when_session_service_mounted(self):
+        binding = {**BINDING, "harness": "codex"}
+        dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
+        query = settled_events("other", call_id="q1", tool="query_task")
+        verified = {(canonical_json(IDENTITY), "q1")}
+        # Mounted snapshot service: complete exec + verified snapshot query passes.
+        mounted = collect(dispatch + query, binding=binding,
+                          tools=("query_task",), verified=verified)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(mounted, "none", state_dir=STATE_DIR))
+        # Unmounted pure none: exec remains strictly forbidden.
+        unmounted = collect(dispatch, binding=binding)
+        self.assertEqual(tool_evidence.judge_tool_evidence(unmounted, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # Non-Codex harnesses never get the Codex code-mode dispatcher allowance.
+        other_harness = collect(dispatch + query, binding=BINDING,
+                                tools=("query_task",), verified=verified)
+        self.assertEqual(tool_evidence.judge_tool_evidence(other_harness, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # Nested forbidden or unverified calls inside exec still fail closed.
+        for label, extra, expected in (
+            ("unverified-query", query, tool_evidence.TOOLS_FORBIDDEN),
+            ("command", settled_events("execute", call_id="nested", tool="commandExecution"),
+             tool_evidence.TOOLS_FORBIDDEN),
+            ("web", settled_events("fetch", call_id="nested", tool="webSearch"),
+             tool_evidence.TOOLS_FORBIDDEN),
+            ("unsettled-exec", [], tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
+        ):
+            with self.subTest(label=label):
+                events = (dispatch[:1] + query) if label == "unsettled-exec" else (dispatch + extra)
+                pkg = collect(events, binding=binding, tools=("query_task",),
+                              verified=verified if label == "unsettled-exec" else ())
+                self.assertEqual(tool_evidence.judge_tool_evidence(pkg, "none", state_dir=STATE_DIR), expected)
 
     def test_every_other_category_is_forbidden_at_read_level(self):
         for category in ("edit", "delete", "move", "switch_mode", "think", "other"):

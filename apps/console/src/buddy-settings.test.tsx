@@ -161,7 +161,7 @@ function fixture(options: Options = {}) {
     macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     storagePlan: vi.fn(async (csrfToken: string) => command("storage_plan", {}, csrfToken)),
     storageApply: vi.fn(),
-    runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null }, installed: null })),
+    publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null }, installed: null })),
   } as unknown as ConsoleApi;
   return { api, command, operations, published };
 }

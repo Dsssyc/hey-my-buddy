@@ -71,5 +71,6 @@
 | 2026-11-06 | [ZCode 有没有只读模式，能不能预先放行黑板自己的工具](2026-11-06-zcode-read-only-mode.md) | 0.61.2 的 ZCode 权限档位（ADR-023） |
 | 2026-11-09 | [DSH 经 ACP 什么时候把模型的输出送出来](2026-11-09-dsh-acp-step-delivery.md) | ADR-021 第 2 条 2026-11-09 的修改：看不到模型开始的 harness 不套开始等待 |
 | 2026-11-10 | [第三层导航：不叠页签栏的做法，与 Router 分区的三个原型](2026-11-10-third-level-navigation.md) | Router 分区里三项工作的放法，待开发者定 |
+| 2026-11-19 | [四个 harness 在不用工具（`none`）下挂载只读快照查询服务的原生探针实测](2026-11-19-router-snapshot-query-probes.md) | ADR-035 Track 0 实测门禁：四家 `none` 隔离级别、`isError` 线协议、Codex `dynamicToolCall` 归因与缓存对比 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。

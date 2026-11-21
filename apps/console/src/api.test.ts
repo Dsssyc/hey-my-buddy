@@ -626,6 +626,19 @@ describe("on-demand running and installed version facts", () => {
     await expect(api.runtimeVersion()).resolves.toEqual(version);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith("/session/api/runtime-version", expect.objectContaining({ credentials: "same-origin", cache: "no-store" }));
   });
+  it("reads published version on its own GET and treats unavailable responses as optional", async () => {
+    const published = { publishedVersion: "0.30.0", checkedAt: "2026-10-09T00:00:00Z" };
+    const signal = new AbortController().signal;
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(published))
+      .mockResolvedValueOnce(Response.json({ error: { code: "HTTP_404" } }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ publishedVersion: 100 }))
+      .mockRejectedValueOnce(new TypeError("offline"));
+    const api = createApi("/session", fetcher as typeof fetch);
+    await expect(api.publishedVersion(signal)).resolves.toEqual(published);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/session/api/published-version", expect.objectContaining({ signal, credentials: "same-origin" }));
+    for (let n = 0; n < 3; n++) await expect(api.publishedVersion()).resolves.toBeNull();
+  });
   it("refuses malformed or missing version facts and propagates session loss", async () => {
     for (const broken of [null, {}, { running: { ...facts, mode: "unknown" }, installed: null },
       { ...version, running: { ...version.running, softwareVersion: "" } },

@@ -35,7 +35,7 @@ function basisOf(ctx: Context, attemptId: string, decisionId: string | null): Ba
  * it and the output it sealed. Reasoning and tool calls belong to the session
  * tab; this overview keeps the inquiries and returned result.
  */
-export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?: ContentTabs }) {
+export function TurnPane({ step, ctx, tabs, session }: { step: Step; ctx: Context; tabs?: ContentTabs; session?: boolean }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
   const span = step.span!;
@@ -74,7 +74,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
   const note = inputFailure ? t(`inputFailure.stage.${inputFailure.stage}`)
     : rejected && rejectionCode ? [t(`providerRejection.${rejectionCode}`), t("turn.rerouted")].join(" · ")
     : notes.length ? <Joined items={notes} /> : undefined;
-  return <Pane tabs={tabs} footer={running && !confirming ? <LiveActivity className="border-t px-6 py-2.5" activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined} title={
+  return <Pane tabs={tabs} footer={running && !confirming ? <LiveActivity footer activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined} title={session ? null :
     <PaneTitle title={t("step.turn", { n: index })}
       state={confirming ? t("state.confirmingStop") : rejected ? t("turn.rejected") : running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}
       tone={confirming ? "hand" : running ? "live" : rejected ? "past" : failed ? "fail" : unknown ? "hand" : "past"}

@@ -3,6 +3,7 @@ from admission import admit_execution
 import json
 from unittest.mock import patch
 
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch, frozen_input
 from hey_my_buddy.errors import BoardError
 
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C
@@ -79,7 +80,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(current_snapshot["facts"]["modelResponseWaitSeconds"],
                              current_snapshot["baseInput"]["modelResponseWaitSeconds"])
         second = self.next_claim(request)
-        self.assertEqual([p["buddyId"] for p in second["decisionInput"]["buddies"]], [A, C])
+        self.assertEqual([p["buddyId"] for p in frozen_input(self.board_, second["decisionInput"])["buddies"]], [A, C])
         self.assertNotEqual(second["task"]["taskId"], first["task"]["taskId"])
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 1)
@@ -184,6 +185,30 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         self.assertEqual(view["routerBuddyIds"], [A, B, C])
         self.assertEqual(view["routingMode"], "fast")
 
+    def test_reroute_preflight_failure_clears_previous_round_dispatch_pointer(self):
+        request, first = self.start(three=True, micro_task=True)
+        # Invalidate B so publication triggers a reroute with 2 remaining candidates (A, C),
+        # while removing all Routers from the configured list so round 2 preflight yields no buddy.
+        self.invalidate(B, "disabled")
+        self.set_settings(ids=[], mode="fast", wait=60)
+        response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertIsNone(view["runId"])
+        self.assertEqual(view["routerTrials"], [])
+        self.assertEqual(view["routerBuddyIds"], [])
+
+    def test_router_out_of_bounds_preserves_not_an_active_domain_reason(self):
+        self.set_settings(ids=[A], mode="fast", wait=60)
+        request, first = self.start(three=False, micro_task=True)
+        failed = {**self.answer(first, buddy_id=B), "status": "error",
+                  "code": "router-out-of-bounds", "bound": "not-an-active-domain"}
+        failed.pop("decision", None)
+        response = self.report(first, failed)
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(view["reason"], {"code": "router-out-of-bounds", "params": {"bound": "not-an-active-domain"}})
+
 
 class CatalogAndPreferencePublicationTests(DecisionTestCase):
     def begin(self, board):
@@ -198,7 +223,7 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True, 'result': stopped_answer(claim, state_dir=board.directory)})
         view = self.decision(board, request["decisionId"])
         self.assertEqual((view["status"], view["buddyId"]), ("completed", BUDDY_ID))
-        self.assertEqual(view["input"], claim["decisionInput"])
+        assert_frozen_dispatch(self, board, claim["decisionInput"], view["input"])
 
     def test_catalog_refresh_during_call_keeps_frozen_input_and_publishes(self):
         board = self.board()

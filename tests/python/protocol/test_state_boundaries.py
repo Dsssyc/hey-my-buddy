@@ -152,7 +152,7 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_configuration_uses_supplied_root_without_environment_or_client_fallback(self):
         with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.root / "foreign")}), \
-                patch.object(rpc_config.cc, "set_local_endpoint") as select:
+                patch.object(rpc_config.cc.endpoint, "set_local_endpoint") as select:
             selected = rpc_config.configure_local_endpoint(self.state, create=False)
             if os.name == "nt":
                 self.assertIsNone(selected)

@@ -17,7 +17,10 @@ import tempfile
 import time
 import uuid
 
-from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_files import publish_snapshot
+from hey_my_buddy.blackboard.routing.evidence import _empty_statistics, _statistics_fact
 from hey_my_buddy.buddy.roles import router_input
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.registry import adapter as adapter_for
@@ -42,6 +45,18 @@ def parser():
     result.add_argument('--execute', action='store_true', help='Only after separate approval for this prepared packet')
     result.add_argument('--expected-packet-sha256', help='The prepared digest covered by the approval; required for --execute')
     return result
+
+
+def _candidate(identifier):
+    harness, provider, model, effort = identifier.split(':')
+    return {'buddyId': identifier, 'harness': harness, 'provider': provider, 'model': model, 'effort': effort,
+            'modelId': model, 'modelDisplayName': model,
+            'modelNames': [{'harness': harness, 'provider': provider, 'model': model}],
+            'contextWindow': None, 'capabilities': ['input:text'],
+            'infrastructureFailures': {'count': 0, 'lastAt': None},
+            'summary': None, 'modelProfile': None, 'billing': {'kind': 'unknown'},
+            'load': {'active': 0, 'queued': 0, 'limit': 1, 'wait': {'seconds': 0, 'atLeast': False, 'overdue': 0}},
+            'statistics': {'overall': _statistics_fact(_empty_statistics()), 'byDomain': {}, 'byDomainTaskType': {}}}
 
 
 def _prepare(root, buddy):
@@ -70,10 +85,13 @@ def _prepare(root, buddy):
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
         'inputDigest': router_input.digest(frozen),
+        'selection': {'protocolVersion': router_selection.VERSION, 'routingMode': 'review',
+                      'buddies': [_candidate(identifier) for identifier in CANDIDATES],
+                      'domainNodes': [], 'preferences': [], 'task': 'Read the frozen selection guide.'},
         'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['harness'] == 'codex'
                               else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
-                    'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
+                    'outputSchema': router_selection.answer_schema('review'),
                     'modelResponseWaitSeconds': 60},
     }
     private_json(path, packet)
@@ -88,8 +106,8 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
     try:
-        answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
-    except Exception:
+        answer = router_selection.validate_answer(result.get('rawAnswer'), packet['selection'])
+    except BoardError:
         answer = None
     tool_problem = tool_evidence.judge_tool_evidence(evidence, packet['permission'], state_dir=state_dir)
     counts_match = (isinstance(evidence, dict) and type(usage.get('toolCalls')) is int
@@ -129,7 +147,7 @@ def run(args):
     if not args.execute:
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
                 'packet': str(root / 'prepared.json'),
-                'maxAnswerRounds': 1 if buddy['harness'] == 'claude' else 2,
+                'maxAnswerRounds': 2,
                 'permission': 'read'}
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
@@ -144,10 +162,14 @@ def run(args):
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
     environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(private / 'state'),
                        HMB_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
+    reference, _ = publish_snapshot(private / 'state', 'routing', packet['binding']['taskId'],
+                                    packet['selection'], round=1)
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
         generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen'),
                                                          'modelResponseWaitSeconds': packet['request']['modelResponseWaitSeconds']},
-        directory=private / 'attempt', runtime={}, environment=environment, session_record_path=None)
+        directory=private / 'attempt', runtime={}, environment=environment, session_record_path=None,
+        decision_input={'snapshot': {'namespace': 'routing', 'owner': packet['binding']['taskId'],
+                                     'round': 1, 'reference': reference}, 'inputSha256': digest})
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
         'capture_evidence': False})

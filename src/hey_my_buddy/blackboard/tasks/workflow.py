@@ -851,13 +851,14 @@ class WorkflowCoordinator:
         micro_task, micro_task_fingerprint = self._micro_task(connection, run_row["run_id"])
         state = run_row["state"]
         from ..routing.quota_routing import cooling
-        from ..store.store import task_queue_reason
+        task_summary = self._task_summary(connection, task_row)
         view = {
             "runId": run_row["run_id"],
             "state": state,
             "cancellation": self._cancellation(connection, run_row, host_conclusion),
             "status": task_row["state"],
-            "queueReason": task_queue_reason(connection, task_row),
+            "queueReason": task_summary["queueReason"],
+            "blockingTask": task_summary["blockingTask"],
             "awaitingHost": state == "awaiting-host",
             "microTask": self._micro_task_view(micro_task, micro_task_fingerprint),
             "continuationCount": run_row["continuation_count"],
@@ -900,7 +901,7 @@ class WorkflowCoordinator:
             "createdAt": run_row["created_at"],
             "updatedAt": run_row["updated_at"],
             "shutdown": self.shutdown_summary(connection, run_row["run_id"]),
-            "task": self._task_summary(connection, task_row),
+            "task": task_summary,
         }
         view.update(task_fixes.view(connection, run_row["run_id"]))
         if view["task"].get("providerRejection") is not None:
@@ -946,6 +947,7 @@ class WorkflowCoordinator:
             "cancellation": decorated.get("cancellation"),
             "state": decorated["state"],
             "queueReason": decorated["queueReason"],
+            "blockingTask": decorated["blockingTask"],
             "revision": decorated["revision"],
             "expectedSeconds": decorated["expectedSeconds"],
             "selectedAttemptId": decorated["selectedAttemptId"],

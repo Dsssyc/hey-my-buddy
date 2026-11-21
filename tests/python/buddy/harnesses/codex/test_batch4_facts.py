@@ -39,7 +39,8 @@ class NativeFactsTests(unittest.TestCase):
 
     def configure(self, mode, receipt=None, config=None):
         connection = mock.Mock()
-        connection.call.side_effect = [receipt or self.receipt, {"config": config}]
+        connection.call.side_effect = ([{"config": {}}] if mode == "fast" else []) + [
+            receipt or self.receipt, {"config": config}]
         state = native_run._RunState()
         if mode == "fast":
             result = native_run._configure_fast(connection, self.request, state)
@@ -156,7 +157,8 @@ class NativeFactsTests(unittest.TestCase):
                 with self.subTest(mode=mode, provider_length=len(provider)):
                     connection = mock.Mock()
                     receipt = {**self.receipt, "modelProvider": provider}
-                    connection.call.side_effect = [receipt, {"config": {}}]
+                    connection.call.side_effect = ([{"config": {}}] if mode == "fast" else []) + [
+                        receipt, {"config": {}}]
                     state = native_run._RunState()
                     with self.assertRaises(CodexProtocolError) as caught:
                         if mode == "worker":
@@ -174,7 +176,8 @@ class NativeFactsTests(unittest.TestCase):
             for provider in (None, 17, []):
                 with self.subTest(mode=mode, provider=provider):
                     connection = mock.Mock()
-                    connection.call.side_effect = [{**self.receipt, "modelProvider": provider}, {"config": {}}]
+                    connection.call.side_effect = ([{"config": {}}] if mode == "fast" else []) + [
+                        {**self.receipt, "modelProvider": provider}, {"config": {}}]
                     state = native_run._RunState()
                     if mode == "worker":
                         request = self.request.model_copy(update={"permission": "write"})

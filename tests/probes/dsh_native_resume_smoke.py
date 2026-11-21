@@ -150,9 +150,9 @@ def publish_board(board: InProcessBoard) -> None:
     """Give the isolated execution a real C-Two route to this same private board."""
     rpc_config.configure_server(board.directory)
     cc.register(BuddyControl, board.service, name=CONTROL_NAME,
-                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                concurrency=cc.ConcurrencyConfig(mode="parallel"))
     cc.register(BuddyWait, board.wait_service, name=WAIT_NAME,
-                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                concurrency=cc.ConcurrencyConfig(mode="parallel"))
     atomic_json(board.directory / "control.json", {"address": cc.server_address(), "token": "test-token"})
 
 
@@ -194,8 +194,8 @@ def run_round(board, run_id: str, question: str, number: int, root: Path):
     worker = Worker(f"native-smoke-{number}", board.directory, client=board.client(),
                     adapters=("dsh",))
     descriptor = worker.live.start()
-    context = cc.local_endpoint_context(root=str(board.directory / "ipc"))
-    require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "present",
+    context = cc.endpoint.local_endpoint_context(root=str(board.directory / "ipc"))
+    require(cc.endpoint.inspect_endpoint(descriptor.address, context=context)["status"] == "present",
             "Worker endpoint was not created")
 
     def run():
@@ -233,7 +233,7 @@ def run_round(board, run_id: str, question: str, number: int, root: Path):
                 if ready is not None and ready.endpoint_credential is not None:
                     address = ready.address
                     execution_endpoints[address] = execution_endpoints.get(address, False) or (
-                        cc.inspect_endpoint(address, context=context)["status"] == "present")
+                        cc.endpoint.inspect_endpoint(address, context=context)["status"] == "present")
             # Posting while the task is queued makes the inquiry unavailable.
             observed = board.call("inquiry_observe", {"runId": run_id})
             live = observed.get("live") or {}
@@ -253,17 +253,17 @@ def run_round(board, run_id: str, question: str, number: int, root: Path):
             write_new(root / f"worker-{number}.json",
                       {"errors": errors, "address": descriptor.address,
                        "endpointStatusBefore": "present",
-                       "endpointStatusAfter": cc.inspect_endpoint(descriptor.address, context=context)["status"],
+                       "endpointStatusAfter": cc.endpoint.inspect_endpoint(descriptor.address, context=context)["status"],
                        "executionStopped": handles[0].shutdown_confirmed() if len(handles) == 1 else None,
                        "executionEndpoints": [{"address": address, "existedBefore": existed,
-                           "statusAfter": cc.inspect_endpoint(address, context=context)["status"]}
+                           "statusAfter": cc.endpoint.inspect_endpoint(address, context=context)["status"]}
                            for address, existed in execution_endpoints.items()]})
         finally:
             launch_patch.stop()
     require(not errors, "the Worker raised an error")
-    require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "absent", "Worker endpoint file survived stop")
+    require(cc.endpoint.inspect_endpoint(descriptor.address, context=context)["status"] == "absent", "Worker endpoint file survived stop")
     require(execution_endpoints and all(execution_endpoints.values()), "the live execution socket was not observed")
-    require(all(cc.inspect_endpoint(address, context=context)["status"] == "absent"
+    require(all(cc.endpoint.inspect_endpoint(address, context=context)["status"] == "absent"
                 for address in execution_endpoints), "execution endpoint file survived stop")
     require(len(handles) == 1, "the Worker did not own exactly one execution")
     require((root / f"round-{number}.json").exists(), "the role did not collect a complete result")

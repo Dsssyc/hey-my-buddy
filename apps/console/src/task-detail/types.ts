@@ -1,7 +1,7 @@
 import type { Reason } from "../reason";
 import type { InputFailure } from "./input-failure";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
-import type { Actor, ActivityPhase, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
+import type { Actor, ActivityPhase, BlockingTask, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
 
 /** One buddy as the board records it: harness, provider, model and reasoning effort. */
 export type Buddy = { harness: string; provider: string; model: string; effort: string };
@@ -124,6 +124,7 @@ export type Routing = {
 export type Workflow = {
   runId: string;
   taskRevision: number;
+  blockingTask?: BlockingTask;
   state: string;
   buddy: Buddy | null;
   checkout: "none" | "worktree" | "existing";

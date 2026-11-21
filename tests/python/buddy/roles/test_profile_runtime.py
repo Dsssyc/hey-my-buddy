@@ -151,11 +151,13 @@ class ProfileRuntimeTests(unittest.TestCase):
                 [('first', 2), ('second', 1), ('final', 1)],
                 outcomes=[['success', 'failure'], ['unknown'], ['failure']])
             package = verdict['toolEvidence']
-            self.assertEqual(package['version'], 3)
+            self.assertEqual(package['version'], 4)
+            self.assertEqual(package['sessionServiceTools'], [])
             self.assertEqual(package['toolSummary'], [
                 {'toolName': 'web_search_call', 'calls': 4, 'failed': 2, 'unknown': 1}])
-            self.assertEqual([row['outcome'] for row in tool_evidence.read_tool_calls(package, state_dir=Path(directory))],
-                             ['success', 'failure', 'unknown', 'failure'])
+            calls = list(tool_evidence.read_tool_calls(package, state_dir=Path(directory)))
+            self.assertEqual([row['outcome'] for row in calls], ['success', 'failure', 'unknown', 'failure'])
+            self.assertTrue(all(row['sessionServiceVerified'] is False for row in calls))
             self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'web', state_dir=Path(directory)))
         self.assertEqual(code, 0)
 

@@ -149,6 +149,11 @@ class Adapter:
     native_resume = False
     interrupted_resume = False
     native_resume_permission_change = False
+    #: Whether an executed format correction keeps the native session context
+    #: (ADR-035 decision 8). A preserving driver receives only the precise
+    #: error locations as its correction input; every other driver starts a
+    #: fresh native session and receives the full reassembled input.
+    same_session_corrections = False
     model_discovery = False
     def discover_models(self, *, state_dir: Path) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")

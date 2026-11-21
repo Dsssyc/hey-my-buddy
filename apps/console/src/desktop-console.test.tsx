@@ -73,7 +73,7 @@ function fixture(records: Task[] = []) {
     throw new Error(`Unexpected write: ${operation}`);
   });
   const roots = records.filter(t => t.lineage?.kind === "micro-task");
-  const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+  const api = { publishedVersion: vi.fn(async () => null), runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(snapshot)), command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, kind: "standalone", title: t.task, titleSource: "task", project: t.lineage?.project ?? null }))),

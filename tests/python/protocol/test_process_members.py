@@ -10,7 +10,7 @@ import signal
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from hey_my_buddy.protocol.process_members import ProcessMember, SessionProcesses
 from hey_my_buddy.protocol import process_members
@@ -144,7 +144,7 @@ class AdmissionTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX process observation")
     def test_process_exiting_mid_scan_is_disappearance_not_identity_change(self):
-        process = Mock()
+        process = MagicMock()
         process.uids.return_value.effective = os.geteuid()
         process.ppid.return_value = 1
         process.status.return_value = "running"

@@ -23,10 +23,12 @@ from hey_my_buddy.buddy.roles import inline_run, run_execution
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.private_files import publish_snapshot
 
 
 ANSWER = '{"buddyId":"legal","note":"fixture","evidence":[],"domainNodeId":null,"taskType":"change"}'
-SCHEMA = router.answer_schema(["legal"], "review")
+SCHEMA = router_selection.answer_schema("review")
 
 
 class _ReviewCases:
@@ -50,9 +52,14 @@ class _ReviewCases:
             session_record_path=str(self.base / ("session-" + uuid.uuid4().hex + ".jsonl")))
 
     def document(self) -> dict:
-        return {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
-                "buddy": {"harness": self.harness},
-                "buddies": [router_candidate()], "outputSchema": SCHEMA}
+        base = {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
+                "preferences": [], "buddies": [router_candidate()], "protocolVersion": 20}
+        owner = uuid.uuid4().hex
+        state = Path(os.environ["HMB_STATE_DIR"])
+        reference, _ = publish_snapshot(state, "routing", owner, base, round=1)
+        return {"routingMode": "review", "task": base["task"], "buddy": {"harness": self.harness},
+                "snapshot": {"namespace": "routing", "owner": owner, "reference": reference, "round": 1},
+                "inputSha256": reference["sha256"], "outputSchema": SCHEMA}
 
     def test_inline_review_returns_a_structured_answer_under_read(self):
         self.prepare_fixture()
@@ -106,9 +113,12 @@ class _ReviewCases:
         self.assertEqual(len(prompts), 2)
         marker = "Return only one JSON value matching this schema: "
         for prompt in prompts:
-            supplied = prompt.split(marker, 1)[1].split("\n\nFormat correction:", 1)[0]
+            supplied = prompt.split(marker, 1)[1].split("\n\n", 1)[0]
             self.assertEqual(json.loads(supplied), SCHEMA)
-        self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nFormat correction:"))
+        # A fresh-session correction reassembles the whole prompt, then carries
+        # the rejected answer and the precise correction instruction.
+        self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nYour previous answer was rejected"))
+        self.assertIn('\nFormat correction: {"code":"answer-invalid-json"', prompts[1])
 
     def test_router_accepts_an_unchanged_frozen_copy(self):
         self.prepare_fixture()
@@ -183,6 +193,11 @@ class ZcodeSharedLevelReviewTests(_ReviewCases, ZcodeNativeCase):
         source = source.replace('{"choice":"a"}', ANSWER)
         source = source.replace("elif case in ('write-final', 'write-post-close'):",
                                 "elif case in ('write-final', 'write-post-close', 'correct'):")
+        source = source.replace("assert p.get('mode') == 'yolo' and p['mcpServers'] == []",
+                                "assert p.get('mode') == 'yolo'\n"
+                                "            if p['mcpServers']:\n"
+                                "                assert p['mcpServers'][0]['name'] == 'hey_my_buddy_snapshot'\n"
+                                "                assert 'mcp__hey_my_buddy_snapshot__query_task' in p['toolAllowlist']")
         source = source.replace("if method == 'session/send':\n        prompt_sent = True\n",
                                 "if method == 'session/send':\n"
                                 "        with Path(__file__).with_name('review-prompts.jsonl').open('a', encoding='utf-8', newline='\\n') as capture:\n"

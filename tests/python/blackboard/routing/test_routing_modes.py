@@ -5,6 +5,9 @@ import os
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import router_selection
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch, validate
 from hey_my_buddy.protocol.requests import parse_request
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
@@ -59,7 +62,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(view['modelResponseWaitSeconds'], 60)
         self.assertNotIn('executionWorkspace', view['input'])
         self.assertNotIn('evidence', view['input'])
-        self.assertNotIn('file', view['input']['outputSchema']['properties']['evidence']['items']['properties']['kind']['enum'])
+        self.assertNotIn('file', router_selection.answer_schema("fast")['properties']['evidence']['items']['properties']['kind']['enum'])
 
     def test_review_unconfigured_stops_host_without_using_available_fast_buddy(self):
         board = self.board()
@@ -131,7 +134,7 @@ class RoutingModesTests(BoardTestCase):
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(decision['status'], 'needs-host')
         self.assertEqual(decision['routingMode'], 'review')
-        self.assertEqual(decision['input'], first['decisionInput'])
+        assert_frozen_dispatch(self, board, first['decisionInput'], decision['input'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.fallback'").fetchone()[0], 0)
@@ -164,11 +167,11 @@ class RoutingModesTests(BoardTestCase):
 
     def test_file_evidence_is_rejected_even_if_schema_was_bypassed(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({"domainNodeId": None, "taskType": "change", 'buddyId': 'legal', 'note': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
+            validate({"domainNodeId": None, "taskType": "change", 'buddyId': 'legal', 'note': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
         self.assertEqual(caught.exception.code, 'router-evidence-out-of-bounds')
 
     def test_fast_prompt_drops_repository_and_history_payloads(self):
-        prompt = router.render_prompt({'routingMode': 'fast', 'task': 'choose', 'evidence': ['secret-evidence'],
+        prompt = render_selection_prompt({'routingMode': 'fast', 'task': 'choose', 'evidence': ['secret-evidence'],
                                        'executionWorkspace': {'inputTree': 'secret-tree'}, 'buddies': []})
         self.assertNotIn('secret-evidence', prompt)
         self.assertNotIn('secret-tree', prompt)

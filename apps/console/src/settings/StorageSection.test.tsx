@@ -140,6 +140,23 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(screen.getByText("统计时内容正在变化")).toBeTruthy();
   });
 
+  it("orders routing snapshots before backups and translates their retention reasons", async () => {
+    const withRouting = plan({ categories: [
+      { id: "backup", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["current-backup"] },
+      { id: "routing", bytes: 4096, reclaimableBytes: 1024, count: 2, eligibleCount: 1, reasons: ["routing-snapshot-in-use", "snapshot-directory-unproven"] },
+      { id: "runtimes", bytes: 3_300_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: [] },
+    ] });
+    const f = fixture({ planValue: withRouting });
+    const user = userEvent.setup();
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    const rows = [...screen.getByRole("table").querySelectorAll<HTMLElement>("tbody tr")].filter(row => row.querySelector("th"));
+    expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual(["运行时", "路由快照", "备份"]);
+    await user.click(screen.getByRole("button", { name: "路由快照：保留原因" }));
+    expect(screen.getByText("路由快照正在使用")).toBeTruthy();
+    expect(screen.getByText("快照目录归属未证实")).toBeTruthy();
+  });
+
   it("lists orphan processes without any stop control", async () => {
     const f = fixture();
     const user = userEvent.setup();

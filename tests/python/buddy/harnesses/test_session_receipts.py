@@ -375,5 +375,35 @@ class RefusalWireBudgetTests(unittest.TestCase):
         self.assertEqual((len(batch), more), (32, 0))
 
 
+class SnapshotReceiptTests(unittest.TestCase):
+    def test_native_wrappers_preserve_signed_failure_status(self):
+        from hey_my_buddy.buddy.harnesses.session_receipts import (
+            sign_snapshot_reply, snapshot_digest, verify_snapshot_reply,
+        )
+        from hey_my_buddy.json_codec import canonical_json
+
+        configuration = {"identity": {"attemptId": "a"}, "inputSha256": "b" * 64, "key": "a" * 64}
+        row = {"receiptSeq": 2, "toolName": "query_task", "ok": False, "coverage": {},
+               "argsDigest": snapshot_digest({})}
+        reply = sign_snapshot_reply(configuration, row, {"error": "invalid offset"})
+        raw = canonical_json(reply)
+        items = [{"type": "text", "text": raw}]
+        for wrapper in ("Error: " + raw,
+                        {"success": True, "content": "MCP tool returned an error:\n" + raw},
+                        {"is_error": True, "content": items},
+                        {"success": False, "contentItems": [{"type": "inputText", "text": raw}]}):
+            with self.subTest(wrapper=type(wrapper).__name__):
+                self.assertEqual(verify_snapshot_reply(wrapper, configuration, "query_task", ok=False)["receiptSeq"], 2)
+                with self.assertRaises(ReceiptError):
+                    verify_snapshot_reply(wrapper, configuration, "query_task", ok=True)
+        for wrapper in ({"success": True, "content": raw},
+                        {"is_error": False, "content": items},
+                        "arbitrary header " + raw,
+                        canonical_json({**reply, "response": {"error": "tampered"}})):
+            with self.assertRaises(ReceiptError) as caught:
+                verify_snapshot_reply(wrapper, configuration, "query_task", ok=False)
+            self.assertEqual(caught.exception.code, "router-tool-evidence-unverified")
+
+
 if __name__ == "__main__":
     unittest.main()

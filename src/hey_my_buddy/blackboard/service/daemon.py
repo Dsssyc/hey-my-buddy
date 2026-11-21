@@ -129,9 +129,9 @@ class Daemon:
             self.console.start(issue_ticket=False)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
             cc.register(BuddyControl, service, name=CONTROL_NAME,
-                        concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                        concurrency=cc.ConcurrencyConfig(mode="parallel"))
             cc.register(BuddyWait, wait_service, name=WAIT_NAME,
-                        concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                        concurrency=cc.ConcurrencyConfig(mode="parallel"))
             self.resume_path.unlink(missing_ok=True)
             self.stop_path.unlink(missing_ok=True)
             atomic_json(self.endpoint_path, {

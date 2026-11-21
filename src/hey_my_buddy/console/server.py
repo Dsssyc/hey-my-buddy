@@ -753,6 +753,9 @@ class Console:
                     return self._console_read()
                 if relative == "/api/runtime-version":
                     return self._runtime_version()
+                if relative == "/api/published-version":
+                    from .published_version import published_version
+                    return self._json(200, published_version())
                 if relative == "/api/macro-tasks":
                     return self._macro_task_read("macro_task_list", {}, MACRO_TASK_LIST_PARAMETERS)
                 if relative.startswith("/api/macro-tasks/") and relative.endswith("/timeline"):

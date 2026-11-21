@@ -1,14 +1,14 @@
 import i18n from "i18next";
 import { z } from "zod";
 import { locale } from "./i18n";
-import type { RuntimeVersionInfo, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, Preference } from "./types";
+import type { PublishedVersionInfo, RuntimeVersionInfo, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, Preference } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskTimeline,
 } from "./macro-task-types";
 import { macroTaskPageSchema, macroTaskTimelineSchema, macroTaskGoalsSchema } from "./macro-task-types";
 import {
   configurationSchema, consoleAccessSchema, consoleSessionSchema, harnessHealthSchema, permissionLevelsSchema,
-  preferencesSchema, providerCoolingSchema, reminderSettingsSchema, routingHealthSchema, runtimeVersionSchema, safeCount, dateString, snapshotReadSchema,
+  preferencesSchema, providerCoolingSchema, reminderSettingsSchema, routingHealthSchema, publishedVersionSchema, runtimeVersionSchema, safeCount, dateString, snapshotReadSchema,
 } from "./types";
 
 export class ApiError extends Error {
@@ -485,6 +485,14 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     /** Version facts are read once by visible settings, independent of snapshots. */
     async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {
       return parseRuntimeVersion(await request("/runtime-version", { signal }));
+    },
+    async publishedVersion(signal?: AbortSignal): Promise<PublishedVersionInfo | null> {
+      try {
+        const result = publishedVersionSchema.safeParse(await request("/published-version", { signal }));
+        return result.success ? result.data : null;
+      } catch {
+        return null;
+      }
     },
     /**
      * `storage_plan` (0.16.0): a private, expiring reclamation plan. It scans

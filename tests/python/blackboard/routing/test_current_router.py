@@ -17,6 +17,7 @@ from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -158,6 +159,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(review.facts["modelResponseWaitSeconds"], 30)
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
+        self.enterContext(patch.dict(PERMISSION_LEVELS, {"claude": {"read": "enforced"}}))
         self.add_buddy(A, enabled=0)
         self.add_buddy(B, harness="claude")
         self.add_buddy(C)
@@ -169,6 +171,13 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["code"], "router-disabled")
         self.assertNotIn("reason", resolution.inspections[0])
         self.assertEqual(resolution.inspections[1]["code"], "router-no-tool-unsupported")
+
+    def test_fast_mode_accepts_claude_none(self):
+        self.add_buddy(A, harness="claude")
+        self.set_settings(ids=[A], mode="fast")
+        with self.board_.store.db.read() as db:
+            resolution = router.current_router(db, now=T0)
+        self.assertEqual(resolution.buddy_id, A)
 
     def test_cooling_provider_is_skipped_until_its_deadline(self):
         self.add_buddy(A, model="alpha")
@@ -217,6 +226,32 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertIsNone(retried.problem)
         self.assertEqual(self.event_count(), before)
 
+    def test_format_failures_count_distinct_requests_and_refresh_an_expired_window(self):
+        self.record(A, request="one", code="answer-shape")
+        self.record(A, request="one", code="answer-empty", facts={"routerIndex": 0, "selectionRetry": True})
+        state = self.state(A)
+        self.assertEqual(state["consecutiveNoAnswers"], 2)
+        self.assertEqual((state["inSkipWindow"], state["skipUntil"], state["retryAt"]), (False, None, None))
+        self.record(A, request="two", code="answer-unexpected-field")
+        self.assertTrue(self.state(A)["inSkipWindow"])
+        self.clock.advance(601)
+        self.assertFalse(self.state(A)["inSkipWindow"])
+        self.record(A, request="three", code="answer-invalid-json", now=self.clock.value)
+        self.assertEqual(self.state(A)["skipUntil"], "2026-01-01T00:20:01.000Z")
+        self.record(A, request="four", outcome="answered", code="abstained", now=self.clock.value)
+        self.record(A, request="one", phase="runtime", code="answer-not-json", now=self.clock.value)
+        self.assertEqual(self.state(A)["consecutiveNoAnswers"], 1)
+        self.assertIsNone(self.state(A)["skipUntil"])
+
+    def test_mixed_failure_order_uses_event_sequence_for_window_deadline(self):
+        for buddy, first, second in ((A, "timeout", "answer-shape"), (B, "answer-empty", "timeout")):
+            with self.subTest(first=first):
+                self.record(buddy, request=f"{buddy}-a", code=first, now="2026-01-01T00:08:00.000Z")
+                self.record(buddy, request=f"{buddy}-b", code=second, now="2026-01-01T00:07:00.000Z")
+                state = self.state(buddy)
+                self.assertEqual(state["lastNoAnswerAt"], "2026-01-01T00:08:00.000Z")
+                self.assertEqual(state["skipUntil"], "2026-01-01T00:17:00.000Z")
+
     def test_valid_answered_clears_and_abstention_counts_as_answered(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
@@ -261,6 +296,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["consecutiveNoAnswers"], 25)
 
     def test_all_unavailable_reports_one_summary_problem(self):
+        self.enterContext(patch.dict(PERMISSION_LEVELS, {"claude": {"read": "enforced"}}))
         self.add_buddy(A, enabled=0)
         self.add_buddy(B, harness="claude")
         self.set_settings(ids=[A, B])
@@ -422,6 +458,8 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.add_routing_record(decision="dec-live", request="route-live", kind="decision.failed", buddy_id=A,
                                 code="timeout", output={"code": "timeout"}, attempt_state="executing", at=T0)
         self.record(A, request="route-recorded", phase="preflight", now=T0)
+        self.assertFalse(self.state(A)["retryInProgress"])
+        self.clock.advance(601)
         state = self.state(A)
         self.assertTrue(state["retryInProgress"])
         self.assertEqual(state["activeAttempts"][0]["attemptId"], "att-dec-live")

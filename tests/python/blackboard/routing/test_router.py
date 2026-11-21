@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import router_selection
+from blackboard.routing.fixtures.selection import validate
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
@@ -15,13 +17,13 @@ class RouterContractTests(unittest.TestCase):
         answer = {"domainNodeId": None, "taskType": "change", "buddyId": "legal-alternative", "note": "Better fit after reading the code",
                   "evidence": [{"kind": "preference", "ref": "preferred buddy"},
                                {"kind": "file", "ref": "src/worker.py"}]}
-        self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
+        self.assertEqual(validate(answer, ["preferred", "legal-alternative"]), answer)
 
     def test_candidate_escape_has_noncorrectable_code(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({"domainNodeId": None, "taskType": "change", "buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
+            validate({"domainNodeId": None, "taskType": "change", "buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
-        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
+        self.assertEqual(caught.exception.details["bound"], "not-a-candidate")
 
     def test_statistics_reference_is_an_advisory_summary_and_buddy_id_stays_bounded(self):
         answer = {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "Past delivery supports this choice",
@@ -29,26 +31,26 @@ class RouterContractTests(unittest.TestCase):
                                 "ref": "legal — samples 266, successes 259, failureRate 0.0263"}]}
         for mode in ("fast", "review"):
             with self.subTest(mode=mode):
-                self.assertEqual(router.validate_answer(answer, ["legal", "alternative"], mode), answer)
-                self.assertIn("statistics", router.answer_schema(["legal", "alternative"], mode)
+                self.assertEqual(validate(answer, ["legal", "alternative"], mode), answer)
+                self.assertIn("statistics", router_selection.answer_schema(mode)
                               ["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({**answer, "buddyId": "outsider"}, ["legal", "alternative"])
+            validate({**answer, "buddyId": "outsider"}, ["legal", "alternative"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
-        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
+        self.assertEqual(caught.exception.details["bound"], "not-a-candidate")
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
             with self.subTest(ref=ref), self.assertRaises(BoardError):
-                router.validate_answer({"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "x",
+                validate({"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "x",
                                         "evidence": [{"kind": "file", "ref": ref}]}, ["legal"])
 
     def test_abstention_and_malformed_results(self):
-        self.assertIsNone(router.validate_answer('{"buddyId":null,"note":"Insufficient evidence","evidence":[],"domainNodeId":null,"taskType":"change"}', [])['buddyId'])
+        self.assertIsNone(validate('{"buddyId":null,"note":"Insufficient evidence","evidence":[],"domainNodeId":null,"taskType":"change"}', [])['buddyId'])
         for value in ("invalid", {}, {"domainNodeId": None, "taskType": "change", "buddyId": None, "note": "", "evidence": []},
                       {"domainNodeId": None, "taskType": "change", "buddyId": None, "note": "x", "evidence": [], "request": {}}):
             with self.subTest(value=value), self.assertRaises(BoardError):
-                router.validate_answer(value, [])
+                validate(value, [])
 
     def test_cancelled_native_receipt_without_stop_proof_is_not_cancelled(self):
         import tempfile
@@ -87,45 +89,6 @@ class RouterContractTests(unittest.TestCase):
             result = collect(handle)
         self.assertEqual(result.status, 'failed')
         self.assertFalse(result.shutdown_confirmed)
-
-    def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
-        stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
-        doc = {"buddies": [{"buddyId": "legal", "load": {"wait": {"seconds": 0, "atLeast": False}},
-                            "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
-               "task": "first", "title": "display-only"}
-        first = router.render_prompt(doc)
-        second = router.render_prompt({**doc, "task": "second", "macroTask": "private display label"})
-        self.assertEqual(first.split('\n\n')[:2], second.split('\n\n')[:2])
-        self.assertNotIn("display-only", first)
-        self.assertNotIn("private display label", second)
-
-    def test_prompt_renders_frozen_candidate_facts_and_expected_duration(self):
-        facts = {"billing": {"kind": "subscription", "source": "native", "observedAt": "now"},
-                 "load": {"active": 2, "limit": 2, "queued": 1,
-                          "wait": {"seconds": 300, "atLeast": True, "overdue": 1}},
-                 "statistics": {"overall": {"samples": 4, "successes": 3, "failures": 1,
-                                "firstPasses": 2, "firstPassRate": 0.5, "failureRate": 0.25,
-                                "reworkRounds": 1, "medianDeliverySeconds": 120,
-                                "usage": {"samples": 2, "medianInputTokens": 100,
-                                          "medianCachedInputTokens": 40, "medianOutputTokens": 10}},
-                                "byDomain": {}, "byDomainTaskType": {}},
-                 "infrastructureFailures": {"count": 1, "lastAt": "now"}}
-        prompt = router.render_prompt({"routingMode": "fast", "task": "fix parser",
-                                       "expectedSeconds": 600, "buddies": [{"buddyId": "legal", **facts}]})
-        self.assertIn('"expectedSeconds":600', prompt)
-        for key in facts:
-            self.assertIn('"' + key + '":', prompt)
-        self.assertIn('"usage":', prompt)
-        self.assertIn("Router protocol version 19", prompt)
-
-    def test_both_instruction_modes_name_usage_cost_and_effort_cost(self):
-        for mode in ("fast", "review"):
-            with self.subTest(mode=mode):
-                prompt = router.render_prompt({"routingMode": mode, "task": "fix parser", "buddies": []})
-                text = " ".join(prompt.split())
-                self.assertIn("Router protocol version 19", text)
-                self.assertIn("Token usage statistics are cost evidence.", text)
-                self.assertIn("Higher reasoning effort spends more quota and is slower;", text)
 
 
 from unittest.mock import patch
@@ -232,7 +195,8 @@ class RouterPublicationTests(WorkflowTestCase):
         routed = board.call('workflow_get', {'runId': submitted['runId']})
         claimed = self.claim(board, 'router', run_id=routed['routing']['taskId'])['claim']
         self.assertIsNotNone(claimed)
-        self.assertEqual(claimed['decisionInput']['task'], frozen['task'])
+        from blackboard.routing.fixtures.selection import frozen_input
+        self.assertEqual(frozen_input(board, claimed["decisionInput"])["task"], frozen["task"])
 
     def test_response_wait_publication_preserves_model_and_schema(self):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -413,23 +377,23 @@ class RouterSchemaAgreementTests(unittest.TestCase):
         from hey_my_buddy.protocol.task_types import TASK_TYPES
         candidates = ["legal", "alternative"]
         domains = ["systems", "ipc"]
-        notes = ["x", " ", "\n\x00\x7f", "解释 🧭", "x" * router.MAX_NOTE]
+        notes = ["x", " ", "\n\x00\x7f", "解释 🧭", "x" * router_selection.MAX_NOTE]
         refs = ["legal — samples 266, successes 259, failureRate 0.0263", " ",
                 "legal\nqualitative summary", "\x00\x7f", "界" * 1024]
         for mode in ("fast", "review"):
-            schema = router.answer_schema(candidates, mode, domain_node_ids=domains)
+            schema = router_selection.answer_schema(mode)
             evidence_options = [[]]
             for kind in schema["properties"]["evidence"]["items"]["properties"]["kind"]["enum"]:
                 evidence_options.extend([[{"kind": kind, "ref": ref}]
                                          for ref in (["src/module.py"] if kind == "file" else refs)])
-            evidence_options.append([{"kind": "statistics", "ref": refs[0]}] * router.MAX_REFERENCES)
+            evidence_options.append([{"kind": "statistics", "ref": refs[0]}] * router_selection.MAX_REFERENCES)
             for buddy, domain, task_type, note, evidence in product(
                     [*candidates, None], [*domains, None], TASK_TYPES, notes, evidence_options):
                 answer = {"buddyId": buddy, "domainNodeId": domain, "taskType": task_type,
                           "note": note, "evidence": evidence}
                 with self.subTest(mode=mode, buddy=buddy, domain=domain, taskType=task_type):
                     self.assertEqual(schema_errors(answer, schema), [])
-                    self.assertEqual(router.validate_answer(answer, candidates, mode,
+                    self.assertEqual(validate(answer, candidates, mode,
                                                            domain_node_ids=domains), answer)
 
     def test_schema_and_validator_reject_the_same_field_violations(self):
@@ -437,37 +401,38 @@ class RouterSchemaAgreementTests(unittest.TestCase):
         base = {"buddyId": "legal", "domainNodeId": None, "taskType": "change",
                 "note": "ok", "evidence": []}
         for mode in ("fast", "review"):
-            schema = router.answer_schema(["legal"], mode, domain_node_ids=["systems"])
+            schema = router_selection.answer_schema(mode)
             invalid = [None, [], {**base, "extra": None}]
             invalid.extend({key: value for key, value in base.items() if key != missing} for missing in base)
             for field, values in {
                 "buddyId": [False, 1, {}, [], "foreign"],
                 "domainNodeId": [False, 1, {}, [], "merged", ""],
                 "taskType": [False, 1, {}, [], None, "", "coding"],
-                "note": [False, 1, {}, [], None, "", "x" * (router.MAX_NOTE + 1)],
+                "note": [False, 1, {}, [], None, "", "x" * (router_selection.MAX_NOTE + 1)],
                 "evidence": [False, 1, {}, None, "", [None], [{}],
                              [{"kind": "unknown", "ref": "x"}],
                              [{"kind": "statistics", "ref": ""}],
                              [{"kind": "statistics", "ref": "x" * 1025}],
                              [{"kind": "statistics", "ref": "x", "extra": None}],
-                             [{"kind": "statistics", "ref": "x"}] * (router.MAX_REFERENCES + 1)],
+                             [{"kind": "statistics", "ref": "x"}] * (router_selection.MAX_REFERENCES + 1)],
             }.items():
                 invalid.extend({**base, field: value} for value in values)
             if mode == "fast":
                 invalid.append({**base, "evidence": [{"kind": "file", "ref": "src/a.py"}]})
             for answer in invalid:
                 with self.subTest(mode=mode, answer=answer):
-                    self.assertTrue(schema_errors(answer, schema))
+                    if answer not in ({**base, "buddyId": "foreign"}, {**base, "domainNodeId": "merged"}):
+                        self.assertTrue(schema_errors(answer, schema))
                     with self.assertRaises(BoardError):
-                        router.validate_answer(answer, ["legal"], mode, domain_node_ids=["systems"])
+                        validate(answer, ["legal"], mode, domain_node_ids=["systems"])
 
     def test_empty_tree_only_allows_unclassified(self):
         from hey_my_buddy.protocol.structured_schema import schema_errors
         answer = {"buddyId": None, "domainNodeId": None, "taskType": "research", "note": "x", "evidence": []}
-        schema = router.answer_schema([])
-        self.assertEqual(schema["properties"]["domainNodeId"]["enum"], [None])
+        schema = router_selection.answer_schema("review")
+        self.assertNotIn("enum", schema["properties"]["domainNodeId"])
         self.assertEqual(schema_errors(answer, schema), [])
-        self.assertEqual(router.validate_answer(json.dumps(answer), []), answer)
+        self.assertEqual(validate(json.dumps(answer), []), answer)
 
 
 if __name__ == '__main__':

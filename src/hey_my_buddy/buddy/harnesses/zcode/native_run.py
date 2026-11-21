@@ -47,6 +47,7 @@ from ....paths import native_path
 from ....private_files import read_bytes
 from ...roles.turn_io import private_json
 from ...roles.attention import AttentionRecorder
+from ..snapshot_mount import snapshot_coverage_refs, stdio_mcp_entry, stdio_tool_names, verify_mounted_calls
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ..input_admission import admission_error
@@ -115,7 +116,7 @@ from .protocol import (
     provider_rejection,
     native_turn_failure,
 )
-from .tool_evidence import ZcodeToolFacts
+from .tool_evidence import ZcodeToolFacts, carries_tool_marker as _carries_tool_marker
 from .session_content import ZcodeSessionProjector
 from ..session_record import SessionRecord
 from ..runtime_selection import environment_for
@@ -473,12 +474,14 @@ class _RunFacts:
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
-    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
+    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
+                session_tool_calls: int = 0, read_tool_violations: int = 0) -> dict:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
             "modelResponded": self.model_responded,
             "toolCalls": tool_calls,
+            "sessionToolCalls": session_tool_calls, "readToolViolations": read_tool_violations,
             "toolMarkerFrames": self.markers,
             "unknownEvents": {"countsByType": dict(self.unknown_counts),
                               "total": sum(self.unknown_counts.values())},
@@ -496,21 +499,6 @@ _PRE_ADMITTED_KINDS = NATIVE_EVENT_TYPES & {
 #: kinds are facts of the native protocol; whether one is allowed is judged
 #: from the retained facts, never here.
 _ADMITTED_KINDS = NATIVE_EVENT_TYPES
-
-
-def _carries_tool_marker(value) -> bool:
-    """Native tool parts count even without ids or inside child envelopes."""
-    if isinstance(value, dict):
-        kinds = (value.get('type', ''), value.get('kind', ''))
-        if (any(isinstance(kind, str) and kind.startswith(
-                ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
-                or value.get('toolCallId') is not None or value.get('role') == 'tool'
-                or any(type(value.get(key)) is int and value[key] > 0 for key in ('toolCalls', 'toolCallCount'))):
-            return True
-        return any(_carries_tool_marker(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_carries_tool_marker(item) for item in value)
-    return False
 
 
 class _Classifier:
@@ -579,7 +567,9 @@ class NoToolProtocol:
             if method in ("session/event", "state.updated"):
                 raise NativeError("invalid-protocol", "native lifecycle notification has no identity parameters")
             return
-        if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample'):
+        if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples',
+                      'process/resourceSample', 'session/lifecycle/changed',
+                      'v4/conversation/contextCompositionChanged', 'v4/telemetry/model-request-metrics'):
             return
         if method == "session/event":
             kind = params.get("type")
@@ -653,6 +643,7 @@ class _RunState:
     provider_rejection: dict | None = None
     root_model_activity: bool = False
     native_request_sent: bool | None = False
+    correction_count: int = 0
     native_admission_error: dict | None = None
     initial_request_attempted: bool = False
     shutdown: bool = False
@@ -771,7 +762,8 @@ def _project_session(session: ZcodeSessionProjector | None, state: _RunState, me
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
            protocol, facts: _RunFacts, state: _RunState,
-           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector | None) -> bool:
+           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector | None,
+           explain_terminal: Callable[[dict], bool] | None = None) -> bool:
     """Keep every stopped stream frame, even after an earlier failure.
 
     The order of every frame is the run's own: projection first, then
@@ -806,7 +798,8 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
             # the following frames from being projected too.
             tools.observe(message)
             _project_session(session, state, message)
-            changed = classifier.observe(message)
+            explained = explain_terminal is not None and explain_terminal(message)
+            changed = explained or classifier.observe(message)
             if changed:
                 # The retained fact goes to the role before any protocol
                 # check of this frame runs; only the observer's stop ends
@@ -916,11 +909,16 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     state.initial_request_attempted = True
     if initial:
         state.native_request_sent = None
+    def on_sent() -> None:
+        if initial:
+            state.native_request_sent = True
+        else:
+            state.correction_count += 1
+
     try:
         accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                     "content": input_text},
-                                   on_sent=(lambda: setattr(state, "native_request_sent", True))
-                                   if initial else None)
+                                   on_sent=on_sent)
     except NativeRpcError as error:
         if initial:
             state.native_admission_error = getattr(error, "native_error", None)
@@ -1001,7 +999,6 @@ class _CarrierOutcome:
     resolved: dict | None = None
     raw_answer: str | None = None
     event_count: int = 0
-    correction_count: int = 0
     final_message_completed: bool = False
     last_protocol: NoToolProtocol | None = None
     evidence: RootTurnEvidence | None = None
@@ -1038,8 +1035,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     # follows this run's service binding alone: a bound completion service
     # takes the final value through its completion tool, and a run without one
     # takes it from the final message — under any scope, with the role
-    # observer deciding what tool and unknown facts mean for it.
-    completion_carrier = services is not None
+    # observer deciding what tool and unknown facts mean for it. A mounted
+    # snapshot query service is never a completion binding: it rides on the
+    # request and mounts under both carriers (ADR-035 decision 3).
+    completion_carrier = bool(request.session_services)
     return _run(request, services=services, no_tool=no_tool,
                 completion_carrier=completion_carrier, observer=observer, cancelled=cancelled)
 
@@ -1069,7 +1068,9 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation},
                            state_dir=Path(request.private_state.state_dir),
-                           native_log_dir=invocation_root / "native-logs")
+                           native_log_dir=invocation_root / "native-logs",
+                           session_tools=stdio_tool_names(request.snapshot_query)
+                           if request.snapshot_query is not None else ())
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()
                                     if request.session_record_failure is not None else None)
@@ -1087,7 +1088,11 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
 
         def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
             facts_snapshot = facts.mapping(tool_calls=tools.tool_calls if tools is not None else 0,
-                                           settled=settled, raw_answer=raw)
+                                           settled=settled, raw_answer=raw,
+                                           session_tool_calls=tools.session_tool_calls
+                                           if tools is not None else 0,
+                                           read_tool_violations=tools.evidence.read_tool_violations
+                                           if tools is not None and request.snapshot_query is not None else 0)
             feedback = observer(facts_snapshot)
             if feedback.action == "stop":
                 raise ObserverInterrupt()
@@ -1181,9 +1186,14 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             state.error_text = "the native execution returned invalid or incomplete data"
             outcome.record = None
         finally:
+            explain_terminal = (
+                (lambda msg: tools.explains_terminal_metadata(msg, read=request.permission == "read"))
+                if tools is not None and request.snapshot_query is not None else None
+            )
             drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                        tools=tools, classifier=classifier, facts=facts, notify=notify,
-                                       completion_carrier=completion_carrier, outcome=outcome, session=session)
+                                       completion_carrier=completion_carrier, outcome=outcome, session=session,
+                                       explain_terminal=explain_terminal)
         if session is not None:
             session.record.project(session.close)
         if state.provider_rejection is not None:
@@ -1210,6 +1220,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             except (OSError, ValueError, BoardError):
                 outcome.binding_save_failed = True
         tool_package = None
+        verified_session_calls: frozenset[tuple[str, str]] = frozenset()
+        snapshot_coverage: list[dict] = []
         if state.session_opened:
             # A stream is complete only when it was read to its EOF with the owned
             # group confirmed stopped — the same rule for both carriers; anything
@@ -1218,15 +1230,50 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                    and drained is True
                                    and not tools.close_pending)
             exclude = outcome.evidence.verified_delivery() if outcome.evidence is not None else frozenset()
-            tool_package = tools.finish(stream_complete, exclude_calls=exclude)
+            if request.snapshot_query is not None:
+                # The mounted snapshot calls are verified against the signed
+                # ledger in both directions only now, after the stream ended:
+                # a mismatch leaves every mounted call unverified for the
+                # publication judge instead of failing the driver.
+                verified_session_calls, snapshot_coverage = verify_mounted_calls(
+                    request.snapshot_query, tools.snapshot_calls, tools.roots)
+            tool_package = tools.finish(stream_complete and snapshot_coverage is not None, exclude_calls=exclude,
+                                        verified_session_calls=verified_session_calls)
         evidence_refs = _evidence_refs(invocation_root=invocation_root, stderr_path=stderr_path,
                                        state=state, facts=facts, record=outcome.record)
+        if tool_package and tool_package["streamComplete"]:
+            evidence_refs.extend(snapshot_coverage_refs(invocation_root, snapshot_coverage))
         return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
                               outcome=outcome, completion_carrier=completion_carrier, drained=drained,
                               evidence_refs=evidence_refs, tool_package=tool_package, facts=facts).model_copy(
                                   update={"session_record_failure": SessionRecordFailure(**session_record.failure)
                                           if session_record is not None and session_record.failure is not None
                                           else request.session_record_failure})
+
+
+#: The native tools the read plane keeps when a mounted snapshot service
+#: forces an explicit allowlist: exactly the registered names the publication
+#: matrix admits at ``read`` (read, search, execute and fetch categories), so
+#: the allowlist and the judge can never disagree.
+_READ_PLANE_TOOLS = ("Read", "Glob", "Grep", "Bash", "WebFetch")
+
+
+def _snapshot_create_params(request: RunRequest) -> dict:
+    """Session creation parameters with the mounted snapshot service.
+
+    ZCode CLI 0.17.1 intersects ``toolAllowlist`` with the mounted MCP tools:
+    an empty allowlist filters them out entirely, so a mounting run must name
+    the exact qualified snapshot tools. At ``none`` nothing else is admitted;
+    at ``read`` the plane's own native tools stay beside them.
+    """
+    mount = request.snapshot_query
+    snapshot_tools = stdio_tool_names(mount)
+    server = {**stdio_mcp_entry(mount), "isolation": "session", "protocolVersion": "legacy"}
+    if request.permission == "none":
+        return {"toolAllowlist": list(snapshot_tools), "mcpServers": [server],
+                "offPeakToolEnabled": False, "dynamicWorkflowEnabled": False}
+    return {"toolAllowlist": [*_READ_PLANE_TOOLS, *snapshot_tools],
+            "mcpServers": [server], "mode": _session_mode()}
 
 
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,
@@ -1258,7 +1305,9 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
                 first_output = model_activity and not facts.model_responded
                 if first_output:
                     facts.model_responded = True
-            changed = classifier.observe(message)
+            explained = request.snapshot_query is not None and tools.explains_tool_frame(
+                message, read=request.permission == "read")
+            changed = explained or classifier.observe(message)
             if changed or first_output:
                 notify()
         return observe
@@ -1278,7 +1327,9 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         outcome.attempt_usage.capture_baseline(connection)
 
     input_text = request.input_text
-    if no_tool:
+    if request.snapshot_query is not None:
+        create_params = _snapshot_create_params(request)
+    elif no_tool:
         create_params = {"toolAllowlist": [],
                          "mcpServers": [], "offPeakToolEnabled": False,
                          "dynamicWorkflowEnabled": False}
@@ -1317,7 +1368,6 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         state.status = "ok"
         feedback = notify(settled=True, raw=outcome.raw_answer)
         if feedback.action == "correct":
-            outcome.correction_count += 1
             input_text = feedback.input_text
             classifier.admitted = False
             continue
@@ -1503,7 +1553,8 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
                      state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
                      facts: _RunFacts, notify: Callable[..., RunFeedback],
                      completion_carrier: bool, outcome: _CarrierOutcome,
-                     session: ZcodeSessionProjector | None) -> bool | None:
+                     session: ZcodeSessionProjector | None,
+                     explain_terminal: Callable[[dict], bool] | None = None) -> bool | None:
     """The stop phase: retained observations, bridge close, the conservative
     group stop and the EOF drain, in their established order."""
     if outcome.attempt_usage is not None:
@@ -1545,10 +1596,10 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
             # marks the stream incomplete here.
             if not completion_carrier and outcome.last_protocol is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.last_protocol, facts,
-                                 state, notify, session)
+                                 state, notify, session, explain_terminal=explain_terminal)
             elif completion_carrier and outcome.evidence is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.evidence, facts,
-                                 state, notify, session)
+                                 state, notify, session, explain_terminal=explain_terminal)
         try:
             spawn.process.stdout.close()
         except OSError:
@@ -1631,7 +1682,7 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              resolved=outcome.resolved,
                              session_id=outcome.session_id, turn_id=outcome.turn_id,
                              raw_answer=outcome.raw_answer,
-                             correction_count=outcome.correction_count, event_count=outcome.event_count,
+                             correction_count=state.correction_count, event_count=outcome.event_count,
                              record=outcome.record, projection=outcome.projection,
                              binding_path=outcome.binding_path,
                              binding_save_failed=outcome.binding_save_failed, drained=drained,
@@ -1652,7 +1703,7 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              resolved=outcome.resolved,
                              session_id=outcome.session_id, turn_id=outcome.turn_id,
                              raw_answer=outcome.raw_answer,
-                             correction_count=outcome.correction_count, event_count=outcome.event_count,
+                             correction_count=state.correction_count, event_count=outcome.event_count,
                              record=None, projection=None, binding_path=outcome.binding_path,
                              binding_save_failed=outcome.binding_save_failed, drained=drained,
                              evidence_refs=evidence_refs, tool_package=None, facts=facts)

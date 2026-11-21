@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from ..store.db import canonical_json
+from ...protocol import router_selection
 
 CLAIM_EVENT = "router.claimed"
 _IDENTITY_FIELDS = ("harness", "provider", "model", "effort")
@@ -37,6 +38,38 @@ def _dispatch(connection, row: dict) -> dict:
             "buddyId": row["buddy_id"], "buddy": buddy,
             "document": document,
             "createdAt": row["created_at"]}
+
+
+
+TASK_PREVIEW_BYTES = 8 * 1024
+
+
+def execution_document(dispatch: dict, reference: dict, digest: str) -> dict:
+    """Send the bounded request head and a reference to the frozen round."""
+    document = dispatch["document"]
+    task = document["task"]
+    encoded = task.encode("utf-8")
+    task_head = {"task": task}
+    if len(encoded) > TASK_PREVIEW_BYTES:
+        task_head = {"task": encoded[:TASK_PREVIEW_BYTES].decode("utf-8", errors="ignore"),
+                     "taskTruncated": True, "taskCharacters": len(task), "taskBytes": len(encoded)}
+    mode = document["routingMode"]
+    quota = (document.get("exploration") or {}).get("quota") is True
+    return {
+        **{key: document[key] for key in (
+            "requestId", "routingMode", "project", "expectedSeconds", "requiredCapabilities",
+            "buddy", "routerBuddy", "routerBuddyId", "routerIndex", "modelResponseWaitSeconds")},
+        **task_head, "protocolVersion": router_selection.VERSION,
+        "policyFacts": {"hardConstraints": document["policyFacts"]["hardConstraints"]},
+        "candidateCount": len(document["buddies"]), "domainNodeCount": len(document["domainNodes"]),
+        **({"exploration": document["exploration"]} if quota else {}),
+        "snapshot": {"namespace": "routing", "owner": dispatch["decisionId"],
+                     "round": dispatch["round"], "reference": reference},
+        "inputSha256": digest,
+        "outputSchema": router_selection.answer_schema(mode, exploration=quota),
+        **({key: document[key] for key in ("executionWorkspace", "executionWorkspaceForm")}
+           if mode == "review" else {}),
+    }
 
 
 def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str, round: int = 1,

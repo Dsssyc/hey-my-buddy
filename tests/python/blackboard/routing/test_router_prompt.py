@@ -1,18 +1,13 @@
-"""Derived Router evidence stays in the prompt, including the retained fast audit."""
-from __future__ import annotations
+"""Routing starts with bounded input and reads full evidence from its frozen round."""
+from blackboard.routing.test_decision import DecisionTestCase
+from admission import admit_board
 
-from copy import deepcopy
-import json
-from pathlib import Path
-import tempfile
-from types import SimpleNamespace
-import unittest
-from unittest.mock import patch
-
-from hey_my_buddy.blackboard.routing import router
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.roles import router as calls, run_execution, structured_call
+from hey_my_buddy.blackboard.routing import router_sequence
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
+from hey_my_buddy.buddy.roles.prompts import router_prompt
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.private_files import read_snapshot
+from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
 
 
 def candidate():
@@ -28,109 +23,61 @@ def candidate():
                            "byDomain": {"domain": statistics(10, 10, 0, 60)},
                            "byDomainTaskType": {"domain": {"review": statistics(4, 0, 4, None)}}}}
 
+class RouterPromptTests(DecisionTestCase):
+    def test_claim_and_prompt_stay_bounded_and_query_recovers_the_full_task(self):
+        board = self.board()
+        self.seed(board)
+        task = "维修解析器" * 8000
+        selected = self.request(board, task=task)
+        claim = admit_board(board, {"nonce": "n" * 32, "taskId": selected["runId"]})["claim"]
+        document = claim["decisionInput"]
+        source = document["snapshot"]
+        self.assertEqual((source["namespace"], source["owner"], source["round"]), ("routing", selected["decisionId"], 1))
+        self.assertEqual(document["protocolVersion"], 20)
+        self.assertTrue(document["taskTruncated"])
+        self.assertEqual(document["taskCharacters"], len(task))
+        self.assertEqual(document["taskBytes"], len(task.encode()))
+        self.assertLessEqual(len(document["task"].encode()), 8192)
+        self.assertTrue(task.startswith(document["task"]))
+        self.assertLess(len(canonical_json(document).encode()), 12 * 1024)
+        prompt = router_prompt(render_selection_prompt(document))
+        self.assertLess(len(prompt.encode()), 12 * 1024)
+        for field in ("buddies", "domainNodes", "routingBasis", "resultTime", "firstPassRateInterval"):
+            self.assertNotIn(f'"{field}"', prompt)
+        self.assertNotIn("enum", document["outputSchema"]["properties"]["buddyId"])
+        base = read_snapshot(board.directory, "routing", source["owner"], source["reference"], round=1)
+        self.assertEqual(base["protocolVersion"], 20)
+        self.assertNotIn("outputSchema", base)
+        self.assertGreaterEqual(len(base["buddies"]), 2)
+        query = SnapshotQuery(base)
+        offset = 0
+        pages = []
+        while offset is not None:
+            page, _ = query.call("query_task", {"offset": offset})
+            pages.append(page["text"])
+            offset = page["nextOffset"]
+        self.assertEqual("".join(pages), task)
+        with board.store.db.read() as connection:
+            dispatch = router_sequence.dispatch(connection, selected["runId"])
+        from hey_my_buddy.blackboard.store.db import sha256_text
+        self.assertEqual(document["inputSha256"], sha256_text(canonical_json(dispatch["document"])))
 
-class RouterPromptTests(unittest.TestCase):
-    def test_wilson_intervals_cover_empty_all_none_and_mixed_samples(self):
-        self.assertIsNone(router._rate_interval(0, 0))
-        for count, samples, lower, upper in (
-                (0, 10, 0, 0.2775327998628892),
-                (10, 10, 0.7224672001371107, 1),
-                (4, 20, 0.080657662579798, 0.416017432251894)):
-            with self.subTest(count=count, samples=samples):
-                interval = router._rate_interval(count, samples)
-                self.assertEqual(interval["method"], "wilson")
-                self.assertEqual(interval["confidence"], 0.95)
-                self.assertAlmostEqual(interval["lower"], lower, places=12)
-                self.assertAlmostEqual(interval["upper"], upper, places=12)
-                self.assertLessEqual(interval["lower"], count / samples + 1e-12)
-                self.assertGreaterEqual(interval["upper"], count / samples - 1e-12)
-        for count in (0, 1, 2):
-            small = router._rate_interval(count, 2)
-            large = router._rate_interval(count * 100, 200)
-            self.assertLess(large["upper"] - large["lower"], small["upper"] - small["lower"])
+    def test_historical_protocol_19_dispatch_remains_readable_without_a_snapshot_file(self):
+        import json
 
-    def test_each_level_adds_intervals_and_result_time_without_mutating_the_document(self):
-        for mode in ("fast", "review"):
-            for at_least in (False, True):
-                with self.subTest(mode=mode, at_least=at_least):
-                    buddy = candidate()
-                    buddy["load"]["wait"]["atLeast"] = at_least
-                    document = {"routingMode": mode, "buddies": [buddy]}
-                    before = canonical_json(document)
-                    prompt = router.render_prompt(document)
-                    self.assertIn("deliveries that were delivered and accepted,\nthen later named for correction by another micro task through its fixes field.",
-                                  prompt)
-                    rendered = json.loads(prompt.split("\n\n")[1])["buddies"][0]
-                    stats = rendered["statistics"]
-                    levels = ((stats["overall"], buddy["statistics"]["overall"], 420),
-                              (stats["byDomain"]["domain"], buddy["statistics"]["byDomain"]["domain"], 360),
-                              (stats["byDomainTaskType"]["domain"]["review"],
-                               buddy["statistics"]["byDomainTaskType"]["domain"]["review"], None))
-                    for enriched, original, seconds in levels:
-                        for key, value in original.items():
-                            self.assertEqual(enriched[key], value)
-                        self.assertIn("firstPassRateInterval", enriched)
-                        self.assertIn("failureRateInterval", enriched)
-                        self.assertEqual(enriched["resultTime"], {"seconds": seconds, "atLeast": at_least,
-                                                                "missingMedianDelivery": seconds is None})
-                    self.assertAlmostEqual(stats["overall"]["failureRateInterval"]["upper"], 0.416017432251894)
-                    self.assertAlmostEqual(stats["byDomain"]["domain"]["firstPassRateInterval"]["lower"], 0.7224672001371107)
-                    self.assertEqual(canonical_json(document), before)
-
-    def test_empty_samples_keep_rates_and_intervals_null_and_no_cells_are_invented(self):
-        buddy = candidate()
-        buddy["statistics"] = {"overall": {"samples": 0, "firstPasses": 0, "failures": 0,
-                                           "firstPassRate": None, "failureRate": None, "defects": 0,
-                                           "medianDeliverySeconds": None},
-                               "byDomain": {}, "byDomainTaskType": {}}
-        prompt = router.render_prompt({"buddies": [buddy]})
-        rendered = json.loads(prompt.split("\n\n")[1])["buddies"][0]["statistics"]
-        for field in ("firstPassRate", "failureRate", "firstPassRateInterval", "failureRateInterval"):
-            self.assertIsNone(rendered["overall"][field])
-        self.assertIsNone(rendered["overall"]["resultTime"]["seconds"])
-        self.assertTrue(rendered["overall"]["resultTime"]["missingMedianDelivery"])
-        self.assertEqual(rendered["byDomain"], {})
-        self.assertEqual(rendered["byDomainTaskType"], {})
-
-    def test_fast_and_review_preparations_pass_derived_evidence_to_the_native_request(self):
-        for mode in ("fast", "review"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                document = {"routingMode": mode, "task": "choose", "buddies": [candidate()],
-                            "outputSchema": {"type": "object"}}
-                before = deepcopy(document)
-                context = ExecutionContext("task", "attempt", 1, {}, root, {},
-                                           {"HMB_STATE_DIR": str(root / "state")})
-                prepare = calls.prepare_router_fast if mode == "fast" else calls.prepare_router_review
-                preparation = prepare(document, {}, SimpleNamespace(name="dsh"), context)
-                for key in ("firstPassRateInterval", "failureRateInterval", "resultTime", "defects"):
-                    self.assertIn('"' + key + '":', preparation.request.prompt)
-                self.assertEqual(document, before)
-
-    def test_fast_call_audit_retains_the_rendered_prompt_with_derived_evidence(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            document = {"routingMode": "fast", "task": "choose", "buddies": [candidate()], "outputSchema": {}}
-            before = canonical_json(document)
-            context = ExecutionContext("task", "attempt", 1,
-                                       {"provider": "fixture", "model": "fixture", "effort": "off"},
-                                       root, {}, {"HMB_STATE_DIR": str(root / "state")})
-            preparation = calls.prepare_router_fast(document, {}, SimpleNamespace(name="dsh"), context)
-            handle = SimpleNamespace(role_run_control={"operation": "fast", "maintenance": False},
-                                     exit_code=0, shutdown_confirmed=lambda: True)
-            module = SimpleNamespace(check_preparation=lambda *_args: None)
-            with patch.object(run_execution, "_launch", return_value=handle), \
-                    patch.object(run_execution, "read_fast_result", return_value={"status": "ok"}):
-                run_execution.start_fast(module, "dsh", preparation.context, preparation.request)
-                self.assertEqual(structured_call.collect(handle).status, "ok")
-            path = handle.no_tool_evidence.evidence_root / "call-1" / "request.json"
-            audit = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(audit["prompt"], preparation.request.prompt)
-            self.assertFalse(audit["captureEvidence"])
-            for key in ("firstPassRateInterval", "failureRateInterval", "resultTime", "defects"):
-                self.assertIn('"' + key + '":', audit["prompt"])
-            self.assertEqual(canonical_json(document), before)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        board = self.board()
+        self.seed(board)
+        selected = self.request(board)
+        with board.store.db.write() as connection:
+            record = connection.execute("SELECT snapshot_json FROM router_requests WHERE decision_id=?",
+                                        (selected["decisionId"],)).fetchone()
+            sealed = json.loads(record[0])
+            base = sealed["baseInput"]
+            del base["protocolVersion"]
+            base["outputSchema"] = {"properties": {"buddyId": {"enum": [
+                candidate["buddyId"] for candidate in base["buddies"]] + [None]}}}
+            connection.execute("UPDATE router_requests SET snapshot_json=? WHERE decision_id=?",
+                               (canonical_json(sealed), selected["decisionId"]))
+        audit = self.decision(board, selected["decisionId"])
+        self.assertEqual(audit["input"]["outputSchema"], base["outputSchema"])
+        self.assertNotIn("protocolVersion", audit["input"])

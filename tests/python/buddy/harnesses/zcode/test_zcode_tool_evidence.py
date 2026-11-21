@@ -42,6 +42,8 @@ sys.stdin.reconfigure(encoding='utf-8')
 if '--version' in sys.argv:
     print('fixture-0.16.9'); sys.exit(0)
 case = os.environ.get('HMB_ZCODE_TEST_CASE', 'ok')
+snapshot_scope, _, snapshot_fault = case.removeprefix('snapshot-').partition('-')
+snapshot_name = 'mcp__hey_my_buddy_snapshot__query_task'
 session = 0
 subscribed = False
 closed = False
@@ -67,6 +69,15 @@ for line in sys.stdin:
         assert 'titleGenerationEnabled' not in p
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
+        elif case.startswith('snapshot-'):
+            assert len(p['mcpServers']) == 1
+            server = p['mcpServers'][0]
+            assert server['name'] == 'hey_my_buddy_snapshot'
+            from hey_my_buddy.buddy.roles.snapshot_mcp import SnapshotService
+            service = SnapshotService.from_file(Path(server['args'][-1]))
+            exact = ['mcp__hey_my_buddy_snapshot__' + tool['name'] for tool in service.tools]
+            assert set(p['toolAllowlist']) == set(exact + (
+                ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch'] if snapshot_scope == 'read' else []))
         elif case in ('write-final', 'write-post-close'):
             assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
@@ -80,6 +91,13 @@ for line in sys.stdin:
               'params':{'sessionId':f's-{session}','scope':'runtime-materialization'}})
         reply = json.loads(sys.stdin.readline())
         Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']), encoding='utf-8', newline='\\n')
+        if case.startswith('snapshot-'):
+            send({'method':'session/lifecycle/changed','params':{'sessionId':f's-{session}','state':'starting','generation':1,'revision':1,'lastError':None}})
+            send({'id':f'official-auth-{session}','method':'interaction/requestOfficialMcpAuthHeaders',
+                  'params':{'mcpKey':'sites','pluginId':'zcode-site@zcode-plugins-official'}})
+            auth_reply = json.loads(sys.stdin.readline())
+            assert auth_reply['error']['code'] == -32601
+            send({'method':'session/lifecycle/changed','params':{'sessionId':f's-{session}','state':'ready','generation':1,'revision':2,'lastError':None}})
         if case == 'preference-correct' and session == 1:
             settings = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/setting.json'
             settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}), encoding='utf-8', newline='\\n')
@@ -93,7 +111,7 @@ for line in sys.stdin:
         elif p.get('afterMessageId') == f'a-{session}' and subscribed and prompt_sent:
             result = {'messages':[]}
         elif case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct',
-                    'usage-correct-quota', 'quota-truncated') and subscribed and prompt_sent:
+                    'usage-correct-quota', 'quota-truncated', 'snapshot-none', 'snapshot-read') and subscribed and prompt_sent:
             result = {'messages':[{'info':{'sessionId':f's-{session}', 'messageId':f'a-{session}',
                 'parentMessageId':f'u-{session}', 'role':'assistant',
                 'tokens':{'input':12, 'output':3, 'reasoning':1, 'cache':{'read':2,'write':1}}},
@@ -149,6 +167,62 @@ for line in sys.stdin:
             send({'method':'v4/telemetry/event','params':{'sessionId':f's-{session}',
                   'turnId':f't-{session}','kind':'turn.started','eventSeq':1}})
         event('turn.started',1,{'inputId':ident})
+        if case == 'unmounted-stream':
+            event('model.streaming', 2, {'kind': 'tool_input_start', 'toolCallId': 'page',
+                  'toolName': snapshot_name})
+            continue
+        if case.startswith('snapshot-'):
+            seq = 1
+            for call_id, args in (('page', {'limit': 5}), ('error', {'offset': 999})):
+                name = 'rogue_tool' if snapshot_fault == 'rogue' else snapshot_name
+                tool = {'toolCallId': call_id, 'toolName': name}
+                start = {'kind': 'tool_input_start', **tool}
+                if snapshot_fault == 'child':
+                    start['parentToolCallId'] = 'parent'
+                event('model.streaming', seq + 1, start)
+                event('model.streaming', seq + 2, {'kind': 'tool_input_delta', 'toolCallId': call_id,
+                      'delta': json.dumps(args)})
+                event('model.streaming', seq + 3, {'kind': 'tool_input_end', 'toolCallId': call_id})
+                event('model.streaming', seq + 4, {'kind': 'tool_call', **tool, 'input': args, 'done': False})
+                root = {'sessionId': f's-{session}', 'turnId': f't-{session}'}
+                send({'method': 'v4/telemetry/model-request-metrics', 'params': {**root, 'kind': 'model.request.metrics'}})
+                send({'method': 'v4/conversation/contextCompositionChanged', 'params': {**root}})
+                event('session.updated', seq + 5, {'stopReason': 'tool-calls', 'toolCallCount': 1})
+                for index, phase in enumerate(('scheduled', 'started')):
+                    send({'method': 'computer-use/operation-event', 'params': {
+                        **root, **tool, 'kind': 'tool-' + phase, 'sequenceNumber': seq + index}})
+                for index, phase in enumerate(('scheduled', 'started', 'progress')):
+                    send({'method': 'v4/telemetry/event', 'params': {
+                        **root, **tool, 'kind': 'tool.lifecycle', 'phase': phase, 'eventSeq': seq + index}})
+                event('tool.updated', seq + 6, {'kind': 'scheduled', **tool, 'inputOmitted': True})
+                if snapshot_fault == 'permission':
+                    send({'method': 'v4/telemetry/event', 'params': {
+                        **root, **tool, 'kind': 'permission.lifecycle', 'phase': 'requested',
+                        'eventSeq': seq + 3}})
+                reply = service.mcp_call('query_task', args)
+                send({'method': 'v4/telemetry/event', 'params': {
+                    **root, **tool, 'kind': 'tool.lifecycle', 'phase': 'completed', 'eventSeq': seq + 4}})
+                prefix = 'MCP tool returned an error:' + chr(10) if reply['isError'] else ''
+                event('tool.updated', seq + 7, {'kind': 'result', 'toolCallId': call_id,
+                      'result': {'success': True, 'content': prefix + reply['content'][0]['text']}})
+                event('streamRecovery.updated', seq + 8, {
+                    'kind': 'tool_result', **tool, 'committedToolCallIds': [call_id]})
+                seq += 8
+            send({'method': 'v4/telemetry/event', 'params': {
+                **root, 'kind': 'turn.terminal', 'eventSeq': seq,
+                'toolCallCount': 3 if snapshot_fault == 'count' else 2}})
+            if case == 'snapshot-route':
+                answer = '{"buddyId":"legal","domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
+            elif session == 1:
+                answer = 'wrong'
+            elif snapshot_scope == 'read':
+                answer = '{"buddyId":null,"domainNodeId":null,"taskType":"change","note":"fixture","evidence":[]}'
+            else:
+                answer = '{"choice":"a"}'
+            event('turn.completed', seq + 1, {'resultType': 'success', 'inputId': ident, 'response': answer,
+                  'toolCalls': 2})
+            send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
+            continue
         if case in ('usage-quota', 'usage-projection-quota', 'usage-correct-quota'):
             send({'method':'v4/telemetry/event','params':{'version':1,'eventId':f'usage-{session}',
                   'eventSeq':3,'sessionId':f's-{session}','turnId':f't-{session}',
@@ -278,6 +352,132 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]['phases'], ['end', 'start'])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'read', state_dir=self.state_dir))
 
+    def test_streamed_fragments_use_the_full_native_call_identity(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.add_root("s-1", "t-2")
+        start = frame({"kind": "tool_input_start", "toolCallId": "call", "toolName": name},
+                      kind="model.streaming")
+        facts.observe(start)
+        for read in (False, True):
+            with self.subTest(read=read):
+                self.assertTrue(facts.explains_tool_frame(start, read=read))
+                for turn, call_id in (("t-1", "call"), ("t-2", "call"), ("t-1", "other")):
+                    delta = frame({"kind": "tool_input_delta", "toolCallId": call_id},
+                                  kind="model.streaming", turn=turn)
+                    self.assertIs(facts.explains_tool_frame(delta, read=read),
+                                  (turn, call_id) == ("t-1", "call"))
+            for kind in ("tool_input_delta", "tool_input_end"):
+                with self.subTest(read=read, kind=kind, tool_name=None):
+                    fragment = frame({"kind": kind, "toolCallId": "call", "toolName": None},
+                                     kind="model.streaming")
+                    self.assertTrue(facts.explains_tool_frame(fragment, read=read))
+
+    def test_metadata_start_counts_for_the_observer_but_still_requires_a_canonical_start(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        scheduled = {"method": "computer-use/operation-event", "params": {
+            **ROOT, "kind": "tool-scheduled", "toolCallId": "call", "toolName": name}}
+        facts.observe(scheduled)
+        self.assertTrue(facts.explains_tool_frame(scheduled, read=False))
+        self.assertEqual((facts.tool_calls, facts.session_tool_calls), (1, 1))
+        started = {"method": "computer-use/operation-event", "params": {
+            "sessionId": "s-1", "kind": "tool-started", "toolCallId": "call"}}
+        facts.observe(started)
+        self.assertTrue(facts.explains_tool_frame(started, read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            {**started, "params": {**started["params"], "toolName": "Read"}}, read=False))
+        facts.observe(frame({"kind": "result", "toolCallId": "call", "result": {"success": True}}))
+        package = facts.finish(True)
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertFalse(package["streamComplete"])
+
+    def test_terminal_counts_are_bounded_by_explained_calls_in_each_root(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.add_root("s-1", "t-2")
+        for turn, tool_name in (("t-1", name), ("t-1", "Read"), ("t-2", name)):
+            facts.observe(frame({"kind": "scheduled", "toolCallId": tool_name, "toolName": tool_name}, turn=turn))
+        for read, count, expected in ((False, 1, True), (False, 2, False), (True, 2, True),
+                                      (True, 3, False), (True, True, False), (True, -1, False)):
+            with self.subTest(read=read, count=count):
+                for terminal in (
+                    {"method": "v4/telemetry/event",
+                     "params": {**ROOT, "kind": "turn.terminal", "toolCallCount": count}},
+                    frame({"toolCalls": count}, kind="turn.completed"),
+                ):
+                    self.assertIs(facts.explains_tool_frame(terminal, read=read), expected)
+
+    def test_subagent_source_and_post_close_streaming_fragments_are_not_explained(self):
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import _carries_tool_marker
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        relayed = frame({"kind": "tool_input_start", "toolCallId": "sub", "toolName": name, "source": "subagent"},
+                        kind="model.streaming")
+        facts.observe(relayed)
+        self.assertFalse(facts.explains_tool_frame(relayed, read=False))
+        self.assertFalse(facts.explains_tool_frame(relayed, read=True))
+        start = frame({"kind": "tool_input_start", "toolCallId": "root", "toolName": name}, kind="model.streaming")
+        facts.observe(start)
+        self.assertTrue(facts.explains_tool_frame(start, read=False))
+        facts.observe(frame({"resultType": "success"}, kind="turn.completed"))
+        late = frame({"kind": "tool_input_delta", "toolCallId": "root"}, kind="model.streaming")
+        self.assertFalse(facts.explains_tool_frame(late, read=False))
+        self.assertFalse(facts.explains_tool_frame(late, read=True))
+        self.assertFalse(_carries_tool_marker({"toolCallCount": 0}))
+        self.assertFalse(_carries_tool_marker({"toolCalls": None}))
+        for bad in (-1, True, False, "1"):
+            with self.subTest(bad=bad):
+                self.assertTrue(_carries_tool_marker({"toolCallCount": bad}))
+                self.assertTrue(_carries_tool_marker({"toolCalls": bad}))
+
+    def test_session_updated_and_stream_recovery_frames_require_known_allowed_calls(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.observe(frame({"kind": "tool_input_start", "toolCallId": "q1", "toolName": name},
+                            kind="model.streaming"))
+        # session.updated before tool.updated scheduled is bounded by streamed allowed calls.
+        self.assertTrue(facts.explains_tool_frame(
+            frame({"stopReason": "tool-calls", "toolCallCount": 1}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"stopReason": "tool-calls", "toolCallCount": 2}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"toolCallCount": 1, "toolCallId": "smuggled"}, kind="session.updated"), read=False))
+        # streamRecovery.updated requires a scheduled allowed call and matching committed ids.
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"kind": "tool_result", "toolCallId": "q1", "toolName": name},
+                  kind="streamRecovery.updated"), read=False))
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "q1", "toolName": name}))
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "edit1", "toolName": "Edit"}))
+        for recovery_kind in ("tool_result", "tool_error"):
+            self.assertTrue(facts.explains_tool_frame(
+                frame({"kind": recovery_kind, "toolCallId": "q1", "toolName": name,
+                       "committedToolCallIds": ["q1"]}, kind="streamRecovery.updated"), read=False))
+            self.assertTrue(facts.explains_tool_frame(
+                frame({"kind": recovery_kind, "toolCallId": "q1", "toolName": name,
+                       "committedToolCallIds": ["q1"]}, kind="streamRecovery.updated"), read=True))
+        for bad_payload, read in (
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": "Read"}, False),
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": name, "committedToolCallIds": ["unknown"]}, False),
+            ({"kind": "tool_result", "toolCallId": "edit1", "toolName": "Edit"}, True),
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": name, "extra": {"role": "tool"}}, False),
+            ({"kind": "other", "toolCallId": "q1", "toolName": name}, False),
+        ):
+            with self.subTest(bad_payload=bad_payload, read=read):
+                self.assertFalse(facts.explains_tool_frame(
+                    frame(bad_payload, kind="streamRecovery.updated"), read=read))
+        facts.observe(frame({"resultType": "success"}, kind="turn.completed"))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"toolCallCount": 1}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"kind": "tool_result", "toolCallId": "q1", "toolName": name},
+                  kind="streamRecovery.updated"), read=False))
+
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
         for payload in ({'kind': 'started', 'toolCallId': 'foreign'},
                         {'kind': 'progress', 'toolCallId': 'read', 'toolName': 'Bash'}):
@@ -307,12 +507,13 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["read"],
              "phases": ["end", "start"], "facts": [{"toolName": "Read", "category": "read"}],
              "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-             "incomplete": False, "malformed": False, "belongsToRoot": True}])
+             "incomplete": False, "malformed": False, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
+        self.assertEqual(set(package), tool_evidence.SESSION_PACKAGE_FIELDS)
         # The blackboard consumes the projection: the recorded read call is a
         # legal review fact, and fast mode's zero-call rule rejects it.
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir))
@@ -350,7 +551,8 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["other"],
              "phases": ["end"], "facts": [{"toolName": None, "category": "other"}],
              "consistent": True, "endBeforeStart": True, "outcome": "unknown",
-             "incomplete": True, "malformed": True, "belongsToRoot": True}])
+             "incomplete": True, "malformed": True, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
@@ -364,7 +566,8 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": None, "categories": ["execute"],
              "phases": ["start"], "facts": [{"toolName": "Bash", "category": "execute"}],
              "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-             "incomplete": True, "malformed": True, "belongsToRoot": True}])
+             "incomplete": True, "malformed": True, "belongsToRoot": True,
+             "sessionServiceVerified": False}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -579,6 +782,60 @@ class ProjectionOrderingTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "invalid-protocol")
         self.assertEqual(list(tool_evidence.read_tool_calls(facts.finish(False), state_dir=self.state_dir)), [])
 
+    def test_terminal_summary_smuggling_streamed_count_forecast_and_drain_metadata(self):
+        from hey_my_buddy.buddy.harnesses.zcode import native_run
+        from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import carries_tool_marker
+
+        self.assertFalse(carries_tool_marker({"toolCallIds": [], "committedToolCallIds": []}))
+        self.assertTrue(carries_tool_marker({"toolCallIds": ["c-1"]}))
+        self.assertTrue(carries_tool_marker({"committedToolCallIds": ["c-1"]}))
+
+        snapshot_tool = "mcp__hmb_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(snapshot_tool,))
+        facts.add_root("s-1", "t-1")
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": snapshot_tool}, seq=2))
+        facts.observe(frame({"kind": "result", "toolCallId": "c-1", "result": {"success": True}}, seq=3))
+        clean_terminal = {"method": "v4/telemetry/event", "params": {
+            "sessionId": "s-1", "turnId": "t-1", "kind": "turn.terminal", "toolCallCount": 1}}
+        smuggled_terminal = {"method": "v4/telemetry/event", "params": {
+            "sessionId": "s-1", "turnId": "t-1", "kind": "turn.terminal", "toolCallCount": 1,
+            "extra": {"type": "tool_call", "name": "Bash"}}}
+        self.assertTrue(facts.explains_tool_frame(clean_terminal, read=False))
+        self.assertTrue(facts.explains_terminal_metadata(clean_terminal, read=False))
+        self.assertFalse(facts.explains_tool_frame(smuggled_terminal, read=False))
+
+        # Streamed-only forecast in session.updated must fail finish() when never canonically scheduled.
+        forecast = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(snapshot_tool,))
+        forecast.add_root("s-1", "t-1")
+        stream_start = frame({"kind": "tool_input_start", "toolCallId": "c-ghost", "toolName": snapshot_tool},
+                             seq=2, kind="model.streaming")
+        forecast.observe(stream_start)
+        self.assertTrue(forecast.explains_tool_frame(stream_start, read=False))
+        updated = frame({"stopReason": "tool-calls", "toolCallCount": 1}, seq=3, kind="session.updated")
+        self.assertTrue(forecast.explains_tool_frame(updated, read=False))
+        package = forecast.finish(True)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=self.state_dir),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+        # Post-close EOF drain accepts pure terminal metadata without firing observer-interrupt,
+        # while still flagging post-close tool starts.
+        import queue as py_queue
+        run_facts = native_run._RunFacts()
+        classifier = native_run._Classifier(run_facts)
+        classifier.admitted = True
+        protocol = native_run.NoToolProtocol("s-1", "input", facts)
+        state = native_run._RunState()
+        conn = mock.Mock()
+        conn.messages = py_queue.Queue()
+        conn.messages.put(clean_terminal)
+        conn.messages.put(None)
+        drained = native_run._drain(
+            conn, facts, classifier, protocol, run_facts, state,
+            lambda: None, None,
+            explain_terminal=lambda msg: facts.explains_terminal_metadata(msg, read=False))
+        self.assertTrue(drained)
+        self.assertEqual(run_facts.markers, 0)
+
 
 class FakeAppServerTests(unittest.TestCase):
     """The shared fake ZCode app-server harness (migrated from test_no_tool_zcode)."""
@@ -640,7 +897,8 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["version"], 3)
+        self.assertEqual(package["version"], tool_evidence.TOOL_EVIDENCE_VERSION)
+        self.assertEqual(package["sessionServiceTools"], [])
         self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])

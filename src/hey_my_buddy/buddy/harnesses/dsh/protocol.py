@@ -30,6 +30,7 @@ from ....protocol.activity import (
 )
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ..session_receipts import refusal_shaped, verify_inquiry_receipt, verify_receipt, verify_tool_refusal
+from ..snapshot_mount import ObservedSnapshotCalls
 
 HARNESS = "dsh"
 
@@ -85,10 +86,16 @@ class DshToolFacts:
     its own ``session/new`` receipts.
     """
 
-    def __init__(self, binding: dict, *, state_dir: Path):
-        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
+    def __init__(self, binding: dict, *, state_dir: Path, session_tools=()):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir,
+                                          session_service_tools=session_tools)
         self.roots: list[dict] = []
         self.close_pending = False
+        #: The mounted snapshot service's qualified tool names, with the
+        #: observed native calls the driver later verifies against the ledger.
+        self.session_tools = frozenset(session_tools)
+        self.snapshot_calls = ObservedSnapshotCalls(names=self.session_tools)
+        self._session_starts: set[tuple[str, str]] = set()
         self._names: dict[tuple[str, str], str] = {}
 
     def add_root(self, session_id: object) -> None:
@@ -125,15 +132,40 @@ class DshToolFacts:
         name = _bounded_text(update.get("title"))
         if kind == "tool_call":
             self._project(identity, call_id, name, "start", "unknown")
+            self._observe_snapshot_start(identity, call_id, name, update)
             if isinstance(update.get("status"), str) and update["status"] in _TERMINAL_STATUS:
                 # A one-frame call: the opening frame already carries the terminal
                 # status, so the same named call gets its end fact from it.
                 self._project(identity, call_id, name, "end", _status_outcome(update["status"]))
+                self._observe_snapshot_end(identity, call_id, name, update)
             return
         if update.get("status") not in _TERMINAL_STATUS:
             return  # pending/in_progress: no settled fact exists yet
         remembered = self._names.get((session, call_id)) if session and call_id else None
         self._project(identity, call_id, remembered, "end", _status_outcome(update["status"]))
+        self._observe_snapshot_end(identity, call_id, remembered, update)
+
+    def _observe_snapshot_start(self, identity: dict, call_id: str | None,
+                                name: str | None, update: dict) -> None:
+        if identity and call_id and name in self.session_tools:
+            self._session_starts.add((identity["sessionId"], call_id))
+            # A mounted snapshot call keeps its native input beside the shared
+            # facts; the driver verifies it against the signed ledger once the
+            # run's stream has ended.
+            self.snapshot_calls.observe(identity, call_id, name,
+                                        arguments=update.get("rawInput"), started=True)
+
+    def _observe_snapshot_end(self, identity: dict, call_id: str | None,
+                              name: str | None, update: dict) -> None:
+        if not identity or not call_id or name not in self.session_tools:
+            return
+        result = update.get("rawOutput")
+        if not isinstance(result, str):
+            # A failed MCP page arrives as the raw output behind an
+            # ``Error: `` prefix (DSH CLI 0.2.2-rc.1, probes note 2026-11-19).
+            result = _content_text(update)
+        self.snapshot_calls.observe(identity, call_id, name, result=result, completed=True,
+                                    ok=update.get("status") == "completed")
 
     def _project(self, identity: dict, call_id: str | None, name: str | None,
                  phase: str, outcome: str) -> None:
@@ -158,18 +190,26 @@ class DshToolFacts:
         """Observed unique call starts, for the receipt's cumulative count."""
         return self.evidence.tool_calls
 
+    @property
+    def session_tool_calls(self) -> int:
+        """Observed starts of mounted snapshot service calls, verbatim."""
+        return len(self._session_starts)
+
     def finish(self, stream_complete: bool, *,
-               exclude_calls=None) -> dict:
+               exclude_calls=None, verified_session_calls=()) -> dict:
         """Close the collector and return the receipt's ``toolEvidence`` package.
 
         ``stream_complete`` is true only when the native stream drained to EOF,
         every root turn ended, and the owned process stopped confirmed. The
         collector keeps its facts verbatim either way; ``exclude_calls`` names
         the verified delivery calls as the collector's own full
-        ``(canonical nativeIdentity, callId)`` keys.
+        ``(canonical nativeIdentity, callId)`` keys, and
+        ``verified_session_calls`` names the mounted snapshot calls whose signed
+        ledger receipts the driver verified in both directions.
         """
         return self.evidence.finish(list(self.roots), stream_complete is True,
-                                    exclude_calls=exclude_calls)
+                                    exclude_calls=exclude_calls,
+                                    verified_session_calls=verified_session_calls)
 
 
 # -- the activity projection -------------------------------------------------------

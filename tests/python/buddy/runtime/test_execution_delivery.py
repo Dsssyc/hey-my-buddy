@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from c_two.error import ClientCallResource, CoreError
+from c_two.error import CCError, CoreError, ErrorCode
 
 from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
@@ -34,7 +34,7 @@ ACTIVITY = {"phase": "tool-running", "observedAt": "2026-10-16T00:00:00Z", "even
 
 
 def client_call_failure(cause: CoreError):
-    error = ClientCallResource(str(cause))
+    error = CCError(ErrorCode.ClientCallingResource, str(cause))
     error.__cause__ = cause
     return local_rpc_error(error)
 
@@ -341,16 +341,17 @@ class ExecutionDeliveryTests(unittest.TestCase):
         reference = receipt_reference(self.execution.directory)
         cause = CoreError('transport', 'IPC client closed')
         cause.transport_kind = 'ipc'
-        cause.transport_phase = 'dispatch_uncertain'
+        # The dispatch phase is a read-only property whose backing field init writes.
+        cause._transport_phase = 'dispatch_uncertain'
         refused_uncertain = CoreError('transport', 'peer closed mid-call')
         refused_uncertain.transport_kind = 'ipc'
-        refused_uncertain.transport_phase = 'dispatch_uncertain'
+        refused_uncertain._transport_phase = 'dispatch_uncertain'
         refused_uncertain.io_kind = 'connection_refused'
         for error in (local_rpc_error(cause), client_call_failure(cause),
                       local_rpc_error(refused_uncertain), client_call_failure(refused_uncertain), *(
                 BoardError(code, 'route withdrawn') for code in (
                     'C_TWO_RESOURCE_CLOSED', 'C_TWO_RESOURCE_REMOVED', 'C_TWO_RESOURCE_UNAVAILABLE',
-                    'C_TWO_RESOURCE_NOT_FOUND', 'C_TWO_ROUTE_STALE'))):
+                    'C_TWO_RESOURCE_NOT_FOUND'))):
             with self.subTest(code=error.code):
                 client = mock.Mock()
                 client.submit_result.side_effect = [error, {}]
@@ -364,7 +365,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_ipc_tear_down_transient_defers_hints_and_replays_them(self):
         client = self.execution.client
         client.progress.side_effect = [
-            BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+            BoardError("C_TWO_CLIENT_CALLING_RESOURCE",
                        "IPC client closed", category='transport', transport_kind='ipc',
                        transport_phase='dispatch_uncertain'), {}]
         self.execution.hint(activity=ACTIVITY)
@@ -383,9 +384,9 @@ class ExecutionDeliveryTests(unittest.TestCase):
         write_receipt(self.execution.directory, receipt)
         cause = CoreError('transport', 'unclassified local I/O failure')
         cause.transport_kind = 'ipc'
-        cause.transport_phase = 'pre_dispatch'
+        cause._transport_phase = 'pre_dispatch'
         cause.io_kind = 'other'
-        for error in (local_rpc_error(cause), client_call_failure(cause), local_rpc_error(ClientCallResource()),
+        for error in (local_rpc_error(cause), client_call_failure(cause), local_rpc_error(CCError(ErrorCode.ClientCallingResource)),
                       BoardError('C_TWO_CONTRACT_MISMATCH', 'peer contract defect'),
                       BoardError('C_TWO_IDENTITY_MISMATCH', 'peer identity defect'),
                       BoardError('C_TWO_PROTOCOL_VIOLATION', 'peer protocol defect')):

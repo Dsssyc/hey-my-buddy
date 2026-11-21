@@ -1,4 +1,4 @@
-"""Private published C-Two RPC, non-pool accounting and control capacity.
+"""Private published C-Two RPC, role budgets and control capacity.
 
 Every native process selects its endpoint before local I/O: a test-owned state/ipc
 directory on POSIX, the native user-scoped pipe domain on Windows. Memory
@@ -34,11 +34,10 @@ TESTS = ROOT / "tests" / "python"
 
 MIB = 1024 * 1024
 
-#: Native subprocess fixtures; raw mode varies only explicit IPC overrides.
+#: Native subprocess fixtures; each process applies the private profile itself.
 PROBE_SERVER = '''
 import json, os, sys, time
 from pathlib import Path
-from types import SimpleNamespace
 import c_two as cc
 from c_two import crm
 
@@ -57,15 +56,10 @@ class ProbeImpl:
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.private_files import publish_bytes
 state = Path(os.environ["HMB_STATE_DIR"])
-if os.environ.get("PROBE_SERVER_MODE") == "raw":
-    rpc_config.configure_local_endpoint(state)
-    cc.set_server(ipc_overrides=json.loads(os.environ["PROBE_SERVER_OVERRIDES"]))
-else:
-    from hey_my_buddy.protocol import rpc_config
-    rpc_config.configure_server(state)
+rpc_config.configure_server(state)
 cc.register(ProbeContract, ProbeImpl(), name="hey-my-buddy-probe",
-            concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-context = cc.local_endpoint_context()
+            concurrency=cc.ConcurrencyConfig(mode="parallel"))
+context = cc.endpoint.local_endpoint_context()
 publish_bytes(Path(sys.argv[1]), json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": context.root, "platform": context.platform, "namespace": context.namespace_id}).encode("utf-8"))
 stop = sys.argv[2]
 while not os.path.exists(stop):
@@ -84,16 +78,9 @@ class ProbeContract:
     def sleep_ms(self, payload: str) -> str: ...
 
 from pathlib import Path
-from types import SimpleNamespace
 from hey_my_buddy.protocol import rpc_config
 state = Path(os.environ["HMB_STATE_DIR"])
-mode = os.environ.get("PROBE_CLIENT_MODE", "profile")
-if mode == "raw":
-    rpc_config.configure_local_endpoint(state)
-    cc.set_client(ipc_overrides=json.loads(os.environ["PROBE_CLIENT_OVERRIDES"]))
-elif mode == "profile":
-    from hey_my_buddy.protocol import rpc_config
-    rpc_config.configure_client(state)
+rpc_config.configure_client(state)
 
 address, operation, argument = sys.argv[1], sys.argv[2], sys.argv[3]
 payload = "x" * int(argument.split(":", 1)[1]) if argument.startswith("bytes:") else argument
@@ -104,7 +91,7 @@ try:
     reply = {
         "ok": True,
         "version": cc.__version__,
-        "memory": cc.memory_stats(),
+        "memory": cc.observe.memory_stats(),
         "seconds": round(time.monotonic() - started, 3),
         "bytes": len(result.encode("utf-8")),
         "sha256": hashlib.sha256(result.encode("utf-8")).hexdigest(),
@@ -128,10 +115,9 @@ def private_environment(root: Path, **overrides) -> dict:
 
 
 class ProbeServer:
-    """One test-owned real C-Two server with the frozen profile (or a raw override)."""
+    """One test-owned real C-Two server with the frozen profile."""
 
-    def __init__(self, root: Path, *, mode: str = "profile", overrides: dict | None = None,
-                 name: str = "probe", environment: dict | None = None):
+    def __init__(self, root: Path, *, name: str = "probe", environment: dict | None = None):
         self.root = Path(root)
         self.script = self.root / f"{name}-server.py"
         self.script.write_text(PROBE_SERVER, encoding="utf-8", newline="\n")
@@ -141,8 +127,6 @@ class ProbeServer:
         self.log = open(self.log_path, "wb")
         environment = private_environment(
             self.root,
-            PROBE_SERVER_MODE=mode,
-            PROBE_SERVER_OVERRIDES=json.dumps(overrides or {}),
             **(environment or {}),
         )
         self.process = subprocess.Popen(
@@ -177,16 +161,13 @@ class ProbeServer:
     def pid(self) -> int:
         return self.process.pid
 
-    def call(self, operation: str, argument: str, *, client_mode: str = "profile",
-             overrides: dict | None = None, environment: dict | None = None) -> dict:
+    def call(self, operation: str, argument: str, *, environment: dict | None = None) -> dict:
         """One client subprocess that configures itself before connecting."""
         script = self.root / "probe-client.py"
         if not script.exists():
             script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
         environment = private_environment(
             self.root,
-            PROBE_CLIENT_MODE=client_mode,
-            PROBE_CLIENT_OVERRIDES=json.dumps(overrides or {}),
             **(environment or {}),
         )
         completed = subprocess.run(
@@ -234,20 +215,19 @@ class ProfileTests(unittest.TestCase):
         self.addCleanup(shutdown_private_rpc)
         self.state = Path(self.temp.name).resolve()
 
-    def test_profile_disables_pool_and_preserves_non_pool_limits(self):
+    def test_report_publishes_whitelisted_role_budgets(self):
         server, client = rpc_config.report("server"), rpc_config.report("client")
-        self.assertEqual(set(server["overrides"]), set(rpc_config.WHITELISTED_KEYS["server"]))
-        self.assertEqual(set(client["overrides"]), set(rpc_config.WHITELISTED_KEYS["client"]))
-        self.assertIs(server["overrides"]["pool_enabled"], False)
-        self.assertFalse(server["sharedMemoryDisabled"])
+        self.assertEqual(set(server["budgets"]), set(rpc_config.WHITELISTED_KEYS["server"]))
+        self.assertEqual(set(client["budgets"]), set(rpc_config.WHITELISTED_KEYS["client"]))
+        self.assertEqual(server["profile"], "hey-my-buddy-lightweight-2")
         for values in (server, client):
-            self.assertFalse(any("pool" in key.lower() for key in values["capacity"]))
-            self.assertNotIn("pool_segment_size", values["overrides"])
-            self.assertNotIn("max_pool_segments", values["overrides"])
-        self.assertEqual(server["capacity"]["reassemblyCapacityBytes"], 32 * MIB)
-        self.assertGreaterEqual(server["capacity"]["maxReassemblyBytes"], MAX_MESSAGE_BYTES)
-        self.assertGreater(server["overrides"]["max_execution_workers"], WAIT_CAPACITY_DEFAULT)
-        self.assertLessEqual(server["overrides"]["max_execution_workers"], 64)
+            self.assertEqual(values["budgets"]["memory_budget_bytes"], 64 * MIB)
+            self.assertEqual(values["budgets"]["file_spill_budget_bytes"], 64 * MIB)
+            self.assertEqual(values["budgets"]["max_outstanding_calls"], 256)
+        self.assertEqual(server["budgets"]["max_payload_size"], 32 * MIB)
+        self.assertGreaterEqual(server["budgets"]["max_payload_size"], MAX_MESSAGE_BYTES)
+        self.assertGreater(server["budgets"]["max_execution_workers"], WAIT_CAPACITY_DEFAULT)
+        self.assertLessEqual(server["budgets"]["max_execution_workers"], 64)
 
     def test_configure_is_idempotent_and_writes_no_environment(self):
         import c_two as cc
@@ -256,10 +236,10 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(rpc_config.configure_server(self.state), first)
         self.assertEqual(rpc_config.configure_client(self.state)["role"], "client")
         if os.name == "nt":
-            self.assertIsNone(cc.local_endpoint_context().root)
+            self.assertIsNone(cc.endpoint.local_endpoint_context().root)
             self.assertFalse((self.state / "ipc").exists())
         else:
-            self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
+            self.assertEqual(Path(cc.endpoint.local_endpoint_context().root), self.state / "ipc")
             self.assertEqual((self.state / "ipc").stat().st_mode & 0o777, 0o700)
         self.assertEqual(dict(os.environ), before)
 
@@ -267,7 +247,7 @@ class ProfileTests(unittest.TestCase):
         with mock.patch.object(rpc_config, "SERVICE_STARTUP_TIMEOUT_SECONDS", 1.25), \
              mock.patch.object(rpc_config.cc, "set_server", wraps=rpc_config.cc.set_server) as configure:
             rpc_config.configure_server(self.state)
-        configure.assert_called_once_with(ipc_overrides=rpc_config.SERVER_OVERRIDES, startup_timeout=1.25)
+        configure.assert_called_once_with(startup_timeout=1.25, **rpc_config.SERVER_BUDGETS)
 
     def test_windows_never_passes_root_override(self):
         def select():
@@ -275,7 +255,7 @@ class ProfileTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"C2_IPC_ROOT": str(self.state / "inherited")}), \
                 mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), \
-                mock.patch.object(rpc_config.cc, "set_local_endpoint", side_effect=select) as endpoint:
+                mock.patch.object(rpc_config.cc.endpoint, "set_local_endpoint", side_effect=select) as endpoint:
             rpc_config.configure_local_endpoint(self.state)
             endpoint.assert_called_once_with()
             self.assertNotIn("C2_IPC_ROOT", os.environ)
@@ -389,17 +369,17 @@ class ProfileTests(unittest.TestCase):
 
         rpc_config.configure_server(self.state)
         cc.register(ProfileProbe, Echo(), name="hey-my-buddy-profile-probe")
-        context = cc.local_endpoint_context()
+        context = cc.endpoint.local_endpoint_context()
         other = self.state / "other"
         rpc_config.configure_client(other, create=False)
         self.assertIsNone(context.root)
-        self.assertEqual(cc.local_endpoint_context().namespace_id, context.namespace_id)
+        self.assertEqual(cc.endpoint.local_endpoint_context().namespace_id, context.namespace_id)
         with cc.connect(ProfileProbe, name="hey-my-buddy-profile-probe", address=cc.server_address()) as probe:
             self.assertEqual(probe.echo("same-user"), "same-user")
         self.assertFalse(other.exists())
         self.assertTrue(cc.shutdown()["completed"])
         rpc_config.configure_client(other, create=False)
-        self.assertEqual(cc.local_endpoint_context().namespace_id, context.namespace_id)
+        self.assertEqual(cc.endpoint.local_endpoint_context().namespace_id, context.namespace_id)
         self.assertFalse(other.exists())
 
     @unittest.skipIf(os.name == "nt", "Only Unix roots select distinct native endpoint domains")
@@ -414,10 +394,10 @@ class ProfileTests(unittest.TestCase):
         other = self.state / "other"
         with self.assertRaisesRegex(Exception, "configuration is frozen"):
             rpc_config.configure_client(other)
-        self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
+        self.assertEqual(Path(cc.endpoint.local_endpoint_context().root), self.state / "ipc")
         self.assertTrue(cc.shutdown()["completed"])
         rpc_config.configure_client(other)
-        self.assertEqual(Path(cc.local_endpoint_context().root), other / "ipc")
+        self.assertEqual(Path(cc.endpoint.local_endpoint_context().root), other / "ipc")
 
     def test_wait_admission_cannot_consume_every_native_callback(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -487,11 +467,11 @@ class IsolatedTransportTests(unittest.TestCase):
         over = server.call("echo", f"bytes:{40 * MIB}")
         self.assertFalse(over["ok"], over)
         self.assertIn("max_payload_size", over["error"])
-        self.assertIn(str(rpc_config.SERVER_OVERRIDES["max_payload_size"]), over["error"])
+        self.assertIn(str(rpc_config.SERVER_BUDGETS["max_payload_size"]), over["error"])
         self.assertLess(over["seconds"], 10)
         self.assertTrue(server.call("echo", "still-here")["ok"])
 
-    def test_concurrent_large_transfers_complete_without_pool(self):
+    def test_concurrent_large_transfers_complete_within_budgets(self):
         server = self.probe()
         clients = [server.spawn("echo", f"bytes:{7 * MIB}") for _ in range(6)]
         results = []
@@ -504,14 +484,15 @@ class IsolatedTransportTests(unittest.TestCase):
             self.assertEqual(reply["bytes"], 7 * MIB)
             self.assertEqual(reply["sha256"], hashlib.sha256(b"x" * (7 * MIB)).hexdigest())
 
-    def test_disabled_pool_releases_outgoing_shm_after_real_rpc(self):
+    def test_lazy_pool_releases_role_memory_after_real_rpc(self):
         server = self.probe()
         reply = server.call("echo", f"bytes:{8 * MIB}")
         self.assertTrue(reply["ok"], reply)
-        cell = reply["memory"]["runtime_outgoing"]["cells"]["shm"]
-        print("V-03 outgoing SHM accounting: " + json.dumps(cell))
-        self.assertEqual(cell["used_bytes"], 0, "disabled buddy pool must release temporary outgoing SHM")
-        self.assertEqual(cell["peak_bytes"], 8392704)
+        cell = reply["memory"]["client"]["memory"]
+        print("V-03 client memory accounting: " + json.dumps(cell))
+        self.assertEqual(cell["limit_bytes"], rpc_config.MEMORY_BUDGET_BYTES)
+        self.assertEqual(cell["used_bytes"], 0, "the lazily allocated role pool must release its transfer memory")
+        self.assertGreaterEqual(cell["peak_bytes"], 8 * MIB)
 
     def test_private_root_overrides_inherited_namespace(self):
         inherited = {"C2_IPC_ROOT": str(self.work / "inherited-unix-root")}
@@ -559,7 +540,7 @@ class IsolatedTransportTests(unittest.TestCase):
         rpc_config.configure_client(other)
         self.addCleanup(shutdown_private_rpc)
         self.assertIsNone(endpoint["root"])
-        self.assertEqual(endpoint["namespace"], cc.local_endpoint_context().namespace_id)
+        self.assertEqual(endpoint["namespace"], cc.endpoint.local_endpoint_context().namespace_id)
         self.assertFalse((self.work / "ipc").exists())
         self.assertFalse((other / "ipc").exists())
 
@@ -619,7 +600,8 @@ class RealDaemonControlTests(BoardTestCase):
         self.directory.mkdir(mode=private_dirs.directory_mode())
         self.endpoint = self._start_daemon()
         health = call_board("health", {}, endpoint=self.endpoint, state_dir=self.directory)
-        self.assertIs(health["rpcProfile"]["overrides"]["pool_enabled"], False)
+        self.assertEqual(health["rpcProfile"]["profile"], rpc_config.PROFILE_ID)
+        self.assertEqual(health["rpcProfile"]["budgets"], rpc_config.report("server")["budgets"])
 
     def _cleanup(self):
         stop_private_service(self.directory)

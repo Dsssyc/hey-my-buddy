@@ -12,10 +12,12 @@ from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
+from hey_my_buddy.buddy.harnesses.snapshot_mount import mounted_snapshot, prepare_snapshot_mount, verify_mounted_calls
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.routing.router import answer_schema
+from hey_my_buddy.private_files import publish_snapshot
+from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.protocol import tool_evidence
 from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
 
@@ -66,6 +68,75 @@ class CodexToolEventProjectionTests(unittest.TestCase):
 
     def observe_root(self, projector):
         projector.observe_root("thread-1", "turn-1")
+
+    def test_typed_dynamic_calls_verify_signed_success_and_error_without_raw_frames(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        reference, _ = publish_snapshot(state_dir, "routing", "codex-dynamic", {
+            "task": "Frozen fixture input", "domainNodes": [], "buddies": [], "preferences": [],
+        }, round=1)
+        with tempfile.TemporaryDirectory() as directory:
+            mount = prepare_snapshot_mount(
+                invocation_root=Path(directory), state_dir=state_dir, identity=BINDING, input_sha256="a" * 64,
+                snapshot={"namespace": "routing", "owner": "codex-dynamic", "round": 1, "reference": reference})
+            service = mounted_snapshot(mount)
+            projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=mount.tool_names)
+            self.observe_root(projector)
+            for call_id, arguments, status in (("page", {"limit": 5}, "completed"),
+                                               ("error", {"offset": 999}, "failed")):
+                item = {"type": "dynamicToolCall", "id": call_id, "tool": "query_task"}
+                projector.observe_notification(frame("item/started", item))
+                projector.observe_snapshot_request(ROOT, call_id, "query_task", arguments)
+                reply = service.direct_call("query_task", arguments, native_identity=ROOT, call_id=call_id)
+                projector.observe_notification(frame("item/completed", {**item, **reply, "status": status}))
+            verified, coverage = verify_mounted_calls(mount, projector.snapshot_calls, projector.roots)
+            self.assertEqual(len(verified), 2)
+            self.assertEqual(len(coverage), 1)
+            self.assertEqual(projector.evidence.read_tool_violations, 0)
+            package = projector.finish(True, verified_session_calls=verified)
+        self.assertTrue(package["streamComplete"])
+        self.assertEqual(package["toolSummary"], [{"toolName": "query_task", "calls": 2, "failed": 1, "unknown": 0}])
+        self.assertTrue(all(call["sessionServiceVerified"] for call in calls(package, state_dir=state_dir)))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir))
+
+    def test_unmounted_dynamic_tool_name_is_a_read_violation(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        for tool_name in ("rogue_tool", "exec_command", "read_file"):
+            with self.subTest(tool_name=tool_name):
+                projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=("query_task",))
+                self.observe_root(projector)
+                item = {"type": "dynamicToolCall", "id": "call-1", "tool": tool_name}
+                self.assertFalse(projector.snapshot_frame(frame("item/started", item)))
+                projector.observe_notification(frame("item/started", item))
+                projector.observe_notification(frame("item/completed", {**item, "status": "completed"}))
+                package = projector.finish(True)
+                self.assertEqual(package["toolSummary"][0]["toolName"], "dynamicToolCall")
+                self.assertFalse(calls(package, state_dir=state_dir)[0]["sessionServiceVerified"])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
+                                 "router-tools-forbidden")
+
+    def test_typed_dynamic_tool_name_mismatch_with_rpc_fails_verification(self):
+        state_dir = Path(os.environ["HMB_STATE_DIR"])
+        reference, _ = publish_snapshot(state_dir, "routing", "codex-mismatch", {
+            "task": "Frozen fixture input", "domainNodes": [], "buddies": [], "preferences": [],
+        }, round=1)
+        with tempfile.TemporaryDirectory() as directory:
+            mount = prepare_snapshot_mount(
+                invocation_root=Path(directory), state_dir=state_dir, identity=BINDING, input_sha256="a" * 64,
+                snapshot={"namespace": "routing", "owner": "codex-mismatch", "round": 1, "reference": reference})
+            service = mounted_snapshot(mount)
+            projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir, session_tools=mount.tool_names)
+            self.observe_root(projector)
+            item = {"type": "dynamicToolCall", "id": "call-1", "tool": "query_buddies"}
+            projector.observe_notification(frame("item/started", item))
+            projector.observe_snapshot_request(ROOT, "call-1", "query_task", {"limit": 5})
+            reply = service.direct_call("query_task", {"limit": 5}, native_identity=ROOT, call_id="call-1")
+            projector.observe_notification(frame("item/completed", {**item, **reply, "status": "completed"}))
+            verified, coverage = verify_mounted_calls(mount, projector.snapshot_calls, projector.roots)
+            self.assertEqual(verified, frozenset())
+            self.assertIsNone(coverage)
+            package = projector.finish(True, verified_session_calls=verified)
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir),
+                             "router-tools-forbidden")
 
     def test_protocol_variants_and_future_items_in_both_router_modes(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -167,7 +238,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             "nativeIdentity": ROOT, "callId": "item-1", "categories": ["execute"],
             "phases": ["end", "start"], "facts": [{"toolName": "commandExecution", "category": "execute"}],
             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
-            "incomplete": False, "malformed": False, "belongsToRoot": True,
+            "incomplete": False, "malformed": False, "belongsToRoot": True, "sessionServiceVerified": False,
         }])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
 
@@ -475,7 +546,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     def run_review(self, case, *, index):
         context = self.context(case, index=index)
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet",
-                                            answer_schema(["legal"]),
+                                            answer_schema("review"),
                                             capture_evidence=True)
         handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
                                                             (None, self.cwd, "fixture-digest")))
@@ -508,7 +579,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual(evidence["version"], 3)
+        self.assertEqual(evidence["version"], 4)
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
@@ -580,6 +651,65 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["nativeIdentity"], [])
         self.assertFalse(evidence["streamComplete"])
         self.assertEqual(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])), [])
+
+    def test_completed_turn_unobserved_items_mark_incomplete_and_are_not_filtered(self):
+        from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
+        from hey_my_buddy.buddy.harnesses.codex import native_run
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            binding = {"harness": "codex", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
+
+            # Case 1: unobserved dynamicToolCall with id & mounted name in turn/completed
+            projector = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector.observe_root("thread-1", "turn-1")
+            facts = native_run._RunFacts()
+            stream = native_run._EventChain(
+                facts, native_run._Classifier(facts), native_run._RunState(), projector, None,
+                overflow_raises=False)
+            phantom = {"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-1", "status": "completed",
+                "items": [{"type": "dynamicToolCall", "id": "phantom-1", "tool": "query_task"}]}}}
+            self.assertFalse(projector.completed_snapshot_item(phantom["params"], phantom["params"]["turn"]["items"][0]))
+            stream.observe_facts(phantom)
+            self.assertEqual(facts.unexplained_markers, 1)
+            package = projector.finish(True, verified_session_calls=())
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=state_dir),
+                             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+            # Case 2: unobserved forbidden tool in turn/completed in review mode flags unexplained
+            projector_review = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector_review.observe_root("thread-1", "turn-2")
+            review_facts = native_run._RunFacts()
+            review_stream = native_run._EventChain(
+                review_facts, native_run._Classifier(review_facts), native_run._RunState(),
+                projector_review, None, overflow_raises=False)
+            phantom_edit = {"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-2", "status": "completed",
+                "items": [{"type": "fileChange", "id": "edit-1"}]}}}
+            review_stream.observe_facts(phantom_edit)
+            self.assertEqual(review_facts.unexplained_markers, 1)
+            review_pkg = projector_review.finish(True, verified_session_calls=())
+            self.assertEqual(tool_evidence.judge_tool_evidence(review_pkg, "read", state_dir=state_dir),
+                             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+            # Case 3: observed mounted dynamicToolCall echoed in turn/completed is filtered cleanly
+            projector_ok = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector_ok.observe_root("thread-1", "turn-3")
+            ok_facts = native_run._RunFacts()
+            ok_stream = native_run._EventChain(
+                ok_facts, native_run._Classifier(ok_facts), native_run._RunState(), projector_ok, None,
+                overflow_raises=False)
+            ok_stream.observe_facts({"method": "item/started", "params": {
+                "threadId": "thread-1", "turnId": "turn-3",
+                "item": {"type": "dynamicToolCall", "id": "call-1", "tool": "query_task"}}})
+            ok_stream.observe_facts({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-3",
+                "item": {"type": "dynamicToolCall", "id": "call-1", "tool": "query_task", "status": "completed"}}})
+            ok_stream.observe_facts({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-3", "status": "completed",
+                "items": [{"type": "dynamicToolCall", "id": "call-1", "tool": "query_task", "status": "completed"}]}}})
+            self.assertEqual((ok_facts.markers, ok_facts.unexplained_markers), (0, 0))
 
 
 if __name__ == "__main__":

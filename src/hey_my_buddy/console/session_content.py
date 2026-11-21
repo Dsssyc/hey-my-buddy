@@ -14,7 +14,12 @@ from ..errors import BoardError
 from ..json_codec import decode_strict_json
 from ..paths import native_path
 from ..protocol.reasons import reason
-from ..protocol.session_content import SESSION_FORMAT, SessionFormat, SessionNotification
+from ..protocol.session_content import (
+    SESSION_FORMAT, MessageChunk, SessionFormat, SessionNotification, SessionUpdate, ToolCall, ToolCallUpdate,
+)
+
+_BACKTRACK_LINES = 256
+_BACKTRACK_BYTES = 512 * 1024
 
 
 def parse_query(query: str) -> dict:
@@ -52,6 +57,69 @@ def _last_newline(stream, end: int, floor: int) -> int:
 def _empty_page(params: dict) -> dict:
     cursor = params.get('before', params.get('after', 0))
     return {'events': [], 'before': cursor, 'after': cursor, 'hasEarlier': False}
+
+
+def _event(line: bytes) -> SessionNotification:
+    return SessionNotification.model_validate(decode_strict_json(line))
+
+
+def _track_tool_opening(update: SessionUpdate, missing: set[str]) -> None:
+    # Traversal is newest to oldest, so an update needs a start earlier in the record.
+    if isinstance(update, ToolCall):
+        missing.discard(update.tool_call_id)
+    elif isinstance(update, ToolCallUpdate):
+        missing.add(update.tool_call_id)
+
+
+def _message_key(update: SessionUpdate) -> tuple[str, str] | None:
+    if isinstance(update, MessageChunk) and update.meta is not None:
+        return update.meta.native_item_id, update.meta.content_segment
+    return None
+
+
+def _track_open_block(update: SessionUpdate, missing: set[str], open_messages: set[tuple[str, str]]) -> None:
+    _track_tool_opening(update, missing)
+    key = _message_key(update)
+    if key is not None:
+        if update.meta.replace:
+            open_messages.discard(key)
+        else:
+            open_messages.add(key)
+
+
+def _align_before(stream, first: int, start: int, events: list[SessionNotification]) -> int:
+    missing: set[str] = set()
+    open_messages: set[tuple[str, str]] = set()
+    for event in reversed(events):
+        _track_open_block(event.update, missing, open_messages)
+    earliest = max(start, first - _BACKTRACK_BYTES)
+    # Include the delimiter just before the earliest allowed event, if there is one.
+    floor = max(start, earliest - 1)
+    committed: list[SessionNotification] = []
+    pending: list[tuple[int, SessionNotification]] = []
+    committed_first = cursor = first
+    for _ in range(_BACKTRACK_LINES):
+        if cursor <= earliest or (not missing and not open_messages):
+            break
+        previous = _last_newline(stream, cursor - 1, floor) + 1
+        if previous < earliest:
+            break
+        stream.seek(previous)
+        event = _event(stream.read(cursor - previous))
+        cursor = previous
+        update = event.update
+        tool_match = isinstance(update, (ToolCall, ToolCallUpdate)) and update.tool_call_id in missing
+        msg_key = _message_key(update)
+        msg_match = msg_key is not None and msg_key in open_messages
+        pending.append((previous, event))
+        if tool_match or msg_match:
+            for offset, item in pending:
+                committed.append(item)
+                committed_first = offset
+                _track_open_block(item.update, missing, open_messages)
+            pending.clear()
+    events[:0] = reversed(committed)
+    return committed_first
 
 
 def _page(stream, params: dict) -> dict:
@@ -93,9 +161,11 @@ def _page(stream, params: dict) -> dict:
             first = _last_newline(stream, first - 1, start) + 1
         stream.seek(first)
         lines = stream.read(last - first).split(b'\n')[:-1]
-    events = [SessionNotification.model_validate(decode_strict_json(line)).model_dump(
-        mode='json', by_alias=True, exclude_none=True) for line in lines]
-    return {'events': events, 'before': first, 'after': last, 'hasEarlier': first > start}
+    events = [_event(line) for line in lines]
+    if 'after' not in params and first > start and events:
+        first = _align_before(stream, first, start, events)
+    return {'events': [event.model_dump(mode='json', by_alias=True, exclude_none=True) for event in events],
+            'before': first, 'after': last, 'hasEarlier': first > start}
 
 
 def read(store, task_id: str, attempt_id: str, params: dict) -> dict:

@@ -78,7 +78,7 @@ class ExecutionObservationTests(unittest.TestCase):
         self.live_registry = Mock(spec=LiveRegistry)
         self.subscriptions = []
         self.subscribed = queue.Queue()
-        subscription = patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+        subscription = patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.observe.connection_events",
                              side_effect=self.subscribe)
         self.subscribe_events = subscription.start()
         self.addCleanup(subscription.stop)
@@ -1126,7 +1126,7 @@ class ExecutionObservationTests(unittest.TestCase):
         first, shared = self.watch(scheduler, closed, "first"), self.watch(scheduler, closed, "shared")
         other = self.watch(scheduler, live, "other")
         closed.close(emit=False, reason="io_error", operation="read_header", os_error=5)
-        events.events.put(cc.ConnectionEventsLagged("fixture lag"))
+        events.events.put(cc.observe.ConnectionEventsLagged("fixture lag"))
         replacement = self.subscribed.get(timeout=2)
         self.assertEqual(replacement.receives.get(timeout=2), consumer)
         self.assertIsNot(events, replacement)
@@ -1156,9 +1156,9 @@ class ExecutionObservationTests(unittest.TestCase):
         def subscribe_after_close():
             observation.close(emit=False)
             return self.subscribe()
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.observe.connection_events",
                    side_effect=subscribe_after_close) as subscribe:
-            events.events.put(cc.ConnectionEventsLagged("fixture lag"))
+            events.events.put(cc.observe.ConnectionEventsLagged("fixture lag"))
             replacement = self.subscribed.get(timeout=2)
             replacement.receives.get(timeout=2)
         subscribe.assert_called_once_with()
@@ -1174,9 +1174,9 @@ class ExecutionObservationTests(unittest.TestCase):
         def lag_on_close():
             receiving.set()
             events.closed.wait()
-            raise cc.ConnectionEventsLagged("fixture lag at shutdown")
+            raise cc.observe.ConnectionEventsLagged("fixture lag at shutdown")
         with patch.object(events, "recv", side_effect=lag_on_close), \
-             patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+             patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.observe.connection_events",
                    return_value=events) as subscribe:
             self.start_connections(scheduler)
             self.assertTrue(receiving.wait(2))

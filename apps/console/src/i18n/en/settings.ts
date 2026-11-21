@@ -17,6 +17,7 @@ export default {
     save: "Save", saving: "Saving", saved: "Reminder settings saved.", unavailable: "Reminder settings are unavailable. Refresh the console.", disconnected: "The connection is interrupted or this browser cannot make changes.", unchanged: "No changes to save.", busy: "Saving reminder settings.", unsaved: "Unsaved",
   },
   version: {
+    available: "Version {{version}} is available on PyPI",
     title: "Version", software: "Software version", installedAt: "Installed", details: "Details", contract: "Contract version", schema: "Schema", sourceCommit: "Source commit", unrecorded: "Not recorded",
     runningSource: "Running (source)", installedRuntime: "Installed runtime", loading: "Reading version…", unread: "Version not read yet", failed: "Unable to read version: {{error}}",
   },

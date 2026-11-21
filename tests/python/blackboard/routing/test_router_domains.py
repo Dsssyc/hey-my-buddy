@@ -5,7 +5,8 @@ from unittest.mock import patch
 from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
-from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
+from hey_my_buddy.buddy.roles.router import render_selection_prompt
 from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
 from hey_my_buddy.protocol.task_types import TASK_TYPES
 
@@ -72,9 +73,9 @@ class RouterDomainTests(WorkflowTestCase):
         self.seed_domains()
         request = self.request()
         packet = self.packet(request)
-        self.assertEqual(packet["domainNodes"], [{"nodeId": "ipc", "name": "IPC", "parentId": "systems"},
-                                                {"nodeId": "systems", "name": "Systems", "parentId": None},
-                                                {"nodeId": "writing", "name": "Writing", "parentId": None}])
+        self.assertEqual(packet["domainNodes"], [{"nodeId": "ipc", "name": "IPC", "definition": "IPC expertise", "parentId": "systems"},
+                                                {"nodeId": "systems", "name": "Systems", "definition": "Systems expertise", "parentId": None},
+                                                {"nodeId": "writing", "name": "Writing", "definition": "Writing expertise", "parentId": None}])
         self.assertEqual(packet["taskTypes"], [{"id": key, "definition": value} for key, value in TASK_TYPES.items()])
         first = next(buddy for buddy in packet["buddies"] if buddy["buddyId"] == BUDDY_ID)
         stats = first["statistics"]
@@ -89,14 +90,11 @@ class RouterDomainTests(WorkflowTestCase):
         self.assertIsNone(other["summary"])
         self.assertEqual(other["statistics"]["byDomain"], {})
         self.assertEqual(other["statistics"]["byDomainTaskType"], {})
-        self.assertEqual(packet["outputSchema"]["properties"]["domainNodeId"]["enum"],
-                         ["ipc", "systems", "writing", None])
-        self.assertEqual(packet["outputSchema"]["properties"]["taskType"]["enum"], list(TASK_TYPES))
-        prompt = router.render_prompt(packet)
-        for node in packet["domainNodes"]:
-            self.assertIn(json.dumps(node, separators=(",", ":")), prompt.splitlines())
-        self.assertNotIn('"nodeId":"old-ipc"', prompt)
-        self.assertIn('"summary":"Handles transport defects carefully;', prompt)
+        self.assertNotIn("outputSchema", packet)
+        query = SnapshotQuery(packet)
+        children, _ = query.call("query_domains", {"parentId": "systems"})
+        self.assertEqual([node["nodeId"] for node in children["items"]], ["ipc"])
+        self.assertEqual(children["items"][0]["definition"], "IPC expertise")
         self.assertEqual(self.judgments(), [])
         # Changing maintenance facts after admission does not rewrite this request.
         with self.board_.store.db.write() as db:
@@ -133,7 +131,7 @@ class RouterDomainTests(WorkflowTestCase):
         from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
         execution = resolve_manifest(self.board_.directory, packet["executionWorkspace"])
         self.assertNotEqual(packet["project"]["path"], execution["path"])
-        self.assertIn('"project":', router.render_prompt(packet))
+        self.assertIn('"project":', render_selection_prompt(packet))
 
     def test_chosen_and_abstained_answers_record_judgment_without_classifying(self):
         self.seed_domains()

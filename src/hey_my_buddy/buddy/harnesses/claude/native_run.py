@@ -83,6 +83,10 @@ from ..native_support import (
 )
 from ..native_observations import native_counter
 from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
+from ..snapshot_mount import (
+    SNAPSHOT_MCP_SERVER_NAME, claude_mcp_config, snapshot_coverage_refs, stdio_tool_names,
+    verify_mounted_calls,
+)
 from ..run_contract import (
     CheckedBuddy,
     CheckedValue,
@@ -139,7 +143,6 @@ _DRAIN_SECONDS = 10.0
 
 #: Claude needs no extra request controls beyond the common permission level.
 supported_request_controls = ()
-native_evidence = None
 run_delete_sessions = None
 
 
@@ -269,9 +272,6 @@ class _RunState:
     interrupt_acknowledged: bool | None = None
     token_usage: dict | None = None
     last_assistant_message: dict | None = None
-    #: The frozen delivery verification, settled once before the role's settled
-    #: facts so the count the role acts on and the package agree (3-C).
-    verified_delivery: tuple = ()
     inquiry_report: dict | None = None
 
 
@@ -287,20 +287,24 @@ def _flag_value(args: list[str], flag: str) -> str | None:
 # -- phase 1: the frozen startup decisions ---------------------------------------
 
 
-def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Preparation:
+def _prepare(request: RunRequest, inquiry: InquiryServices | None, *,
+             deadline: float, invocation_root: Path) -> _Preparation:
     """Gate the request, allocate the session and freeze the native invocation."""
     read_only = request.permission == "read"
-    invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
+    invocation_root = ensure_private_dir(invocation_root)
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     session_id = str(uuid.uuid4())
-    deadline = execution_deadline(request.budget.timeout_seconds)
     incoming = dict(environment_for())
     command, environment = launch(incoming)
     settings = permission_sandbox_settings(request.permission)
     private_json(native_root / _SETTINGS_FILE, settings)
     mcp_config_path = None
     inquiry_tools = ()
-    if inquiry is not None and request.permission != "web":
+    if request.snapshot_query is not None:
+        mcp_config_path = str(invocation_root / "snapshot-servers.json")
+        private_json(Path(mcp_config_path), claude_mcp_config(request.snapshot_query), exclusive=True)
+        inquiry_tools = (f"mcp__{SNAPSHOT_MCP_SERVER_NAME}__*",)
+    elif inquiry is not None and request.permission != "web":
         mcp_config_path = str(native_root / "inquiry-mcp.json")
         private_json(Path(mcp_config_path), {"mcpServers": {inquiry.server_name: inquiry.mcp_server}})
         inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in INQUIRY_TOOLS)
@@ -309,6 +313,8 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
                           web_only=request.permission == "web",
+                          no_tools=request.permission == "none",
+                          snapshot_mcp=request.snapshot_query is not None,
                           full_access=request.permission == "full",
                           mcp_config_path=mcp_config_path, inquiry_tools=inquiry_tools)
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
@@ -468,18 +474,15 @@ class _TurnCollector:
     pre-user model output at replay, keeping its projected facts.
     """
 
-    def __init__(self, request: RunRequest, publisher: ActivityPublisher,
+    def __init__(self, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
-                 native_schema_delivery: bool = False, expected_permission_mode: str | None = None,
+                 tools: ReadOnlyToolEvidence, expected_permission_mode: str | None = None,
                  inquiry: InquiryServices | None = None, bridge: InquiryBridge | None = None,
                  session: ClaudeSessionProjector | None = None):
         self._publisher = publisher
         self._observer = observer
-        self.tools = ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
-                                           "attemptId": request.identity.attempt_id,
-                                           "generation": request.identity.generation},
-                                          state_dir=Path(request.private_state.state_dir),
-                                          native_schema_delivery=native_schema_delivery)
+        self.tools = tools
+        self.feedback = None
         self.evidence: TurnEvidence | None = None
         self.denied: list[dict] = []
         self.denied_operation_summary = ""
@@ -734,6 +737,8 @@ class _TurnCollector:
         return {"settled": settled, "rawAnswer": raw,
                 "modelResponded": self.model_responded,
                 "toolCalls": self.tools.tool_calls,
+                "sessionToolCalls": self.tools.session_tool_calls,
+                "readToolViolations": self.tools.read_tool_violations,
                 "deniedInteractions": len(self.denied),
                 "unknownEvents": _unknown_events(self._connection)}
 
@@ -744,8 +749,9 @@ class _TurnCollector:
             return
         feedback = self._observer(self.facts(settled=settled, raw=raw))
         if feedback.action == "correct":
-            raise BoardError("INVALID_ARGUMENT",
-                             "claude takes no in-run correction; the native -p turn ends at its result")
+            if not settled:
+                raise BoardError("INVALID_ARGUMENT", "a correction requires a settled native run")
+            self.feedback = feedback
         if feedback.action == "stop":
             raise ObserverInterrupt()
 
@@ -956,6 +962,16 @@ def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str)
     return facts
 
 
+def native_evidence(result: RunResult) -> dict:
+    """Report the requested Claude tool posture and the observed stream end."""
+    policy = result.effective_policy.tools
+    return {
+        "eventCount": result.native_event_count,
+        "nativePolicy": policy.requested.value if policy and policy.requested else None,
+        "streamEof": result.completion_evidence.stream_end if result.completion_evidence else None,
+    }
+
+
 def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
     """The native posture actually placed on the command line, read back from it."""
     tools_value = _flag_value(preparation.args, "--tools")
@@ -969,7 +985,11 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
         requested["permissions"] = preparation.settings["permissions"]
     if "--strict-mcp-config" in preparation.args:
         requested["strictMcpConfig"] = True
-        requested["mcpConfig"] = decode_strict_json(_flag_value(preparation.args, "--mcp-config"))
+        mcp_value = _flag_value(preparation.args, "--mcp-config")
+        if mcp_value is not None and mcp_value.startswith("{"):
+            requested["mcpConfig"] = decode_strict_json(mcp_value)
+        elif mcp_value is not None:
+            requested["mcpConfigPath"] = mcp_value
     return EffectivePolicy(
         tools=PolicyFact(requested=requested))
 
@@ -999,7 +1019,6 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         normalize_last_assistant_message,
         normalize_provider_rejection,
         normalize_token_usage)
-    from ..run_contract import _validated_tool_evidence
 
     evidence = collector.evidence if collector is not None else None
     user_sent = collector.user_sent if collector is not None else False
@@ -1013,22 +1032,6 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     session_confirmed = evidence is not None and evidence.init_observed
     native_identity = identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
     stream_ended = state.drained is True
-    # The delivery identification froze at settlement, before the role's
-    # settled facts: this run's schema command line armed the collector, the
-    # handshake-confirmed root, the terminal result and the final structured
-    # value it carried proved the call. A turn that never settled counts every
-    # candidate in its package; the frozen tuple is the one classification the
-    # role and the package share.
-    verified_delivery = state.verified_delivery
-    tool_package = None
-    if spawn is not None and collector is not None:
-        # The stream's own observed end is a transport fact, reported exactly
-        # as observed: it is never downgraded by the business verdict nor by
-        # the session stop, which travel in their own fields. The one
-        # exclusion is the verified built-in delivery call — the value carrier,
-        # never an ordinary task tool.
-        tool_package = _usable(_validated_tool_evidence, collector.tools.finish(
-            stream_complete=stream_ended, exclude_calls=verified_delivery))
     value = None
     completion = None
     if native_result is not None and "structured_output" in native_result:
@@ -1124,7 +1127,6 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             native_identity=native_identity,
             value=value if packages else None,
             completion_evidence=completion if packages else None,
-            tool_evidence=tool_package if packages else None,
             effective_policy=effective,
             activity=_usable(normalize_activity,
                              collector.last_activity) if collector is not None and packages else None,
@@ -1155,12 +1157,101 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
 # -- the one run -----------------------------------------------------------------
 
 
+def _tool_evidence(request: RunRequest) -> ReadOnlyToolEvidence:
+    return ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
+                                  "attemptId": request.identity.attempt_id,
+                                  "generation": request.identity.generation},
+                                 state_dir=Path(request.private_state.state_dir),
+                                 session_tools=stdio_tool_names(request.snapshot_query)
+                                 if request.snapshot_query is not None else ())
+
+
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "claude has no native session service; the value carrier is the native schema")
+    from ..native_support import shape_guard
+    from ..run_contract import ToolEvidencePackage
+
+    root = Path(request.private_state.invocation_root)
+    deadline = execution_deadline(request.budget.timeout_seconds)
+    tools = _tool_evidence(request)
+    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
+                                    failure=request.session_record_failure.to_payload()
+                                    if request.session_record_failure is not None else None)
+                      if request.session_record_path is not None else None)
+    with (session_record.protect() if session_record is not None else nullcontext()):
+        results = []
+        spawned = False
+        stream_complete = True
+        round_request = request
+        round_root = root
+        while True:
+            session = (session_record.project(ClaudeSessionProjector, session_record)
+                       if session_record is not None else None)
+            result, feedback, opened, drained = _run_round(
+                round_request, observer=observer, services=services, cancelled=cancelled,
+                tools=tools, session=session, deadline=deadline, invocation_root=round_root)
+            if session is not None:
+                session.record.project(session.close)
+            results.append(result)
+            spawned |= opened
+            stream_complete &= drained
+            if feedback is None or result.end.status != "ok":
+                break
+            if request.identity.turn_id is not None:
+                raise BoardError("INVALID_ARGUMENT", "a Worker turn takes no format correction")
+            if cancelled() or time.monotonic() >= deadline:
+                break
+            round_root = root / f"correction-{len(results)}"
+            round_request = request.model_copy(update={"input_text": feedback.input_text})
+        verified, coverage = (), []
+        if spawned and request.snapshot_query is not None:
+            verified, coverage = verify_mounted_calls(request.snapshot_query, tools.snapshot_calls, tools.roots)
+        tool_package = shape_guard(ToolEvidencePackage)(tools.finish(
+            stream_complete and coverage is not None, verified_session_calls=verified)) if spawned else None
+        value = result.value
+        if value is not None:
+            value = value.model_copy(update={"correction_count": sum(
+                entry.native_request_sent is True for entry in results[1:])})
+        return result.model_copy(update={
+            "value": value, "tool_evidence": tool_package,
+            "native_event_count": sum(entry.native_event_count or 0 for entry in results) or None,
+            "model_responded": True if any(entry.model_responded is True for entry in results) else result.model_responded,
+            "native_request_sent": True if any(entry.native_request_sent is True for entry in results)
+            else result.native_request_sent,
+            "usage": _aggregate_usage(results),
+            "evidence_refs": (*result.evidence_refs, *snapshot_coverage_refs(
+                root, coverage if tool_package is not None and tool_package.value["streamComplete"] else None)),
+            "session_record_failure": SessionRecordFailure(**session_record.failure)
+            if session_record is not None and session_record.failure is not None else request.session_record_failure,
+        })
+
+
+def _aggregate_usage(results: list[RunResult]):
+    if len(results) == 1:
+        return results[0].usage
+    from ..native_support import shape_guard
+    from ..run_contract import UsagePackage
+
+    records = [result.usage.value for result in results if result.usage is not None]
+    if not records:
+        return None
+    combined = dict(records[0])
+    for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens"):
+        counts = [record.get(key) for record in records]
+        combined[key] = sum(counts) if len(records) == len(results) and all(
+            count is not None for count in counts) else None
+    combined["nativeRecords"] = sum(record["nativeRecords"] for record in records)
+    if len(records) != len(results) or any(record["completeness"] != "complete" for record in records):
+        combined["completeness"] = "partial"
+    return shape_guard(UsagePackage)(combined)
+
+
+def _run_round(request: RunRequest, *, observer, services, cancelled, tools: ReadOnlyToolEvidence,
+               session: ClaudeSessionProjector | None, deadline: float, invocation_root: Path):
     state = _RunState()
     owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]
     spawn: _Spawn | None = None
@@ -1169,157 +1260,146 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     native_result: dict | None = None
     cancel = CancelFlag(cancelled)
-    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
-                                    failure=request.session_record_failure.to_payload()
-                                    if request.session_record_failure is not None else None)
-                      if request.session_record_path is not None else None)
-    with (session_record.protect() if session_record is not None else nullcontext()):
-        session = (session_record.project(ClaudeSessionProjector, session_record)
-                   if session_record is not None else None)
+    def request_interrupt(*, strict: bool = False) -> None:
+        # A fresh short control budget permits a native interrupt after the
+        # failure; the peer's own acknowledgement reply is kept as the fact —
+        # whether the CLI answered never changes the stop facts.
+        if collector is not None:
+            collector._quiet = True
+        if state.interrupt_requested:
+            return
+        state.interrupt_requested = True
+        acknowledged = False
+        if spawn is not None:
+            acknowledged = _interrupt(spawn.connection, strict=strict)
+        state.interrupt_acknowledged = acknowledged
 
-        def request_interrupt(*, strict: bool = False) -> None:
-            # A fresh short control budget permits a native interrupt after the
-            # failure; the peer's own acknowledgement reply is kept as the fact —
-            # whether the CLI answered never changes the stop facts.
-            if collector is not None:
-                collector._quiet = True
-            if state.interrupt_requested:
-                return
-            state.interrupt_requested = True
-            acknowledged = False
-            if spawn is not None:
-                acknowledged = _interrupt(spawn.connection, strict=strict)
-            state.interrupt_acknowledged = acknowledged
-
-        try:
-            inquiry = services.inquiry if services is not None else None
-            preparation = _prepare(request, inquiry)
-            live = services.live if services is not None else None
-            if inquiry is not None:
-                configuration = inquiry.configuration
-                inquiry_bridge = InquiryBridge(
-                    identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
-                    attention_path=configuration.get("attentionPath"), live=live,
-                    error_factory=ClaudeProtocolError,
-                    event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
-                    delivery_mode="realtime")
-                inquiry_bridge.start()
-            collector = _TurnCollector(
-                request,
-                ActivityPublisher(live.publish_activity if live else None),
-                observer,
-                # The delivery identification is armed by this run's own command
-                # line carrying the native schema, never by the caller's role or
-                # the tool scope: a run without the flag exempts nothing.
-                native_schema_delivery="--json-schema" in preparation.args,
-                expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
-                if request.identity.turn_id is not None else None,
-                inquiry=inquiry, bridge=inquiry_bridge, session=session)
-            spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
-                                  environment=preparation.environment,
-                                  invocation_root=preparation.invocation_root, deadline=preparation.deadline,
-                                  cancel=cancel, owned=owned_spawn)
-            collector.install(spawn.connection, spawn.handle, lambda: request_interrupt(strict=True))
-            catalog = _initialize(spawn)
-            state.catalog = catalog
-            state.provider = catalog["providers"][0]["provider"]
-            collector.provider = state.provider
-            state.catalog_checked = _check_catalog(request, catalog)
-            _send_and_settle(collector, spawn, preparation, request)
-            state.drained = True
-            state.terminal_ok = _check_terminal(collector.evidence, preparation.session_id)
-            native_result = collector.evidence.result
-            state.status = "ok" if state.terminal_ok else "unknown"
-            state.reason = None if state.terminal_ok else "native-terminal-unread"
-            # The delivery verification freezes here, before the settled facts
-            # reach the role: candidates that did not prove themselves against the
-            # final structured value return to the count now, so a budget stop at
-            # settlement sees exactly the classification the finished package will
-            # publish. Failure paths never settle, and their packages count every
-            # candidate; the settled callback is the one place the role's last
-            # count and the package must not diverge.
-            if state.terminal_ok:
-                state.verified_delivery = collector.tools.settle_delivery(
-                    native_result.get("structured_output"), {"sessionId": preparation.session_id})
-                if inquiry_bridge is not None:
-                    inquiry_bridge.close()
-                    state.inquiry_report = inquiry_bridge.report()
-                collector.settled_notify(native_result)
-        except ObserverInterrupt:
-            state.status = "cancelled"
-            state.reason = "observer-interrupt"
-            request_interrupt()
-        except ProviderRejected as error:
-            # Provider rejection is infrastructure unavailability: no retry, no outcome.
-            state.status = "error"
-            state.reason = "harness-error"
-            state.error_text = str(error)
-            state.provider_rejection = {"code": error.classification, "nativeCode": error.native_code,
-                                   "source": error.source, "observedAt": utc_now(),
-                                   "resetsAt": error.resets_at,
-                                   "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
-                                   and collector.evidence is not None else "unknown"}
-            request_interrupt()
-        except (ClaudeProtocolError, VersionShutdownError, WorkingDirectoryRejected) as error:
-            state.status = "cancelled" if error.code == "user-cancel" else "error"
-            state.reason = error.code
-            state.error_text = str(error)
-            if isinstance(error, WorkingDirectoryRejected):
-                state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
-            if (isinstance(error, ClaudeProtocolError) and collector is not None
-                    and collector.user_sent and collector.evidence is not None
-                    and not collector.evidence.root_model_activity):
-                state.native_admission_error = error.native_error
-            # A result can report a structured rejection before the stream fails
-            # during the drain. Its activity history is then incomplete, but the
-            # rejection itself remains a native fact.
-            if state.status == "error":
-                state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
-            if error.code in ("user-cancel", "deadline"):
-                request_interrupt()
-        except ClaudeUnavailable as error:
-            state.status = "error"
-            launch_reason = getattr(error, "reason", None)
-            state.reason = launch_reason["code"] if launch_reason is not None else "claude-unavailable"
-            if state.reason == "harness.shutdown-unverified":
-                # Entry resolution may own a Node probe before the main spawn.
-                owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
-            state.error_text = str(error)
-        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-            state.status = "error"
-            state.reason = "invalid-native-result"
-            state.error_text = "the native execution returned invalid or incomplete data"
-            state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
-        finally:
+    try:
+        inquiry = services.inquiry if services is not None else None
+        preparation = _prepare(request, inquiry, deadline=deadline, invocation_root=invocation_root)
+        live = services.live if services is not None else None
+        if inquiry is not None:
+            configuration = inquiry.configuration
+            inquiry_bridge = InquiryBridge(
+                identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
+                attention_path=configuration.get("attentionPath"), live=live,
+                error_factory=ClaudeProtocolError,
+                event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
+                delivery_mode="realtime")
+            inquiry_bridge.start()
+        tools.begin_round(preparation.session_id, native_schema_delivery="--json-schema" in preparation.args)
+        collector = _TurnCollector(
+            ActivityPublisher(live.publish_activity if live else None),
+            observer,
+            # The delivery identification is armed by this run's own command
+            # line carrying the native schema, never by the caller's role or
+            # the tool scope: a run without the flag exempts nothing.
+            tools=tools,
+            expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
+            if request.identity.turn_id is not None else None,
+            inquiry=inquiry, bridge=inquiry_bridge, session=session)
+        spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
+                              environment=preparation.environment,
+                              invocation_root=preparation.invocation_root, deadline=preparation.deadline,
+                              cancel=cancel, owned=owned_spawn)
+        collector.install(spawn.connection, spawn.handle, lambda: request_interrupt(strict=True))
+        catalog = _initialize(spawn)
+        state.catalog = catalog
+        state.provider = catalog["providers"][0]["provider"]
+        collector.provider = state.provider
+        state.catalog_checked = _check_catalog(request, catalog)
+        _send_and_settle(collector, spawn, preparation, request)
+        state.drained = True
+        state.terminal_ok = _check_terminal(collector.evidence, preparation.session_id)
+        native_result = collector.evidence.result
+        state.status = "ok" if state.terminal_ok else "unknown"
+        state.reason = None if state.terminal_ok else "native-terminal-unread"
+        # The delivery verification freezes here, before the settled facts
+        # reach the role: candidates that did not prove themselves against the
+        # final structured value return to the count now, so a budget stop at
+        # settlement sees exactly the classification the finished package will
+        # publish. Failure paths never settle, and their packages count every
+        # candidate; the settled callback is the one place the role's last
+        # count and the package must not diverge.
+        if state.terminal_ok:
+            collector.tools.settle_delivery(
+                native_result.get("structured_output"), {"sessionId": preparation.session_id})
             if inquiry_bridge is not None:
                 inquiry_bridge.close()
                 state.inquiry_report = inquiry_bridge.report()
-            if collector is not None and collector.evidence is not None:
-                # ADR-018 items 22/23 and the retained root assistant text: raw
-                # native observations for every path, including a quota rejection,
-                # a deadline or a process failure. A value the native stream never
-                # reported stays null instead of being estimated.
-                state.token_usage = collector.evidence.token_usage()
-                state.last_assistant_message = collector.evidence.last_assistant_message()
-            if spawn is not None:
-                state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
-                expected_stop = collector is not None and collector.root_stop_requested
-                if state.status in ("ok", "unknown") and (not state.shutdown or (state.exit_code != 0 and not expected_stop)):
-                    state.status = "error"
-                    state.reason = "native-shutdown-failed"
-                    state.error_text = ("the Claude native process did not exit with confirmed "
-                                        "session shutdown")
-            if cancel.is_set() and state.status != "ok":
-                state.status = "cancelled"
-                state.reason = "user-cancel"
-                state.error_text = "the owned Claude execution was cancelled"
-        if session is not None:
-            session.record.project(session.close)
-        return _build_result(request, state=state, collector=collector, spawn=spawn,
-                             owned_spawn=owned_spawn, preparation=preparation, native_result=native_result).model_copy(
-                                 update={"session_record_failure": SessionRecordFailure(**session_record.failure)
-                                         if session_record is not None and session_record.failure is not None
-                                         else request.session_record_failure})
+            collector.settled_notify(native_result)
+    except ObserverInterrupt:
+        state.status = "cancelled"
+        state.reason = "observer-interrupt"
+        request_interrupt()
+    except ProviderRejected as error:
+        # Provider rejection is infrastructure unavailability: no retry, no outcome.
+        state.status = "error"
+        state.reason = "harness-error"
+        state.error_text = str(error)
+        state.provider_rejection = {"code": error.classification, "nativeCode": error.native_code,
+                               "source": error.source, "observedAt": utc_now(),
+                               "resetsAt": error.resets_at,
+                               "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
+                               and collector.evidence is not None else "unknown"}
+        request_interrupt()
+    except (ClaudeProtocolError, VersionShutdownError, WorkingDirectoryRejected) as error:
+        state.status = "cancelled" if error.code == "user-cancel" else "error"
+        state.reason = error.code
+        state.error_text = str(error)
+        if isinstance(error, WorkingDirectoryRejected):
+            state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
+        if (isinstance(error, ClaudeProtocolError) and collector is not None
+                and collector.user_sent and collector.evidence is not None
+                and not collector.evidence.root_model_activity):
+            state.native_admission_error = error.native_error
+        # A result can report a structured rejection before the stream fails
+        # during the drain. Its activity history is then incomplete, but the
+        # rejection itself remains a native fact.
+        if state.status == "error":
+            state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
+        if error.code in ("user-cancel", "deadline"):
+            request_interrupt()
+    except ClaudeUnavailable as error:
+        state.status = "error"
+        launch_reason = getattr(error, "reason", None)
+        state.reason = launch_reason["code"] if launch_reason is not None else "claude-unavailable"
+        if state.reason == "harness.shutdown-unverified":
+            # Entry resolution may own a Node probe before the main spawn.
+            owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
+        state.error_text = str(error)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        state.status = "error"
+        state.reason = "invalid-native-result"
+        state.error_text = "the native execution returned invalid or incomplete data"
+        state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
+    finally:
+        if inquiry_bridge is not None:
+            inquiry_bridge.close()
+            state.inquiry_report = inquiry_bridge.report()
+        if collector is not None and collector.evidence is not None:
+            # ADR-018 items 22/23 and the retained root assistant text: raw
+            # native observations for every path, including a quota rejection,
+            # a deadline or a process failure. A value the native stream never
+            # reported stays null instead of being estimated.
+            state.token_usage = collector.evidence.token_usage()
+            state.last_assistant_message = collector.evidence.last_assistant_message()
+        if spawn is not None:
+            state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
+            expected_stop = collector is not None and collector.root_stop_requested
+            if state.status in ("ok", "unknown") and (not state.shutdown or (state.exit_code != 0 and not expected_stop)):
+                state.status = "error"
+                state.reason = "native-shutdown-failed"
+                state.error_text = ("the Claude native process did not exit with confirmed "
+                                    "session shutdown")
+        if cancel.is_set() and state.status != "ok":
+            state.status = "cancelled"
+            state.reason = "user-cancel"
+            state.error_text = "the owned Claude execution was cancelled"
+    result = _build_result(request, state=state, collector=collector, spawn=spawn,
+                           owned_spawn=owned_spawn, preparation=preparation, native_result=native_result)
+    return (result, collector.feedback if collector is not None else None,
+            spawn is not None, state.drained is True)
 
 
 # -- the initialize-only discovery ------------------------------------------------

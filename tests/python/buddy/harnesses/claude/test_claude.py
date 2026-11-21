@@ -648,12 +648,12 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
         from hey_my_buddy.buddy.roles.run_execution import start_review
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema
+        from hey_my_buddy.protocol.router_selection import answer_schema
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
         context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]))
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema("review"))
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))

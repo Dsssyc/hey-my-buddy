@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import json
+from pathlib import Path
+import re
 import threading
 import uuid
 
 from ...errors import BoardError
-from ...protocol import maintenance as files, schemas
+from ...json_codec import decode_strict_json
+from ...private_dirs import attempt_root, linked
+from ...private_files import read_bytes
+from ...protocol import maintenance as files, schemas, tool_evidence
 from ...protocol.owned_process import WorkingDirectoryRejected
+from ...protocol.snapshot_query import QueryError
 from ..store.db import canonical_json
 from . import maintenance_data, router
 
@@ -66,7 +73,7 @@ class Maintenance:
             if latest is not None:
                 event = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='maintenance.finished' ORDER BY seq DESC LIMIT 1",
                                            (latest["task_id"],)).fetchone()
-                drain = latest["state"] == "completed" and event is not None and json.loads(event[0])["continuePending"]
+                drain = event is not None and json.loads(event[0])["continuePending"]
                 if not drain:
                     interval_deadline = datetime.fromisoformat(latest["finished_at"]).timestamp() + interval
                     deadline = interval_deadline if deadline is None else max(deadline, interval_deadline)
@@ -119,12 +126,17 @@ class Maintenance:
         now = self.store.now()
         run_id = "maint-" + str(uuid.uuid4())
         self.store.db.after_rollback(connection, lambda: self._discard_inputs(run_id))
-        reference = files.publish(self.store.directory, run_id, {
-            "packet": packet, "outputSchema": maintenance_data.answer_schema(packet)})
+        reference = files.publish(self.store.directory, run_id, packet)
         identity = {key: buddy[key] for key in schemas.BUDDY_FIELDS}
         document = {"kind": "maintain", "maintenanceRunId": run_id, "buddyId": buddy_id,
                     "buddy": identity, "routingMode": "fast", "modelResponseWaitSeconds": current["model_response_wait_seconds"],
-                    "input": reference}
+                    "snapshot": {"namespace": "maintenance", "owner": run_id, "reference": reference},
+                    "outputSchema": maintenance_data.answer_schema(),
+                    "request": {"maintenanceRunId": run_id, "classificationCount": len(packet["classificationRunIds"]),
+                                "summaryKindCount": len(packet["kinds"]), "domainNodeCount": len(packet["domainNodes"]),
+                                "taskTypes": packet["taskTypes"],
+                                "batchLimits": {"microTasks": maintenance_data.MAX_MICRO_TASKS,
+                                                "summaryKinds": maintenance_data.MAX_SUMMARY_KINDS}}}
         task_id = self.store.decisions._create_task(
             connection, decision_id=run_id, request_id=run_id,
             model_response_wait_seconds=document["modelResponseWaitSeconds"], now=now,
@@ -171,27 +183,39 @@ class Maintenance:
                 return {"feedback": previous["feedback"]}
             if round_index != len(history):
                 raise BoardError("CONFLICT", "Maintenance correction rounds must be sequential")
-            material = files.read(self.store.directory, run["maintenance_run_id"], params.get("answer"))
-            if (not isinstance(material, dict) or set(material) != {"answer", "observations"}
-                    or material["observations"] != {"toolCalls": 0, "toolMarkerFrames": 0, "deniedInteractions": 0}
-                    or any(type(value) is not int for value in material["observations"].values())):
-                raise BoardError("INVALID_ARGUMENT", "Maintenance answer requires observed zero-tool facts")
-            bound = [json.loads(row[0]) for row in history]
-            if not any(params["answer"] in (item["answer"], item["feedback"]) for item in bound):
-                self.store.db.after_rollback(connection, lambda: files.discard_reference(
-                    self.store.directory, run["maintenance_run_id"], params["answer"]))
+            run_id = run["maintenance_run_id"]
+            material = files.read(self.store.directory, run_id, params.get("answer"))
+            observations = material.get("observations") if isinstance(material, dict) else None
+            if (not isinstance(observations, dict) or set(material) != {"answer", "observations"}
+                    or set(observations) != {"toolCalls", "toolMarkerFrames", "deniedInteractions"}
+                    or any(type(value) is not int or value < 0 for value in observations.values())):
+                raise BoardError("INVALID_ARGUMENT", "Maintenance answer requires native observation counts")
             task = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             document = json.loads(task[0])["decision"]["document"]
-            packet = files.read(self.store.directory, run["maintenance_run_id"], document["input"])["packet"]
-            feedback = maintenance_data.apply_answer(connection, packet=packet, answer=material["answer"],
-                                                     maintenance_run_id=run["maintenance_run_id"])
-            def retain_feedback(reference):
-                if not any(reference in (item["answer"], item["feedback"]) for item in bound):
+            packet = files.read(self.store.directory, run_id, document["snapshot"]["reference"])
+            bound = [json.loads(row[0]) for row in history]
+            previous = (files.read(self.store.directory, run_id, bound[-1]["staged"]) if bound
+                        else {"tree": [], "classifications": {}, "summaries": {}})
+            staged, feedback = maintenance_data.stage_answer(connection, packet=packet,
+                                                            answer=material["answer"], previous=previous)
+
+            def retain(reference):
+                pinned = {"retainedAnswer", "feedback", "staged"}
+                if reference != document["snapshot"]["reference"] and not any(
+                        reference == item[key] for item in bound for key in pinned):
                     self.store.db.after_rollback(connection, lambda: files.discard_reference(
-                        self.store.directory, run["maintenance_run_id"], reference))
-            reference = files.publish(self.store.directory, run["maintenance_run_id"], feedback, before_write=retain_feedback)
+                        self.store.directory, run_id, reference))
+
+            # The transport submission is transient. Bind the service's own
+            # retained copy to the attempt and round before acknowledging it.
+            retain(params["answer"])
+            accepted = files.publish(self.store.directory, run_id, {
+                "attemptId": attempt["attempt_id"], "round": round_index, "material": material}, before_write=retain)
+            reference = files.publish(self.store.directory, run_id, feedback, before_write=retain)
+            staged_ref = files.publish(self.store.directory, run_id, staged, before_write=retain)
             self.store._append_event(connection, "maintenance.answer_checked", task_id=attempt["task_id"],
-                attempt_id=attempt["attempt_id"], payload={"round": round_index, "answer": params["answer"], "feedback": reference})
+                attempt_id=attempt["attempt_id"], payload={"round": round_index, "answer": params["answer"],
+                    "retainedAnswer": accepted, "feedback": reference, "staged": staged_ref})
             head = self.store._head_of(connection)
         self.store._notify(head)
         return {"feedback": reference}
@@ -206,7 +230,7 @@ class Maintenance:
             self._discard_native_files(harness, task_id, attempt_ids)
 
     def _discard_native_files(self, harness, task_id, attempt_ids):
-        from ...private_dirs import attempt_root, remove_tree
+        from ...private_dirs import remove_tree
         from ...paths import native_path
 
         for attempt_id in attempt_ids:
@@ -228,21 +252,11 @@ class Maintenance:
                     stopped = [row[0] for row in connection.execute("SELECT attempt_id FROM attempts WHERE task_id=? AND shutdown_confirmed=1", (run["task_id"],))]
                     self._discard_native_files(run["harness"], run["task_id"], stopped)
 
-    def finish(self, connection, *, task_id, now, code=None, params=None):
+    def finish(self, connection, *, task_id, now, code=None, params=None, committed_progress=0):
         run = self._run(connection, task_id)
         if run["state"] != "running":
             return None
         params = dict(params or {})
-        event = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='maintenance.answer_checked' ORDER BY seq DESC LIMIT 1",
-                                   (task_id,)).fetchone()
-        if event is not None:
-            feedback_ref = json.loads(event[0])["feedback"]
-            feedback = files.read(self.store.directory, run["maintenance_run_id"], feedback_ref)
-            if code is None and feedback["errors"]:
-                code = "maintenance-answer-invalid"
-                params = {"errors": feedback["errors"]}
-        elif code is None:
-            code = "router-no-answer"
         connection.execute("UPDATE maintenance_runs SET state=?,reason_code=?,reason_params_json=?,finished_at=? WHERE task_id=?",
                            ("failed" if code else "completed", code, canonical_json(params) if code else None, now, task_id))
         harness = connection.execute("SELECT json_extract(spec_json,'$.decision.document.buddy.harness') FROM tasks WHERE task_id=?",
@@ -251,7 +265,7 @@ class Maintenance:
         self.store.db.after_commit(connection, lambda: self._discard_run_files(run["maintenance_run_id"], harness, task_id, stopped))
         self.store._append_event(connection, "maintenance.finished", task_id=task_id,
             payload={"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed", "code": code,
-                     "continuePending": code is None and maintenance_data.pending(connection)})
+                     "continuePending": committed_progress > 0 and maintenance_data.pending(connection)})
         return {"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed"}
 
     def complete(self, connection, *, task, attempt, status, result, shutdown_confirmed, error, now):
@@ -262,20 +276,80 @@ class Maintenance:
         code = output.get("code") or error
         if status != "ok" or output.get("status") != "ok":
             code = code or "router-no-answer"
-        if not shutdown_confirmed or attempt["shutdown_confirmed"] != 1:
+        spec = json.loads(task["spec_json"])
+        document = spec["decision"]["document"]
+        params = None
+        progress = 0
+        if shutdown_confirmed is not True or attempt["shutdown_confirmed"] != 1:
             code = "router-stop-unconfirmed"
-        if code is None:
-            document = json.loads(task["spec_json"])["decision"]["document"]
+        elif code is None or code in ("maintenance-answer-invalid", "answer-shape", "answer-invalid-json", "answer-empty"):
             problem = self.store.decisions._tool_evidence_problem(
                 {"decision_task_id": task["task_id"], "decision_attempt_id": attempt["attempt_id"],
                  "decision_generation": attempt["generation"]}, document, output)
             if problem:
                 code = problem["code"]
-        params = ({"seconds": json.loads(task["spec_json"])["modelResponseWaitSeconds"]}
-                  if code == "router-not-responding" else None)
-        if code == WorkingDirectoryRejected.code:
+            else:
+                try:
+                    verified = _read_coverage(self.store.directory, task, attempt, document, output)
+                except (BoardError, OSError, ValueError, RecursionError):
+                    code = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
+                else:
+                    event = connection.execute(
+                        "SELECT payload_json FROM events WHERE attempt_id=? AND kind='maintenance.answer_checked'"
+                        " ORDER BY seq DESC LIMIT 1", (attempt["attempt_id"],)).fetchone()
+                    if event is None:
+                        code = "router-no-answer"
+                    else:
+                        run_id = run["maintenance_run_id"]
+                        checked = json.loads(event[0])
+                        feedback = files.read(self.store.directory, run_id, checked["feedback"])
+                        staged = files.read(self.store.directory, run_id, checked["staged"])
+                        packet = files.read(self.store.directory, run_id, document["snapshot"]["reference"])
+                        try:
+                            correction_errors = feedback["errors"][:len(feedback["errors"]) - len(feedback["missing"])]
+                            counts, errors = maintenance_data.commit_staged(
+                                connection, packet=packet, staged=staged, verified_events=verified,
+                                maintenance_run_id=run_id, prior_errors=correction_errors)
+                        except QueryError:
+                            code = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
+                        else:
+                            progress = counts["classifications"] + counts["summaries"]
+                            if errors:
+                                code, params = "maintenance-answer-invalid", {"errors": errors}
+        if code == "router-not-responding":
+            params = {"seconds": spec["modelResponseWaitSeconds"]}
+        elif code == WorkingDirectoryRejected.code:
             params = WorkingDirectoryRejected.reason_params(output.get("reason"))
-        return self.finish(connection, task_id=task["task_id"], now=now, code=code, params=params)
+        return self.finish(connection, task_id=task["task_id"], now=now, code=code, params=params,
+                           committed_progress=progress)
+
+
+def _read_coverage(state_dir, task, attempt, document, output):
+    reference = output.get("snapshotCoverage")
+    if reference is None:
+        return []
+    if (not isinstance(reference, dict) or set(reference) != {"location", "sizeBytes", "sha256"}
+            or not isinstance(reference["location"], str) or type(reference["sizeBytes"]) is not int
+            or reference["sizeBytes"] < 0 or not isinstance(reference["sha256"], str)):
+        raise ValueError("Invalid snapshot coverage reference")
+    root = attempt_root(state_dir, document["buddy"]["harness"], task["task_id"], attempt["attempt_id"])
+    path = Path(reference["location"])
+    if (path.parent.parent != root or path.name != "snapshot-coverage.json"
+            or re.fullmatch(r"no-tool-[0-9a-f]{32}", path.parent.name) is None):
+        raise ValueError("Snapshot coverage does not belong to the maintenance attempt")
+    current = Path(state_dir)
+    for part in path.parent.relative_to(current).parts:
+        current = current / part
+        if linked(current):
+            raise ValueError("Snapshot coverage does not belong to the maintenance attempt")
+    raw = read_bytes(path)
+    if len(raw) != reference["sizeBytes"] or hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+        raise ValueError("Snapshot coverage digest differs")
+    events = decode_strict_json(raw)
+    if not isinstance(events, list):
+        raise ValueError("Snapshot coverage must be a list of verified deliveries")
+    return events
+
 
 
 class Scheduler:
@@ -283,15 +357,36 @@ class Scheduler:
         self.store = store
         self.thread = threading.Thread(target=self.run, name="hey-my-buddy-maintenance", daemon=True)
 
+    def _recover_startup_files(self) -> bool:
+        from . import snapshot_files
+
+        ok = True
+        for stage, action in (
+            ("maintenance-file-cleanup", self.store.maintenance.recover_files),
+            ("routing-snapshot-cleanup", lambda: snapshot_files.recover_files(self.store)),
+        ):
+            try:
+                action()
+            except OSError as error:
+                self.store.record_service_issue(stage, error)
+                ok = False
+            else:
+                self.store.clear_service_issue(stage)
+        return ok
+
     def run(self):
         try:
-            self.store.maintenance.recover_files()
+            recovered = self._recover_startup_files()
             while True:
                 with self.store._condition:
                     if self.store._wait_stopped:
                         return
                     head = self.store._head
+                if not recovered:
+                    recovered = self._recover_startup_files()
                 delay = self.store.maintenance.collect()
+                if not recovered:
+                    delay = 5.0 if delay is None else min(delay, 5.0)
                 with self.store._condition:
                     self.store._condition.wait_for(
                         lambda: self.store._wait_stopped or self.store._head != head, timeout=delay)

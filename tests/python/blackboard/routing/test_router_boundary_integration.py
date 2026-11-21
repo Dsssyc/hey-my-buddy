@@ -102,10 +102,10 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def assert_packet(self, boundary, ids=(A, B), *, require_schema=True):
         self.assertEqual([item["buddyId"] for item in boundary["candidates"]], list(ids))
         facts = boundary["facts"]
-        self.assertEqual([item["buddyId"] for item in facts["buddies"]], list(ids))
+        self.assertNotIn("buddies", facts)
         self.assertIn("policyFacts", facts)
         if require_schema:
-            self.assertIn("outputSchema", facts)
+            self.assertNotIn("outputSchema", facts)
         self.assertIn("routingMode", facts)
         for candidate in boundary["candidates"]:
             self.assertTrue({"harness", "provider", "model", "effort"} <= set(candidate))

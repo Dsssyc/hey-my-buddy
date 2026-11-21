@@ -2,6 +2,10 @@
 
 The service stores one authoritative `harness_health` record per native harness, and a cooling record for each harness provider whose quota rejections no success has followed yet ([provider rejections and cooling](#provider-rejections-and-cooling)). Discovery readiness and the harness's declared permission levels (`permissions`: for each level, whether it is enforced natively or by convention) are separate facts. The declaration is code, not a reading of the installation: eligibility calls no model or account endpoint and launches no native process.
 
+Fast routing and maintenance require `none` and a mount declared by `ROUTER_SNAPSHOT_QUERY_HARNESSES`. Review requires `read` and the same mount. These roles expose only attempt-local frozen queries through the private session service. Codex CLI 0.169.1 uses `dynamicTools` and declares `none` by convention because native tools remained visible during the probe. Claude Code CLI 2.1.329 declares `none` enforced using its strict MCP configuration and native allowlist, with structured output delivery. DSH CLI 0.2.2-rc.1 and ZCode CLI 0.17.1 declare `none` enforced with the DSH tool inventory patch and ZCode’s precise mounted-tool allowlist. Worker permission declarations are independent. [Native probe record](../research/2026-11-19-router-snapshot-query-probes.md)
+
+`ToolEventEvidence` v4 records mounted tool names and calls verified by the attempt’s ledger and native event stream. A query’s verified returned pages determine maintenance coverage. [Router and maintenance contract](decision.md)
+
 ## Verification by platform
 
 Real use so far: macOS with all four harnesses, Windows 11 with Codex and DeepSeek Harness, Linux not yet.

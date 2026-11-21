@@ -40,7 +40,7 @@ export type MacroTaskDeletionResult = DeletionReceipt & (
   | { state: "deleting"; deletedAt: null; failures: DeletionFailure[] }
 );
 export type DeletionFailure = {
-  objectKind: "native-session" | "workspace" | "private-root" | "session-records" | "cli-file";
+  objectKind: "native-session" | "workspace" | "private-root" | "session-records" | "cli-file" | "routing-snapshots";
   path: string | null;
   reason: Reason;
   error: { message: string; errno: number | null; winerror: number | null } | null;
@@ -94,7 +94,7 @@ export function parseMacroTaskDeletionPreview(macroTaskId: string, value: unknow
 
 function failure(value: unknown): boolean {
   if (!record(value) || !keys(value, ["objectKind", "path", "reason", "error"])
-    || !["native-session", "workspace", "private-root", "session-records", "cli-file"].includes(value.objectKind as string)
+    || !["native-session", "workspace", "private-root", "session-records", "cli-file", "routing-snapshots"].includes(value.objectKind as string)
     || !(value.path === null || typeof value.path === "string") || !isReason(value.reason)) return false;
   const error = value.error;
   return error === null || record(error) && keys(error, ["message", "errno", "winerror"])

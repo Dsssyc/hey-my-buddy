@@ -15,6 +15,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from blackboard.routing.fixtures.selection import assert_frozen_dispatch
 from support import BoardTestCase, FakeClock, seed_buddy
 from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.catalog import buddy_state
@@ -124,7 +125,7 @@ class AdmissionTests(RouterDispatchTestCase):
         # The Host keeps the full frozen packet, never only a reason.
         self.assertEqual([item["buddyId"] for item in base["buddies"]], [A, B])
         self.assertIn("policyFacts", base)
-        self.assertIn("outputSchema", base)
+        self.assertNotIn("outputSchema", base)
         self.assertNotIn("buddy", base)
         self.assertNotIn("routerBuddyId", base)
         self.assertEqual(snapshot["facts"]["routerBuddyIds"], [])
@@ -243,7 +244,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.set_settings(ids=[B, A])
         claimed = self.claim("settings-edited")
         self.assertIsNotNone(claimed["claim"])
-        self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
+        assert_frozen_dispatch(self, self.board_, claimed["claim"]["decisionInput"], frozen["document"])
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.router_events("router.no_answer"), [])
 
@@ -256,7 +257,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
             ensure_model_service(db, "dsh", "fixture", "replaced", self.board_.store.now())
         claimed = self.claim("identity-edited")
         self.assertIsNotNone(claimed["claim"])
-        self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
+        assert_frozen_dispatch(self, self.board_, claimed["claim"]["decisionInput"], frozen["document"])
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.router_events("router.no_answer"), [])
 
@@ -303,6 +304,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                                                    ("harness", "provider", "model", "effort")}},
                                              now=T0)
             router_sequence.record_claim(db, task_id="retry-1", attempt_id="att-retry", generation=1, now=T0)
+        self.clock.advance(601)
         blocked = self.claim("retry")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "router-retry-in-progress")
@@ -318,6 +320,17 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         facts = [payload for kind, payload in self.router_events("router.no_answer", "router.claimed")
                  if payload.get("requestId") == "pick-1"]
         self.assertEqual(facts, [])
+
+
+        with self.board_.store.db.write() as db:
+            router_history.record_outcome(
+                db, buddy_id=A, request_id="route-other", task_id=None, attempt_id=None,
+                outcome="no_answer", code="answer-shape", phase="runtime",
+                facts={"routerIndex": 0}, now=self.clock.value)
+        advanced = self.claim("after-window-refresh", task_id=result["runId"])
+        self.assertIsNone(advanced["claim"])
+        self.assertEqual(advanced["reason"], "decision-dispatch-advanced")
+        self.assertCountEqual([row["state"] for row in self.tasks()], ["cancelled", "queued"])
 
     def test_late_superseded_task_never_claims(self):
         result = self.request()
@@ -503,7 +516,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.catalog_read()
         committed = self.claim('catalog-noop')
         self.assertIsNotNone(committed['claim'])
-        self.assertEqual(committed['claim']['decisionInput'], original['document'])
+        assert_frozen_dispatch(self, self.board_, committed['claim']['decisionInput'], original['document'])
 
     def test_changed_catalog_description_does_not_stop_frozen_dispatch(self):
         self.catalog_read()
@@ -512,7 +525,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.catalog_read(changed=True)
         committed = self.claim('catalog-changed')
         self.assertIsNotNone(committed['claim'])
-        self.assertEqual(committed['claim']['decisionInput'], original['document'])
+        assert_frozen_dispatch(self, self.board_, committed['claim']['decisionInput'], original['document'])
         self.assertEqual(self.router_events('router.no_answer'), [])
 
     def test_actor_graft_is_reconstructed_without_a_packet_ceiling(self):

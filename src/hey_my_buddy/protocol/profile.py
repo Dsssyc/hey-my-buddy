@@ -2,8 +2,8 @@
 from functools import partial
 from . import maintenance
 
-publish = partial(maintenance.publish, namespace="profiles")
-read = partial(maintenance.read, namespace="profiles")
-discard = partial(maintenance.discard, namespace="profiles")
-discard_reference = partial(maintenance.discard_reference, namespace="profiles")
-discard_orphans = partial(maintenance.discard_orphans, namespace="profiles")
+publish = partial(maintenance.publish, namespace="profile")
+read = partial(maintenance.read, namespace="profile")
+discard = partial(maintenance.discard, namespace="profile")
+discard_reference = partial(maintenance.discard_reference, namespace="profile")
+discard_orphans = partial(maintenance.discard_orphans, namespace="profile")

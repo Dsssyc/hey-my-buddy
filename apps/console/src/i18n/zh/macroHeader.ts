@@ -96,7 +96,7 @@ export default {
     deleted: "已删除「{{title}}」。",
     dismiss: "关闭删除结果",
     refreshFailed: "列表或详情刷新失败，请重新读取；删除已完成。",
-    objects: { "native-session": "原生会话", workspace: "受管检出", "private-root": "私有目录", "session-records": "会话记录", "cli-file": "控制文件" },
+    objects: { "native-session": "原生会话", workspace: "受管检出", "private-root": "私有目录", "session-records": "会话记录", "cli-file": "控制文件", "routing-snapshots": "路由快照" },
     blockers: {
       queued: { state: "排队中", resolution: "等待其结束，或在“更多”中停止宏任务" },
       routing: { state: "路由中", resolution: "等待路由结束，或在“更多”中停止宏任务" },

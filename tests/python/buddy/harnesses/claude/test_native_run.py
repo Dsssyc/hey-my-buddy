@@ -21,7 +21,7 @@ from unittest import mock
 from buddy.harnesses.fixture_selection import select_command, select_fixture
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
-from hey_my_buddy.blackboard.routing.router import answer_schema
+from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
@@ -48,7 +48,7 @@ FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
 USAGE_FIXTURE = Path(__file__).parent / "fixtures/fake_claude_usage.py"
 BUDDY = {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "high"}
-READ_SCHEMA = answer_schema(["legal"])
+READ_SCHEMA = answer_schema("review")
 
 
 def flag_value(args: list[str], flag: str) -> str | None:
@@ -177,8 +177,9 @@ class NativeInquiryTests(NativeRunCase):
     def test_child_lifecycle_does_not_change_the_root_inquiry_window(self):
         request = self.request()
         bridge = mock.Mock()
-        collector = native_run._TurnCollector(request, native_run.ActivityPublisher(None),
-                                               lambda _facts: FEEDBACK_CONTINUE, bridge=bridge)
+        collector = native_run._TurnCollector(native_run.ActivityPublisher(None),
+                                               lambda _facts: FEEDBACK_CONTINUE,
+                                               tools=native_run._tool_evidence(request), bridge=bridge)
         collector.evidence = native_run.TurnEvidence("root-session", request.cwd)
         collector.observe({"type": "system", "subtype": "init", "session_id": "root-session",
                            "cwd": request.cwd, "model": request.buddy.model})
@@ -306,8 +307,9 @@ class NativeInquiryTests(NativeRunCase):
         self.assertTrue(self.fixture_state()["cleanupCompleted"])
 
     def test_failure_evidence_is_bounded(self):
-        collector = native_run._TurnCollector(self.request(), native_run.ActivityPublisher(None),
-                                               lambda _facts: FEEDBACK_CONTINUE)
+        collector = native_run._TurnCollector(native_run.ActivityPublisher(None),
+                                               lambda _facts: FEEDBACK_CONTINUE,
+                                               tools=native_run._tool_evidence(self.request()))
         for number in range(12):
             collector._retain_inquiry_failure(str(number), "tool", "错" * 2000)
         self.assertEqual(len(collector.inquiry_tool_failures), 8)
@@ -433,8 +435,8 @@ class Batch4FactsTests(NativeRunCase):
 
     def test_permission_requests_keep_all_denial_correlations(self):
         from hey_my_buddy.protocol.activity import ActivityPublisher
-        collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
-                                             lambda _facts: FEEDBACK_CONTINUE)
+        collector = native_run._TurnCollector(ActivityPublisher(None), lambda _facts: FEEDBACK_CONTINUE,
+                                               tools=native_run._tool_evidence(self.request()))
         connection = mock.Mock()
         connection.observations.return_value = {"unknownEvents": 0, "unreadResponses": 0}
         collector.install(connection)
@@ -447,8 +449,8 @@ class Batch4FactsTests(NativeRunCase):
 
     def test_initialization_frame_bound_still_refuses(self):
         from hey_my_buddy.protocol.activity import ActivityPublisher
-        collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
-                                             lambda _facts: FEEDBACK_CONTINUE)
+        collector = native_run._TurnCollector(ActivityPublisher(None), lambda _facts: FEEDBACK_CONTINUE,
+                                               tools=native_run._tool_evidence(self.request()))
         connection = mock.Mock()
         connection.observations.return_value = {"unknownEvents": 0, "unreadResponses": 0}
         collector.install(connection)
@@ -1120,7 +1122,7 @@ class ObserverContractTests(NativeRunCase):
         # The peer received its deny answer before the stop took effect.
         self.assertEqual(self.fixture_state()["permissionReply"]["behavior"], "deny")
 
-    def test_a_correction_is_refused_this_harness_takes_none(self):
+    def test_worker_turn_refuses_structured_correction(self):
         self.fixture_case("ok")
 
         def correcting(_facts):
