@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from urllib.parse import parse_qs
 
@@ -11,15 +10,8 @@ from ..blackboard.tasks import session_content as tasks
 from ..blackboard.tasks.workflow import WorkflowCoordinator
 from ..buddy.harnesses.registry import session_coverage, session_projector
 from ..errors import BoardError
-from ..json_codec import decode_strict_json
-from ..paths import native_path
 from ..protocol.reasons import reason
-from ..protocol.session_content import (
-    SESSION_FORMAT, MessageChunk, SessionFormat, SessionNotification, SessionUpdate, ToolCall, ToolCallUpdate,
-)
-
-_BACKTRACK_LINES = 256
-_BACKTRACK_BYTES = 512 * 1024
+from ..protocol.session_reader import SessionRecordDeleted, empty_raw_page, read_raw_page
 
 
 def parse_query(query: str) -> dict:
@@ -41,133 +33,6 @@ def parse_query(query: str) -> dict:
     return params
 
 
-def _last_newline(stream, end: int, floor: int) -> int:
-    """Find a newline backwards without reading the whole history."""
-    while end > floor:
-        start = max(floor, end - 65536)
-        stream.seek(start)
-        block = stream.read(end - start)
-        index = block.rfind(b'\n')
-        if index >= 0:
-            return start + index
-        end = start
-    return floor - 1
-
-
-def _empty_page(params: dict) -> dict:
-    cursor = params.get('before', params.get('after', 0))
-    return {'events': [], 'before': cursor, 'after': cursor, 'hasEarlier': False}
-
-
-def _event(line: bytes) -> SessionNotification:
-    return SessionNotification.model_validate(decode_strict_json(line))
-
-
-def _track_tool_opening(update: SessionUpdate, missing: set[str]) -> None:
-    # Traversal is newest to oldest, so an update needs a start earlier in the record.
-    if isinstance(update, ToolCall):
-        missing.discard(update.tool_call_id)
-    elif isinstance(update, ToolCallUpdate):
-        missing.add(update.tool_call_id)
-
-
-def _message_key(update: SessionUpdate) -> tuple[str, str] | None:
-    if isinstance(update, MessageChunk) and update.meta is not None:
-        return update.meta.native_item_id, update.meta.content_segment
-    return None
-
-
-def _track_open_block(update: SessionUpdate, missing: set[str], open_messages: set[tuple[str, str]]) -> None:
-    _track_tool_opening(update, missing)
-    key = _message_key(update)
-    if key is not None:
-        if update.meta.replace:
-            open_messages.discard(key)
-        else:
-            open_messages.add(key)
-
-
-def _align_before(stream, first: int, start: int, events: list[SessionNotification]) -> int:
-    missing: set[str] = set()
-    open_messages: set[tuple[str, str]] = set()
-    for event in reversed(events):
-        _track_open_block(event.update, missing, open_messages)
-    earliest = max(start, first - _BACKTRACK_BYTES)
-    # Include the delimiter just before the earliest allowed event, if there is one.
-    floor = max(start, earliest - 1)
-    committed: list[SessionNotification] = []
-    pending: list[tuple[int, SessionNotification]] = []
-    committed_first = cursor = first
-    for _ in range(_BACKTRACK_LINES):
-        if cursor <= earliest or (not missing and not open_messages):
-            break
-        previous = _last_newline(stream, cursor - 1, floor) + 1
-        if previous < earliest:
-            break
-        stream.seek(previous)
-        event = _event(stream.read(cursor - previous))
-        cursor = previous
-        update = event.update
-        tool_match = isinstance(update, (ToolCall, ToolCallUpdate)) and update.tool_call_id in missing
-        msg_key = _message_key(update)
-        msg_match = msg_key is not None and msg_key in open_messages
-        pending.append((previous, event))
-        if tool_match or msg_match:
-            for offset, item in pending:
-                committed.append(item)
-                committed_first = offset
-                _track_open_block(item.update, missing, open_messages)
-            pending.clear()
-    events[:0] = reversed(committed)
-    return committed_first
-
-
-def _page(stream, params: dict) -> dict:
-    size = os.fstat(stream.fileno()).st_size
-    header = stream.readline(size)
-    if not header.endswith(b'\n'):
-        return _empty_page(params)
-    if SessionFormat.model_validate(decode_strict_json(header)) != SESSION_FORMAT:
-        raise ValueError('Invalid session format')
-    start = len(header)
-    cursor = params.get('before', params.get('after'))
-    if cursor == 0:
-        if 'before' in params:
-            return _empty_page(params)
-        cursor = start
-    if cursor is not None:
-        if cursor < start or cursor > size:
-            raise BoardError('INVALID_ARGUMENT', 'Session offset is outside the event area')
-        stream.seek(cursor - 1)
-        if stream.read(1) != b'\n':
-            raise BoardError('INVALID_ARGUMENT', 'Session offset is not a line boundary')
-    end = _last_newline(stream, size, start) + 1
-    limit = params.get('limit', 100)
-    if 'after' in params:
-        first = cursor
-        stream.seek(first)
-        lines = []
-        for _ in range(limit):
-            if stream.tell() >= end:
-                break
-            lines.append(stream.readline(end - stream.tell()))
-        last = stream.tell()
-    else:
-        last = cursor if cursor is not None else end
-        first = last
-        for _ in range(limit):
-            if first == start:
-                break
-            first = _last_newline(stream, first - 1, start) + 1
-        stream.seek(first)
-        lines = stream.read(last - first).split(b'\n')[:-1]
-    events = [_event(line) for line in lines]
-    if 'after' not in params and first > start and events:
-        first = _align_before(stream, first, start, events)
-    return {'events': [event.model_dump(mode='json', by_alias=True, exclude_none=True) for event in events],
-            'before': first, 'after': last, 'hasEarlier': first > start}
-
-
 def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     owner = tasks.identity(store, task_id, attempt_id)
     if owner['session_group_id'] is None:
@@ -182,21 +47,17 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     response = {'state': 'ended' if owner['execution_state'] == 'finished' else 'running',
                 'stopped': stopped, 'coverage': {kind: declaration.to_payload() for kind, declaration in session_coverage(harness).items()}}
     path = private_dirs.session_record_path(store.directory, owner['session_group_id'], attempt_id)
-    opened = False
     try:
-        fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
-        opened = True
-        with os.fdopen(fd, 'rb') as stream:
-            page = _page(stream, params)
-            # An open POSIX descriptor survives unlink. Check the fixed name as
-            # well so deletion during the read cannot return retained bytes.
-            native_path(path).stat()
+        page = read_raw_page(path, params)
+    except SessionRecordDeleted:
+        raise BoardError('SESSION_DELETED', 'The session record was deleted',
+                         reason=reason('session.deleted')) from None
     except FileNotFoundError:
-        if opened or tasks.deleting(store, task_id, attempt_id):
+        if tasks.deleting(store, task_id, attempt_id):
             raise BoardError('SESSION_DELETED', 'The session record was deleted',
                              reason=reason('session.deleted')) from None
         if stopped is not None:
-            return {**response, **_empty_page(params)}
+            return {**response, **empty_raw_page(params)}
         raise BoardError('SESSION_NOT_RECORDED', 'This attempt has no session record',
                          reason=reason('session.not-recorded')) from None
     except (ValueError, RecursionError):

@@ -431,10 +431,17 @@ def worker_request(control: dict, module):
     workspace = turn_manifest(Path(control["stateDir"]), turn_input)
     prompt_input = {**turn_input, "executionWorkspace": workspace}
     permission = workspace["access"]
+    mode = turn_input.get("resumeMode")
+    prior_sessions = control.get("priorSessions")
+    if not isinstance(prior_sessions, list):
+        prior_sessions = []
+    mount_prior = (mode == "reconstructed-new-session" and bool(prior_sessions)
+                   and not (control["harness"] == "claude" and permission == "web"))
     if format is None:
         from ..harnesses.live import EXISTING_CAPABILITIES
         checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
-        tools = worker_services.session_tools(delegation_authority=delegation_authority, checkpoint=checkpoint)
+        tools = worker_services.session_tools(delegation_authority=delegation_authority, checkpoint=checkpoint,
+                                              prior_sessions=mount_prior)
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention_path,
@@ -444,11 +451,12 @@ def worker_request(control: dict, module):
                 if tool["name"] in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")),
             validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
             delegation_authority=delegation_authority,
+            prior_sessions=prior_sessions if mount_prior else None,
             native_stderr=str(invocation_root / "native-stderr.log"))
         prompt = worker_services.micro_task_prompt(
             task_text, prompt_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
-            credential_file=credential_file)
+            credential_file=credential_file, prior_session_tools=binding.prior_session_tools if mount_prior else ())
         services, descriptions = binding.services, (binding.description,)
         mount = services.mount
         schema = next(tool["inputSchema"] for tool in mount.tool_contracts
@@ -457,17 +465,24 @@ def worker_request(control: dict, module):
         format = format.for_turn(turn_input)
         prompt, schema = format.prompt(task_text, prompt_input, credential_file=credential_file), format.schema
         inquiry_services = None
-        if inquiry is not None:
+        codex = control["harness"] == "codex"
+        carry_codex_prior = codex and mode == "native-session" and bool(prior_sessions)
+        if inquiry is not None or mount_prior or carry_codex_prior:
             inquiry_services = module.prepare_inquiry_services(
                 invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
-                attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA)
-            prompt = prompt.appended("delivery", "\nHost questions may arrive as inputs during this running turn. Answer each with "
-                       f"{inquiry_services.answer_tool}, using its exact "
-                       "inquiryId and answer text. Assistant prose does not count as an answer. "
-                       "Questions never open a new turn or extend this turn's deadline.\n")
+                attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA,
+                prior_sessions=prior_sessions if mount_prior or carry_codex_prior else None,
+                **({"mount_prior_tools": mount_prior} if codex else {}))
+            if inquiry_services.answer_tool:
+                prompt = prompt.appended("delivery", "\nHost questions may arrive as inputs during this running turn. Answer each with "
+                           f"{inquiry_services.answer_tool}, using its exact "
+                           "inquiryId and answer text. Assistant prose does not count as an answer. "
+                           "Questions never open a new turn or extend this turn's deadline.\n")
+            if mount_prior and inquiry_services.prior_session_tools:
+                guidance = worker_services.prior_session_guidance(inquiry_services.prior_session_tools)
+                prompt = prompt.appended("delivery", "\n" + guidance + "\n")
         services = _native_services(module, inquiry=inquiry_services)
         descriptions = ()
-    mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
     continuation = None
     if mode in ("native-session", "reconstructed-new-session"):
@@ -794,6 +809,7 @@ class WorkerRunExecutor:
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
+            "priorSessions": context.prior_sessions,
             "credentialFile": str(context.credential_file()) if context.agent_credential else None,
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         }

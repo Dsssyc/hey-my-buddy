@@ -52,6 +52,7 @@ from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ..input_admission import admission_error
 from ....protocol.input_failure import is_input_too_large
+from ....protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
@@ -292,6 +293,7 @@ class SessionServiceMount:
     #: contract and the refusal-envelope verification set against the full
     #: mounted names.
     tool_contracts: tuple[dict, ...] = ()
+    prior_session_tools: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -316,7 +318,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
                             attention_path: Path, session_tools: list[dict] | tuple[dict, ...],
                             completion_tool: str, inquiry: dict | None = None,
                             inquiry_tools: tuple[str, ...] = (),
-                            delegation_authority: bool = False) -> SessionServiceMount:
+                            delegation_authority: bool = False,
+                            prior_sessions: list[dict] | None = None) -> SessionServiceMount:
     """Prepare one run's session-service mount; no process is started.
 
     The naming is the mechanical rule the native driver and the role share: one
@@ -347,6 +350,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         # The MCP tools only read this journal; every record in it is written
         # by the driver after root-turn evidence verified.
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
+    if prior_sessions:
+        bridge["priorSessions"] = prior_sessions
     bridge_path = root / "finish-bridge.json"
     private_json(bridge_path, bridge, exclusive=True)
     mcp = [{"name": server_name, "command": sys.executable,
@@ -360,7 +365,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         bare_tools=tuple(tool["name"] for tool in session_tools),
         bridge=bridge, mcp_servers=tuple(mcp), input_id=input_id, bridge_config_path=str(bridge_path),
         tool_contracts=tuple({"name": tool["name"], "inputSchema": tool["inputSchema"]}
-                             for tool in session_tools))
+                             for tool in session_tools),
+        prior_session_tools=tuple(qualified[name] for name in PRIOR_SESSION_TOOL_NAMES) if prior_sessions else ())
 
 
 # -- the normalized facts the role observer sees ---------------------------------
@@ -397,18 +403,20 @@ def check_preparation(spec: dict, environment: dict) -> None:
 def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome, inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     native_stderr: str, delegation_authority: bool = False) -> BoundSessionServices:
+                     native_stderr: str, delegation_authority: bool = False,
+                     prior_sessions: list[dict] | None = None) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process."""
     mount = prepare_session_service(
         invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
         attention_path=attention_path, session_tools=session_tools, completion_tool=completion_tool,
         inquiry=inquiry, inquiry_tools=inquiry_tools,
-        delegation_authority=delegation_authority)
+        delegation_authority=delegation_authority, prior_sessions=prior_sessions)
     return BoundSessionServices(
         description=SessionService(
             tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),
         completion_tool=mount.finish_tool, checkpoint_tool=None,
         answer_tool=mount.answer_tool,
+        prior_session_tools=mount.prior_session_tools,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
                                  native_stderr=native_stderr))
 

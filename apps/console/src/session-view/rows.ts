@@ -2,12 +2,14 @@ import type { SessionBlock } from "./blocks";
 import type { JsonValue, ToolUpdate } from "./types";
 import type { TFunction } from "i18next";
 
+const blackboardActions = ["checkpoint", "answer_inquiry", "finish_turn", "prior_sessions", "list_session_entries", "read_session_entry"] as const;
+
 export type ToolBlock = Extract<SessionBlock, { type: "tool" }>;
 export type MessageBlock = Extract<SessionBlock, { type: "message" }>;
 export type ToolKind = NonNullable<ToolUpdate["kind"]>;
 export type CallGroup = { type: "calls"; key: string; items: (ToolBlock | MessageBlock)[]; counts: Partial<Record<ToolKind, number>>; failed: number };
 export type SessionRow = CallGroup | { type: "tool"; key: string; tool: ToolBlock; markers: MessageBlock[] }
-  | { type: "blackboard"; key: string; action: "checkpoint" | "answer_inquiry" | "finish_turn"; tool: ToolBlock }
+  | { type: "blackboard"; key: string; action: (typeof blackboardActions)[number]; tool: ToolBlock }
   | { type: "answer"; key: string; content: AnswerContent; copyText: string }
   | { type: "task" | "note" | "reasoning" | "marker"; key: string; message: MessageBlock }
   | Extract<SessionBlock, { type: "plan" }>;
@@ -33,7 +35,6 @@ export function markerName(nativeType: string | undefined, t: TFunction<"taskDet
   return t("sessionView.nativeMarker", { type: nativeType ?? t("unknown") });
 }
 
-const blackboardActions = ["checkpoint", "answer_inquiry", "finish_turn"] as const;
 export function blackboardAction(title = "") {
   return blackboardActions.find(action => title.endsWith(`hey_my_buddy_${action}`));
 }

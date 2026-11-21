@@ -41,10 +41,16 @@ describe("session rows", () => {
     expect(group.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: /^second/ }).getAttribute("aria-expanded")).toBe("false");
   });
-  it("separates every prefixed blackboard action from call groups and keeps its details", () => {
-    const result = rows([tool("read"), ...["checkpoint", "answer_inquiry", "finish_turn"].map((name, i) => tool(`${i}`, "other", { title: `mcp__blackboard__hey_my_buddy_${name}`, rawInput: { result: i } })), tool("edit", "edit")]);
-    expect(result.map(row => row.type)).toEqual(["tool", "blackboard", "blackboard", "blackboard", "tool"]);
-    expect(result[2]).toMatchObject({ action: "answer_inquiry", tool: { update: { rawInput: { result: 1 } } } });
+  it.each(["checkpoint", "answer_inquiry", "finish_turn", "prior_sessions", "list_session_entries", "read_session_entry"])("separates the %s blackboard action from call groups and keeps its details", action => {
+    const rawInput = { cursor: 1 };
+    const rawOutput = { entries: ["recorded detail"] };
+    const result = rows([
+      tool("read-a"), tool("read-b"),
+      tool(action, "other", { title: `mcp__blackboard__hey_my_buddy_${action}`, rawInput, rawOutput }),
+      tool("edit-a", "edit"), tool("edit-b", "edit"),
+    ]);
+    expect(result.map(row => row.type)).toEqual(["calls", "blackboard", "calls"]);
+    expect(result[1]).toMatchObject({ action, tool: { update: { rawInput, rawOutput } } });
   });
   it("keeps interim messages as notes when tools follow, and lets blackboard actions follow an answer", () => {
     expect(rows([{ ...message("Role prompt"), sessionUpdate: "user_message_chunk" }, { ...message("Thinking"), sessionUpdate: "agent_thought_chunk" }, message("First"), tool("call"), message("Last"), tool("after")]).map(row => row.type)).toEqual(["task", "reasoning", "note", "tool", "note", "tool"]);

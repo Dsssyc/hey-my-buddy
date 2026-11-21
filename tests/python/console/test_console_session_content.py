@@ -12,6 +12,7 @@ from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.buddy.harnesses.run_contract import (RunResult, RunEnd, RunIdentity, SessionRecordFailure, StopEvidence, StopLayer)
 from hey_my_buddy.buddy.roles.run_execution import _base_result
 from hey_my_buddy.console import session_content
+from hey_my_buddy.protocol import session_reader
 from hey_my_buddy.protocol.session_content import SESSION_FORMAT, MessageChunk, TextContent
 from hey_my_buddy.paths import native_path
 
@@ -260,7 +261,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_snapshot_excludes_appends_after_the_size_was_fixed(self):
         _, browser, route, path, events, _, _ = self.fixture(count=1)
-        original = session_content._last_newline
+        original = session_reader._last_newline
         appended = self.event('session-attempt', 'later')
         injected = False
         def snapshot(*args):
@@ -269,7 +270,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
                 self.append(path, appended)
                 injected = True
             return original(*args)
-        with mock.patch.object(session_content, '_last_newline', side_effect=snapshot):
+        with mock.patch.object(session_reader, '_last_newline', side_effect=snapshot):
             self.assertEqual(self.get(browser, route)['events'], events)
         self.assertEqual(self.get(browser, route)['events'][-1], appended)
 
@@ -424,12 +425,12 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_file_disappearing_during_read_is_deleted(self):
         _, browser, route, path, _, _, _ = self.fixture(count=1)
-        original = session_content._page
-        def remove(connection, params):
-            page = original(connection, params)
+        original = session_reader._page
+        def remove(stream, params):
+            page = original(stream, params)
             path.unlink()
             return page
-        with mock.patch.object(session_content, '_page', side_effect=remove):
+        with mock.patch.object(session_reader, '_page', side_effect=remove):
             self.get(browser, route, status=410, code='SESSION_DELETED')
 
     def test_leaf_link_is_refused_and_private_parent_alias_is_accepted(self):

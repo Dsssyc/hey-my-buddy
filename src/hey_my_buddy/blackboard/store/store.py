@@ -1775,6 +1775,7 @@ class BoardStore:
                         "resumeMode": turn_claim["resumeMode"],
                         "inputSha256": turn_claim["inputSha256"],
                         "input": turn_claim["input"],
+                        "priorSessions": turn_claim["priorSessions"],
                     }
                     response["claim"]["agentCredential"] = turn_claim["credential"]
                 head = self._head_of(connection)
