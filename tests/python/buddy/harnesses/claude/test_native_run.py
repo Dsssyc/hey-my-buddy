@@ -19,9 +19,11 @@ import uuid
 from pathlib import Path
 from unittest import mock
 from buddy.harnesses.fixture_selection import select_command, select_fixture
+from buddy.roles.test_prior_session_tools import mcp_requests, prior_record
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.protocol.router_selection import answer_schema
+from hey_my_buddy.protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
@@ -174,6 +176,57 @@ class ModelRespondedTests(NativeRunCase):
 
 
 class NativeInquiryTests(NativeRunCase):
+    def test_reconstructed_history_mcp_calls_are_not_inquiry_receipts(self):
+        manifest = [prior_record(self.base)]
+        for scope, with_inquiry in (("read", False), ("write", True), ("web", True)):
+            with self.subTest(scope=scope):
+                request = self.request(scope=scope, continuation=RunContinuation(mode="reconstructed-new-session"))
+                invocation_root = Path(request.private_state.invocation_root)
+                service = prepare_inquiry_services(
+                    invocation_root=invocation_root, identity=request.identity.to_payload(),
+                    input_sha256=hashlib.sha256(request.input_text.encode()).hexdigest(),
+                    attention_path=self.base / "attention.json",
+                    prior_sessions=manifest if scope != "web" else None,
+                    inquiry={"resultsPath": str(self.base / "inquiry.jsonl")} if with_inquiry else None)
+                prep = native_run._prepare(request, service, deadline=0, invocation_root=invocation_root)
+                mcp_config = flag_value(prep.args, "--mcp-config")
+                allowed = flag_value(prep.args, "--allowedTools").split(",")
+                self.assertEqual(service.has_inquiry, with_inquiry)
+                if scope == "web":
+                    self.assertEqual(json.loads(mcp_config), {"mcpServers": {}})
+                    self.assertEqual(flag_value(prep.args, "--disallowedTools"), "mcp__*")
+                    self.assertFalse(any(name.startswith("mcp__") for name in allowed))
+                    continue
+                mount = json.loads(Path(mcp_config).read_text())["mcpServers"][service.server_name]
+                self.assertEqual(allowed, [f"mcp__{service.server_name}__{name}" for name in service.tool_names])
+                self.assertEqual(tuple(allowed[-3:]), service.prior_session_tools)
+                self.assertEqual(len(allowed), 5 if with_inquiry else 3)
+
+                bridge = mock.Mock() if with_inquiry else None
+                collector = native_run._TurnCollector(
+                    native_run.ActivityPublisher(None), lambda _facts: FEEDBACK_CONTINUE,
+                    tools=native_run._tool_evidence(request), inquiry=service, bridge=bridge)
+                collector.send_input(mock.Mock(), prep.session_id, request.cwd, request.input_text)
+                collector.observe({"type": "system", "subtype": "init", "session_id": prep.session_id,
+                                   "cwd": request.cwd, "model": request.buddy.model})
+                arguments = ({}, {}, {"attemptId": "earlier", "entryIndex": 0})
+                replies = mcp_requests(mount["args"][-1], [
+                    ("tools/call", {"name": name, "arguments": args})
+                    for name, args in zip(PRIOR_SESSION_TOOL_NAMES, arguments, strict=True)])
+                self.assertEqual(json.loads(replies[-1]["content"][0]["text"])["text"], "A🧪汉Z")
+                for index, (name, reply) in enumerate(zip(service.prior_session_tools, replies, strict=True)):
+                    self.assertFalse(reply.get("isError"))
+                    call_id = f"history-{index}"
+                    collector.observe({"type": "assistant", "session_id": prep.session_id, "message": {"content": [
+                        {"type": "tool_use", "id": call_id, "name": name, "input": arguments[index]}]}})
+                    collector.observe({"type": "user", "session_id": prep.session_id, "message": {"content": [
+                        {"type": "tool_result", "tool_use_id": call_id, "content": reply["content"]}]}})
+                self.assertTrue(collector.model_responded)
+                self.assertEqual(collector.inquiry_tool_failures, [])
+                if bridge is not None:
+                    bridge.record_answer.assert_not_called()
+                    bridge.deliver_inquiries.assert_not_called()
+
     def test_child_lifecycle_does_not_change_the_root_inquiry_window(self):
         request = self.request()
         bridge = mock.Mock()

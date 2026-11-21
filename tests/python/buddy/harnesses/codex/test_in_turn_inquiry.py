@@ -131,7 +131,7 @@ class NativeInquiryTests(unittest.TestCase):
         request = mock.Mock(capture_evidence=False)
         state = native_run._RunState()
         native_run._wire(self.connection, chain, facts, lambda _facts: FEEDBACK_CONTINUE,
-                         request, state, "worker", [])
+                         request, state, "worker", [], inquiry_services=None)
         self.connection.on_request({"id": "inactive", "method": "item/tool/call",
                                     "params": {"tool": "hey_my_buddy_answer_inquiry"}})
         self.assertFalse(self.connection.sent[-1]["result"]["success"])

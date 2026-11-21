@@ -52,6 +52,9 @@ from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
 from ..input_admission import admission_error
 from ....protocol.input_failure import is_input_too_large
+from ....protocol.session_reader import (
+    PRIOR_SESSION_TOOL_NAMES, PriorSessionError, call_prior_session_tool, prior_session_tool_specs,
+)
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
@@ -308,23 +311,44 @@ class _Classifier:
 class ClientInquiryServices:
     configuration: dict
     answer_schema: dict
-    answer_tool: str = "hey_my_buddy_answer_inquiry"
+    prior_sessions: tuple[dict, ...] = ()
+    mount_prior_tools: bool = False
+
+    @property
+    def has_inquiry(self) -> bool:
+        return "inquiryJournalPath" in self.configuration
+
+    @property
+    def answer_tool(self) -> str | None:
+        return "hey_my_buddy_answer_inquiry" if self.has_inquiry else None
+
+    @property
+    def prior_session_tools(self) -> tuple[str, ...]:
+        return PRIOR_SESSION_TOOL_NAMES if self.mount_prior_tools and self.prior_sessions else ()
 
     @property
     def dynamic_tools(self) -> list[dict]:
-        return [{"type": "function", "name": self.answer_tool,
-                 "description": "Answer a Host inquiry delivered in the current root turn, then continue the assigned work.",
-                 "inputSchema": self.answer_schema}]
+        tools = []
+        if self.has_inquiry:
+            tools.append({"type": "function", "name": self.answer_tool,
+                          "description": "Answer a Host inquiry delivered in the current root turn, then continue the assigned work.",
+                          "inputSchema": self.answer_schema})
+        if self.prior_session_tools:
+            tools.extend({"type": "function", **tool} for tool in prior_session_tool_specs())
+        return tools
 
 
 def prepare_inquiry_services(*, invocation_root: Path, identity: dict, input_sha256: str,
-                             attention_path: Path, inquiry: dict,
-                             answer_schema: dict) -> ClientInquiryServices:
-    """Bind the root client tool without files, keys or an auxiliary server."""
+                             attention_path: Path, answer_schema: dict, inquiry: dict | None = None,
+                             prior_sessions: list[dict] | None = None,
+                             mount_prior_tools: bool = False) -> ClientInquiryServices:
+    """Bind the root client tools without files, keys or an auxiliary server."""
+    configuration = {"identity": dict(identity), "attentionPath": str(attention_path)}
+    if inquiry is not None:
+        configuration["inquiryJournalPath"] = inquiry["resultsPath"]
     return ClientInquiryServices(
-        configuration={"identity": dict(identity), "attentionPath": str(attention_path),
-                       "inquiryJournalPath": inquiry["resultsPath"]},
-        answer_schema=answer_schema)
+        configuration=configuration, answer_schema=answer_schema,
+        prior_sessions=tuple(prior_sessions or ()), mount_prior_tools=mount_prior_tools)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -734,7 +758,8 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     requested = buddy_spec(request)
     sandbox, _policy = _permission_sandbox(request)
     state.requested = requested
-    inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
+    dynamic_tools = inquiry.dynamic_tools if inquiry is not None else []
+    inquiry_config = {"dynamicTools": dynamic_tools} if dynamic_tools else {}
     config = _tool_config(connection, request)
     permission_config = {"config": config} if config else {}
     if config:
@@ -1314,7 +1339,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             prep = _prepare(request, mode)
             if request.snapshot_query is not None:
                 state.snapshot_service = mounted_snapshot(request.snapshot_query)
-            if mode == "worker" and services.inquiry is not None:
+            if mode == "worker" and services.inquiry is not None and services.inquiry.has_inquiry:
                 configuration = services.inquiry.configuration
                 inquiry_bridge = InquiryBridge(
                     identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
@@ -1331,7 +1356,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             state.version = prep.version
             spawn = _spawn_app_server(prep, cancel, owned_spawn)
             connection = spawn.connection
-            _wire(connection, chain, facts, observer, request, state, mode, inquiry_poller)
+            _wire(connection, chain, facts, observer, request, state, mode, inquiry_poller,
+                  inquiry_services=services.inquiry)
             state.selected_model_listed = _initialize(connection, prep, mode, buddy_spec(request), state)
             if mode == "worker":
                 thread_id = _configure_worker(connection, request, prep, state, services.inquiry)
@@ -1386,7 +1412,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
           observer: Callable[[Mapping], RunFeedback], request: RunRequest,
-          state: _RunState, mode: str, inquiry_poller: list[_NativeInquiry]) -> None:
+          state: _RunState, mode: str, inquiry_poller: list[_NativeInquiry], *,
+          inquiry_services: ClientInquiryServices | None) -> None:
     """Bind the connection's frame paths to the fact-first chain."""
     connection.on_notification = chain.observe
 
@@ -1399,6 +1426,27 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
                       {"success": False, "contentItems": [{"type": "inputText",
                        "text": "the root inquiry client tool is not active"}]})
             connection.send({"id": message["id"], "result": result})
+            return
+        if (method == "item/tool/call" and mode == "worker" and isinstance(params, dict)
+                and params.get("tool") in PRIOR_SESSION_TOOL_NAMES):
+            success = False
+            if (state.thread_id is None or params.get("threadId") != state.thread_id
+                    or (state.turn_id is not None and params.get("turnId") != state.turn_id)
+                    or params.get("namespace") is not None):
+                value = "the prior session tool belongs to the current root turn"
+            elif inquiry_services is None or not inquiry_services.prior_sessions:
+                value = "prior session history is not active for this turn"
+            else:
+                arguments = params.get("arguments")
+                try:
+                    data = call_prior_session_tool(params["tool"], {} if arguments is None else arguments,
+                                                   list(inquiry_services.prior_sessions))
+                except PriorSessionError as error:
+                    value = f"{error.code}: {error.message}"
+                else:
+                    success, value = True, canonical_json(data)
+            connection.send({"id": message["id"], "result": {
+                "success": success, "contentItems": [{"type": "inputText", "text": value}]}})
             return
         if (method == "item/tool/call" and state.snapshot_service is not None
                 and state.snapshot_turn_active and isinstance(params, dict)

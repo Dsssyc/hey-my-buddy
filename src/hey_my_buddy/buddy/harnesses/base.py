@@ -144,6 +144,7 @@ class BoundSessionServices:
     checkpoint_tool: str | None
     answer_tool: str | None
     services: object
+    prior_session_tools: tuple[str, ...] = ()
 
 
 class Adapter:

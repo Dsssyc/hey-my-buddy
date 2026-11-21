@@ -53,6 +53,7 @@ from ..native_support import (
 from ..inquiry_bridge import InquiryBridge
 from ..input_admission import admission_error
 from ....protocol.input_failure import is_input_too_large
+from ....protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from ..session_receipts import ReceiptError
 from ..snapshot_mount import snapshot_coverage_refs, stdio_mcp_entry, stdio_tool_names, verify_mounted_calls
 from ..c_two_live import CTwoLiveEndpoint
@@ -237,6 +238,7 @@ class SessionServiceMount:
     #: The mounted tools' own contracts (``{"name": ..., "inputSchema": ...}``),
     #: exactly the tools the session MCP carrier publishes for this run.
     tool_contracts: tuple[dict, ...] = ()
+    prior_session_tools: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -263,7 +265,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
                             completion_tool: str,
                             inquiry: dict | None = None,
                             inquiry_tools: tuple[str, ...] = (),
-                            delegation_authority: bool = False) -> SessionServiceMount:
+                            delegation_authority: bool = False,
+                            prior_sessions: list[dict] | None = None) -> SessionServiceMount:
     """Prepare one run's session-service mount; no process is started.
 
     The naming is the mechanical rule the native driver and the role share: one
@@ -292,6 +295,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
               "finishAcceptedPath": str(root / "finish-accepted.json")}
     if inquiry is not None:
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
+    if prior_sessions:
+        bridge["priorSessions"] = prior_sessions
     bridge_path = root / "finish-bridge.json"
     private_json(bridge_path, bridge, exclusive=True)
     mcp = [{"name": server_name, "command": sys.executable,
@@ -304,14 +309,16 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         bare_tools=tuple(tool["name"] for tool in session_tools),
         bridge=bridge, mcp_servers=tuple(mcp), bridge_config_path=str(bridge_path),
         tool_contracts=tuple({"name": tool["name"], "inputSchema": tool["inputSchema"]}
-                             for tool in session_tools))
+                             for tool in session_tools),
+        prior_session_tools=tuple(qualified[name] for name in PRIOR_SESSION_TOOL_NAMES) if prior_sessions else ())
 
 
 def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome,
                      inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     native_stderr: str, delegation_authority: bool = False) -> BoundSessionServices:
+                     native_stderr: str, delegation_authority: bool = False,
+                     prior_sessions: list[dict] | None = None) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process.
 
     The role supplies the mechanical mount and outcome validator.
@@ -323,12 +330,13 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         attention_path=attention_path, session_tools=session_tools,
         completion_tool=completion_tool,
         inquiry=inquiry, inquiry_tools=inquiry_tools,
-        delegation_authority=delegation_authority)
+        delegation_authority=delegation_authority, prior_sessions=prior_sessions)
     return BoundSessionServices(
         description=SessionService(
             tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),
         completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
         answer_tool=mount.answer_tool,
+        prior_session_tools=mount.prior_session_tools,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome,
                                  inquiry=inquiry,
                                  native_stderr=native_stderr))

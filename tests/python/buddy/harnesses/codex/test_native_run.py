@@ -24,12 +24,15 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.fixture_selection import select_command, select_fixture
+from buddy.roles.test_prior_session_tools import prior_record
 from buddy.roles.test_role_prompts import real_turn_input
 from unittest import mock
 
 from hey_my_buddy.protocol.router_selection import answer_schema
+from hey_my_buddy.protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
@@ -1111,6 +1114,72 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_prior_client_tools_start_and_survive_resume_with_a_refreshed_allowlist(self):
+        original = prior_record(self.base)
+        latest = prior_record(self.base, "reconstructed", turn_index=2)
+        thread_id = "history-thread"
+        native_root = self.base / "history-native"
+        native_root.mkdir()
+        for mode, manifest in (("reconstructed-new-session", [original]), ("native-session", [latest, original])):
+            with self.subTest(mode=mode):
+                request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Fixture task",
+                                       native=native_root.name, input_sha256="a" * 64,
+                                       continuation=RunContinuation(
+                                           mode=mode, previous_session_id=thread_id if mode == "native-session"
+                                           else "earlier-thread"))
+                services = native_run.prepare_inquiry_services(
+                    invocation_root=Path(request.private_state.invocation_root),
+                    identity=request.identity.to_payload(), input_sha256=request.identity.input_sha256,
+                    attention_path=self.base / "attention.json", answer_schema={},
+                    prior_sessions=manifest, mount_prior_tools=mode == "reconstructed-new-session")
+                connection = mock.Mock()
+                thread = {"id": thread_id, "cwd": request.cwd,
+                          "turns": [{"id": "previous-turn", "status": "completed"}]}
+                connection.call.return_value = {"thread": thread}
+                facts, state = native_run._RunFacts(), native_run._RunState()
+                native_run._wire(connection, mock.Mock(), facts, lambda _facts: FEEDBACK_CONTINUE,
+                                 request, state, "worker", [], inquiry_services=services)
+                self.assertEqual(native_run._configure_worker(
+                    connection, request, SimpleNamespace(native_root=native_root), state, services), thread_id)
+                method, args = connection.call.call_args.args
+                if mode == "reconstructed-new-session":
+                    self.assertEqual(method, "thread/start")
+                    self.assertEqual(tuple(tool["name"] for tool in args["dynamicTools"]), PRIOR_SESSION_TOOL_NAMES)
+                    native_run._write_binding(native_root, thread_id, {
+                        "taskId": request.identity.task_id, "threadId": thread_id, "cwd": request.cwd,
+                        "buddy": native_run.buddy_spec(request), "lastTurnId": "previous-turn",
+                        "lastAttemptId": latest["attemptId"], "lastInputSha256": "a" * 64,
+                    })
+                else:
+                    self.assertEqual(method, "thread/resume")
+                    self.assertNotIn("dynamicTools", args)
+                state.turn_id = "current-turn"
+
+                def call(tool, arguments, **overrides):
+                    connection.on_request({"id": 1, "method": "item/tool/call", "params": {
+                        "tool": tool, "arguments": arguments, "threadId": thread_id,
+                        "turnId": state.turn_id, **overrides}})
+                    return connection.send.call_args.args[0]["result"]
+
+                def call_success(tool, arguments):
+                    reply = call(tool, arguments)
+                    self.assertTrue(reply["success"], reply)
+                    return json.loads(reply["contentItems"][0]["text"])
+
+                list_sessions, list_entries, read_entry = PRIOR_SESSION_TOOL_NAMES
+                self.assertEqual([item["attemptId"] for item in call_success(list_sessions, {})["items"]],
+                                 [item["attemptId"] for item in manifest])
+                self.assertEqual(call_success(list_entries, {})["attemptId"], manifest[0]["attemptId"])
+                self.assertEqual(call_success(read_entry, {"attemptId": manifest[0]["attemptId"], "entryIndex": 0,
+                                                           "offset": 1, "limit": 2})["text"], "🧪汉")
+                for overrides in ({"threadId": "foreign"}, {"turnId": "foreign"}, {"namespace": "foreign"}):
+                    self.assertFalse(call(list_sessions, {}, **overrides)["success"])
+                self.assertFalse(call(list_entries, {"attemptId": "foreign"})["success"])
+                reply = call(list_sessions, [])
+                self.assertEqual((reply["success"], reply["contentItems"][0]["text"].split(":", 1)[0]),
+                                 (False, "invalid-argument"))
+                self.assertEqual(facts.denied, [])
+
     def test_admitted_worker_turn_without_output_stays_before_model(self):
         seen = []
 

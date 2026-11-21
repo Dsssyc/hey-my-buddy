@@ -307,7 +307,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None, *,
     elif inquiry is not None and request.permission != "web":
         mcp_config_path = str(native_root / "inquiry-mcp.json")
         private_json(Path(mcp_config_path), {"mcpServers": {inquiry.server_name: inquiry.mcp_server}})
-        inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in INQUIRY_TOOLS)
+        inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in inquiry.tool_names)
     args = execution_args(session_id=session_id, model=request.buddy.model,
                           effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
@@ -647,7 +647,7 @@ class _TurnCollector:
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
         """Accept only a completed tool result tied to this native root call."""
-        if not self.evidence.init_observed or self.inquiry is None:
+        if not self.evidence.init_observed or self.inquiry is None or not self.inquiry.has_inquiry:
             return
         session = frame.get("session_id")
         if isinstance(session, str) and session and session != self.evidence.session_id:
@@ -1278,7 +1278,7 @@ def _run_round(request: RunRequest, *, observer, services, cancelled, tools: Rea
         inquiry = services.inquiry if services is not None else None
         preparation = _prepare(request, inquiry, deadline=deadline, invocation_root=invocation_root)
         live = services.live if services is not None else None
-        if inquiry is not None:
+        if inquiry is not None and inquiry.has_inquiry:
             configuration = inquiry.configuration
             inquiry_bridge = InquiryBridge(
                 identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],

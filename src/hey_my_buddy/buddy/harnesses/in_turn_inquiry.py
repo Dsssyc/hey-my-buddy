@@ -1,4 +1,4 @@
-"""Session-private MCP inquiry tools for Claude Code CLI Worker turns."""
+"""Session-private MCP inquiry and history tools for Claude Code CLI Worker turns."""
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...private_dirs import ensure_private_dir
+from ...protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from ..roles.turn_io import private_json
 from .session_receipts import (
     ReceiptError, refusal_shaped,
@@ -16,6 +17,8 @@ from .session_receipts import (
 )
 
 INQUIRY_TOOLS = ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")
+
+
 @dataclass(frozen=True)
 class InquiryServices:
     configuration: dict
@@ -23,8 +26,23 @@ class InquiryServices:
     config_path: str
 
     @property
-    def answer_tool(self) -> str:
-        return f"mcp__{self.server_name}__hey_my_buddy_answer_inquiry"
+    def has_inquiry(self) -> bool:
+        return "inquiryJournalPath" in self.configuration
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return ((INQUIRY_TOOLS if self.has_inquiry else ()) +
+                (PRIOR_SESSION_TOOL_NAMES if self.configuration.get("priorSessions") else ()))
+
+    @property
+    def prior_session_tools(self) -> tuple[str, ...]:
+        if not self.configuration.get("priorSessions"):
+            return ()
+        return tuple(f"mcp__{self.server_name}__{name}" for name in PRIOR_SESSION_TOOL_NAMES)
+
+    @property
+    def answer_tool(self) -> str | None:
+        return f"mcp__{self.server_name}__{INQUIRY_TOOLS[1]}" if self.has_inquiry else None
 
     @property
     def mcp_server(self) -> dict:
@@ -49,12 +67,19 @@ class InquiryServices:
 
 
 def prepare_inquiry_services(*, invocation_root: Path, identity: dict, input_sha256: str,
-                             attention_path: Path, inquiry: dict, answer_schema: dict | None = None) -> InquiryServices:
+                             attention_path: Path, inquiry: dict | None = None,
+                             answer_schema: dict | None = None,
+                             prior_sessions: list[dict] | None = None) -> InquiryServices:
     root = ensure_private_dir(invocation_root)
     server_name = "hey_my_buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
     configuration = {"identity": dict(identity), "inputSha256": input_sha256,
-                     "key": secrets.token_hex(32), "attentionPath": str(attention_path),
-                     "inquiryJournalPath": inquiry["resultsPath"], "toolNames": list(INQUIRY_TOOLS)}
+                     "key": secrets.token_hex(32), "attentionPath": str(attention_path)}
+    if inquiry is not None:
+        configuration["inquiryJournalPath"] = inquiry["resultsPath"]
+    if prior_sessions:
+        configuration["priorSessions"] = prior_sessions
     config_path = root / "inquiry-bridge.json"
+    services = InquiryServices(configuration=configuration, server_name=server_name, config_path=str(config_path))
+    configuration["toolNames"] = list(services.tool_names)
     private_json(config_path, configuration, exclusive=True)
-    return InquiryServices(configuration=configuration, server_name=server_name, config_path=str(config_path))
+    return services
