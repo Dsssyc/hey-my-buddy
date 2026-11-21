@@ -47,19 +47,22 @@ TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 GOAL_HISTORY_PARAMETERS = frozenset({"macroTaskId"})
 
 #: Group ownership follows Lead-owned runs to their outermost owner.
-RUN_GROUPS_SQL = """
+def _run_groups_sql(runs_sql: str) -> str:
+    return f"""
 WITH RECURSIVE lineage(run_id, ancestor_id) AS (
-    SELECT run_id, run_id FROM workflow_runs
+    SELECT run_id, run_id FROM ({runs_sql})
     UNION
     SELECT lineage.run_id, lead.lead_run_id
       FROM lineage JOIN workflow_lead_tasks lead ON lead.owned_run_id = lineage.ancestor_id
 )
 SELECT lineage.run_id,
-       COALESCE(ancestor.macro_task_id, 'run:' || ancestor.run_id) AS group_id
+       CAST(COALESCE(ancestor.macro_task_id, 'run:' || ancestor.run_id) AS TEXT) AS group_id
   FROM lineage
   JOIN workflow_runs ancestor ON ancestor.run_id = lineage.ancestor_id
  WHERE NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead WHERE lead.owned_run_id = lineage.ancestor_id)
 """
+
+RUN_GROUPS_SQL = _run_groups_sql("SELECT run_id FROM workflow_runs")
 
 #: Every grouped execution, including Router tasks. Plain execution records
 #: without a micro task root belong to no group. Materialize history as
@@ -91,15 +94,10 @@ def group_for_task(connection, task_id: str) -> str | None:
 # Build at import so source drift cannot silently remove the page restriction.
 PAGE_HISTORY_SQL = micro_task.replace_sql_once(
     micro_task.replace_sql_once(
-        micro_task.TASK_HISTORY_SQL, "t.*,", "t.rowid AS summary_task_rowid, t.*,",
+        micro_task.TASK_HISTORY_SQL, "t.*,", "t.rowid AS summary_task_rowid, page_tasks.group_id, t.*,",
     ),
-    "FROM tasks t\n", "FROM tasks t JOIN page_tasks ON page_tasks.task_id=t.task_id\n",
+    "FROM tasks t\n", "FROM page_tasks CROSS JOIN tasks t ON t.task_id=page_tasks.task_id\n",
 )
-
-#: Disjoint micro task states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
-_HOST_SQL = micro_task.FILTER_SQL["host"]
-_ACTIVE_SQL = f"({micro_task.FILTER_SQL['active']} AND NOT {_HOST_SQL})"
-_REVIEW_SQL = micro_task.FILTER_SQL["review"]
 
 #: Event kinds shown as Host markers, with the display kind each one becomes.
 HOST_MARKERS = {
@@ -493,14 +491,7 @@ def _state(row) -> str:
         return "active"
     if run_state in micro_task.UNCONCLUDED_RESULT_STATES:
         return "host" if row["root_lead_run_id"] is None else "active"
-    if (
-        row["accepted_at"] is None
-        and state in ("completed", "failed", "cancelled")
-        and row["decision_id"] is None
-        and row["adapter"] != "decision"
-        and (row["micro_task_run_id"] is None or run_state == "delivered")
-        and row["review_ready"] == 1
-    ):
+    if row["review_ready"] == 1:
         return "review"
     return "ended"
 
@@ -521,136 +512,24 @@ def macro_task_list(store, params: dict) -> dict:
     if sort not in LIST_SORTS:
         raise BoardError("INVALID_ARGUMENT", "sort must be one of: activity-desc, activity-asc, created-desc, created-asc",
                          field="sort")
-    sort_column, direction = sort.split("-")
-    order_column = "activity_seq" if sort_column == "activity" else "created_at"
-    ordering = f"{order_column} {direction.upper()}, group_id {direction.upper()}"
+    sort_column = sort.split("-")[0]
     applied, clauses, values = _filters(params)
-    common_clauses, common_values = micro_task.history_where(
-        query=applied.get("query"),
-    )
     before_value = schemas.optional_string(params, "before", max_length=512)
     if before_value is not None and group is None:
         raise BoardError("INVALID_ARGUMENT", "before requires group", field="before")
     if group is not None:
         applied["group"] = group
     before = _decode_cursor(before_value, applied, sort) if before_value is not None else None
-    base_match = " AND ".join(["micro_task_run_id IS NOT NULL", *common_clauses])
-    selected_filter = micro_task.FILTER_SQL[applied.get("filter", "all")]
-    selected_match = (
-        f"CASE WHEN base_matching=1 AND {selected_filter} THEN 1 ELSE 0 END"
-        if selected_filter else "base_matching"
-    )
-    macro_query = applied.get("query")
-    macro_pattern = f"%{micro_task._escape_like(macro_query)}%" if macro_query else None
-    macro_match = ("1" if macro_pattern is None else
-                   "(o.macro_task_id LIKE ? ESCAPE '\\' OR o.title LIKE ? ESCAPE '\\'"
-                   " OR o.project_id LIKE ? ESCAPE '\\' OR o.project_cwd LIKE ? ESCAPE '\\'"
-                   " OR o.repository_path LIKE ? ESCAPE '\\'"
-                   " OR EXISTS (SELECT 1 FROM macro_task_goals g"
-                   " WHERE g.macro_task_id=o.macro_task_id AND g.body LIKE ? ESCAPE '\\'))")
+    groups_sql, group_parameters = _list_groups_statement(applied, sort, limit, before)
     from . import macro_task_summary_cache as memo
 
-    # The materialized relation carries only scalars consumed by the summary and
-    # the SQL matching flag. In particular no t.* / result / manifest / outcome
-    # body is copied merely to notice a change. One relation serves matching,
-    # all four totals, order, page membership and the per-group dependency marker.
-    narrow = ",".join(f"h.{column}" for column in memo.MEMBER_COLUMNS)
-    page_values = []
-    page_conditions = []
-    if group is not None:
-        page_conditions.append("project_group = ?")
-        page_values.append(group)
-    if before is not None:
-        key, group_id, _issued_head = before
-        comparison = "<" if direction == "desc" else ">"
-        page_conditions.append(f"({order_column} {comparison} ? OR "
-                               f"({order_column} = ? AND group_id {comparison} ?))")
-        page_values.extend([key, key, group_id])
-    page_where = "WHERE " + " AND ".join(page_conditions) if page_conditions else ""
-    project_where = "WHERE project_group = ?" if group is not None else ""
-    project_values = [group] if group is not None else []
-    groups_sql = f"""
-WITH history AS MATERIALIZED (
-    SELECT {narrow}, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
-      FROM ({memo.THIN_HISTORY_SQL}) h
-),
-ownership AS MATERIALIZED ({RUN_GROUPS_SQL}),
-members AS MATERIALIZED (
-    SELECT base.*, {selected_match} AS matching
-      FROM (SELECT {narrow}, h.base_matching, ownership.group_id FROM history h
-              JOIN ownership ON ownership.run_id=h.root_run_id) base
-),
-matched AS (
-    SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
-           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
-           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
-           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match,
-           MAX(CASE WHEN {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_any,
-           MAX(CASE WHEN {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_any,
-           MAX(CASE WHEN {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_any
-      FROM members GROUP BY group_id
-),
-macro_text AS (
-    SELECT o.*, {macro_match} AS text_match FROM macro_tasks o
-),
-eligible AS (
-    SELECT o.macro_task_id AS group_id,o.activity_seq,o.created_at,
-           'project:' || o.project_id AS project_group,
-           CASE WHEN COALESCE(m.all_match,0)=1 OR o.text_match THEN 1 ELSE 0 END AS all_match,
-           CASE WHEN COALESCE(m.active_match,0)=1 OR (o.text_match AND COALESCE(m.active_any,0)=1)
-                THEN 1 ELSE 0 END AS active_match,
-           CASE WHEN COALESCE(m.host_match,0)=1 OR (o.text_match AND COALESCE(m.host_any,0)=1)
-                THEN 1 ELSE 0 END AS host_match,
-           CASE WHEN COALESCE(m.review_match,0)=1 OR (o.text_match AND COALESCE(m.review_any,0)=1)
-                THEN 1 ELSE 0 END AS review_match
-      FROM macro_text o LEFT JOIN matched m ON m.group_id=o.macro_task_id
-    UNION ALL
-    SELECT matched.group_id,root.activity_seq,root.created_at,'standalone' AS project_group,
-           matched.all_match,matched.active_match,matched.host_match,matched.review_match
-      FROM matched JOIN workflow_runs root ON matched.group_id='run:' || root.run_id
-),
-groups AS (
-    SELECT * FROM eligible WHERE {applied.get("filter", "all")}_match=1
-),
-ordered AS (
-    SELECT groups.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS ordinal
-      FROM groups
-),
-projects AS (
-    SELECT project_group, COUNT(*) AS project_total,
-           MAX(CASE WHEN ordinal=1 THEN {order_column} END) AS first_key,
-           MAX(CASE WHEN ordinal=1 THEN group_id END) AS first_group_id
-      FROM ordered {project_where} GROUP BY project_group
-),
-page AS (
-    SELECT * FROM (
-        SELECT ordered.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS page_rank
-          FROM ordered {page_where}
-    ) WHERE page_rank <= ?
-),
-stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
-                COALESCE(SUM(active_match),0) AS active_total,
-                COALESCE(SUM(host_match),0) AS host_total,
-                COALESCE(SUM(review_match),0) AS review_total FROM eligible),
-latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
-SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
-       projects.first_key,projects.first_group_id,
-       page.group_id AS page_group_id,page.activity_seq,page.created_at AS page_created_at,members.*
-  FROM stats CROSS JOIN latest LEFT JOIN projects ON 1=1
-  LEFT JOIN page ON page.project_group=projects.project_group
-  LEFT JOIN members ON members.group_id=page.group_id
- ORDER BY CASE WHEN projects.project_group='standalone' THEN 1 ELSE 0 END,
-          projects.first_key {direction.upper()},projects.first_group_id {direction.upper()},
-          page.{order_column} {direction.upper()},page.group_id {direction.upper()},members.task_id
-"""
     cache = memo.for_store(store)
     # Lock precedes the read transaction so concurrent list calls serialize
     # snapshots, not just insertion. WAL permits a concurrent writer; all facts
     # below (including a cache miss's _summary) remain from this one snapshot.
     with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        rows = connection.execute(groups_sql, [*common_values, *([macro_pattern] * 6 if macro_pattern else []),
-                                               *project_values, *page_values, limit + 1]).fetchall()
+        rows = connection.execute(groups_sql, group_parameters).fetchall()
         totals = {name: int(rows[0][f"{name}_total"]) for name in ("all", "active", "host", "review")}
         changed = before is not None and int(rows[0]["latest"]) > before[2]
         groups = {}
@@ -659,13 +538,13 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
             if row["project_group"] is not None:
                 projects.setdefault(row["project_group"], row)
             if row["page_group_id"] is not None:
-                groups.setdefault(row["page_group_id"], []).append(row)
+                groups[row["page_group_id"]] = row
         grouped = {project_id: [] for project_id in projects}
-        for item, members in groups.items():
-            grouped[members[0]["project_group"]].append(item)
+        for item, row in groups.items():
+            grouped[row["project_group"]].append(item)
         pages = {project_id: items[:limit] for project_id, items in grouped.items()}
         page = [item for project_page in pages.values() for item in project_page]
-        markers, reusable = memo.dependencies(connection, {item: groups[item] for item in page})
+        markers, reusable = memo.dependencies(connection, _page_members(connection, page, clauses, values))
         filters = json.dumps({key: value for key, value in applied.items() if key != "group"},
                              sort_keys=True, ensure_ascii=False)
         information = store.db.path.stat()
@@ -690,7 +569,7 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
             next_cursor = None
             if len(grouped[project_id]) > limit:
                 last = identifiers[-1]
-                row = groups[last][0]
+                row = groups[last]
                 next_cursor = _encode_cursor(row["activity_seq" if sort_column == "activity" else "page_created_at"],
                                              last, {**applied, "group": project_id}, issued_head, sort)
             result_groups.append({"id": project_id, "project": group_project,
@@ -704,36 +583,209 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
             "defaults": {"firstLimit": LIST_FIRST_LIMIT, "groupLimit": LIST_GROUP_LIMIT}}
 
 
+def _list_groups_statement(applied: dict, sort: str, limit: int, before: tuple | None) -> tuple[str, list]:
+    """Read group metadata and match flags without loading page members."""
+    from . import macro_task_summary_cache as memo
+
+    group = applied.get("group")
+    sort_column, direction = sort.split("-")
+    order_column = "activity_seq" if sort_column == "activity" else "created_at"
+    ordering = f"{order_column} {direction.upper()}, group_id {direction.upper()}"
+    common_clauses, common_values = micro_task.history_where(query=applied.get("query"))
+    base_match = " AND ".join(["micro_task_run_id IS NOT NULL", *common_clauses])
+    macro_query = applied.get("query")
+    macro_pattern = f"%{micro_task._escape_like(macro_query)}%" if macro_query else None
+    macro_match = ("1" if macro_pattern is None else
+                   "(o.macro_task_id LIKE ? ESCAPE '\\' OR o.title LIKE ? ESCAPE '\\'"
+                   " OR o.project_id LIKE ? ESCAPE '\\' OR o.project_cwd LIKE ? ESCAPE '\\'"
+                   " OR o.repository_path LIKE ? ESCAPE '\\'"
+                   " OR EXISTS (SELECT 1 FROM macro_task_goals g"
+                   " WHERE g.macro_task_id=o.macro_task_id AND g.body LIKE ? ESCAPE '\\'))")
+    if macro_query:
+        candidates = ""
+        history = memo.THIN_HISTORY_SQL
+        standalone = """
+    SELECT standalone_match.group_id,root.activity_seq,root.created_at,'standalone',
+           standalone_match.all_match,standalone_match.active_match,standalone_match.host_match,standalone_match.review_match
+      FROM matched standalone_match JOIN workflow_runs root ON root.run_id=substr(standalone_match.group_id,5)
+     WHERE substr(standalone_match.group_id,1,4)='run:'
+"""
+    else:
+        # Host matches are a subset of active. Review can only add delivered
+        # roots. Active Router tasks still contribute to a macro's any-match.
+        candidates = f"""
+candidate_tasks(task_id) AS (
+    SELECT task_id FROM tasks WHERE {micro_task.active_task_sql('state')}
+    UNION
+    SELECT run_id FROM workflow_runs
+     WHERE {micro_task.list_candidate_run_sql('state')}
+),
+"""
+        history = memo.LIST_CANDIDATE_HISTORY_SQL
+        standalone = """
+    SELECT 'run:' || root.run_id,root.activity_seq,root.created_at,'standalone',
+           1,COALESCE(m.active_match,0),COALESCE(m.host_match,0),COALESCE(m.review_match,0)
+      FROM workflow_runs root
+      LEFT JOIN matched m ON m.group_id=CAST('run:' || root.run_id AS TEXT)
+     WHERE root.macro_task_id IS NULL AND NOT EXISTS (
+        SELECT 1 FROM workflow_lead_tasks lead WHERE lead.owned_run_id=root.run_id
+     )
+"""
+    ownership = _run_groups_sql("SELECT DISTINCT root_run_id AS run_id FROM history WHERE root_run_id IS NOT NULL")
+    page_values = []
+    page_conditions = []
+    if group is not None:
+        page_conditions.append("project_group = ?")
+        page_values.append(group)
+    if before is not None:
+        key, group_id, _issued_head = before
+        comparison = "<" if direction == "desc" else ">"
+        page_conditions.append(f"({order_column} {comparison} ? OR "
+                               f"({order_column} = ? AND group_id {comparison} ?))")
+        page_values.extend([key, key, group_id])
+    page_where = "WHERE " + " AND ".join(page_conditions) if page_conditions else ""
+    project_where = "WHERE project_group = ?" if group is not None else ""
+    project_values = [group] if group is not None else []
+    statement = f"""
+WITH {candidates}history AS MATERIALIZED (
+    SELECT root_run_id, micro_task_run_id, adapter, state, accepted_at, run_state, decision_id,
+           review_ready, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
+      FROM ({history})
+),
+ownership AS MATERIALIZED ({ownership}),
+matched AS (
+    SELECT group_id, MAX(base_matching) AS all_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_any,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_any,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_any
+      FROM history h JOIN ownership ON ownership.run_id=h.root_run_id
+     GROUP BY group_id
+),
+macro_text AS (
+    SELECT o.*, {macro_match} AS text_match FROM macro_tasks o
+),
+eligible AS (
+    SELECT o.macro_task_id AS group_id,o.activity_seq,o.created_at,
+           'project:' || o.project_id AS project_group,
+           CASE WHEN COALESCE(m.all_match,0)=1 OR o.text_match THEN 1 ELSE 0 END AS all_match,
+           CASE WHEN COALESCE(m.active_match,0)=1 OR (o.text_match AND COALESCE(m.active_any,0)=1)
+                THEN 1 ELSE 0 END AS active_match,
+           CASE WHEN COALESCE(m.host_match,0)=1 OR (o.text_match AND COALESCE(m.host_any,0)=1)
+                THEN 1 ELSE 0 END AS host_match,
+           CASE WHEN COALESCE(m.review_match,0)=1 OR (o.text_match AND COALESCE(m.review_any,0)=1)
+                THEN 1 ELSE 0 END AS review_match
+      FROM macro_text o LEFT JOIN matched m ON m.group_id=o.macro_task_id
+    UNION ALL
+    {standalone}
+),
+groups AS (
+    SELECT * FROM eligible WHERE {applied.get("filter", "all")}_match=1
+),
+ordered AS (
+    SELECT groups.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS ordinal
+      FROM groups
+),
+projects AS (
+    SELECT project_group, COUNT(*) AS project_total,
+           MAX(CASE WHEN ordinal=1 THEN {order_column} END) AS first_key,
+           MAX(CASE WHEN ordinal=1 THEN group_id END) AS first_group_id
+      FROM ordered {project_where} GROUP BY project_group
+),
+page AS (
+    SELECT * FROM (
+        SELECT groups.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS page_rank
+          FROM groups {page_where}
+    ) WHERE page_rank <= ?
+),
+stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
+                COALESCE(SUM(active_match),0) AS active_total,
+                COALESCE(SUM(host_match),0) AS host_total,
+                COALESCE(SUM(review_match),0) AS review_total FROM eligible),
+latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
+SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
+       projects.first_key,projects.first_group_id,
+       page.group_id AS page_group_id,page.activity_seq,page.created_at AS page_created_at
+  FROM stats CROSS JOIN latest LEFT JOIN projects ON 1=1
+  LEFT JOIN page ON page.project_group=projects.project_group
+ ORDER BY CASE WHEN projects.project_group='standalone' THEN 1 ELSE 0 END,
+          projects.first_key {direction.upper()},projects.first_group_id {direction.upper()},
+          page.{order_column} {direction.upper()},page.group_id {direction.upper()}
+"""
+    return statement, [*common_values, *([macro_pattern] * 6 if macro_pattern is not None else []),
+                       *project_values, *page_values, limit + 1]
+
+
 def _members(connection, group_id: str) -> list:
     return connection.execute(f"SELECT * FROM ({MEMBERS_SQL}) WHERE group_id = ?", (group_id,)).fetchall()
+
+
+def _page_history(groups: list[str], history_sql: str) -> tuple[str, list[str]]:
+    macros = [group for group in groups if group.startswith("macro-")]
+    standalone = [group[4:] for group in groups if group.startswith("run:")]
+    roots = []
+    if macros:
+        placeholders = ",".join("?" for _ in macros)
+        roots.append(f"SELECT run_id, macro_task_id FROM workflow_runs WHERE macro_task_id IN ({placeholders})")
+    if standalone:
+        placeholders = ",".join("?" for _ in standalone)
+        roots.append(f"SELECT run_id, 'run:' || run_id FROM workflow_runs WHERE run_id IN ({placeholders})")
+    return f"""
+WITH RECURSIVE page_roots(run_id, group_id) AS (
+    {" UNION ALL ".join(roots)}
+),
+page_runs(run_id, group_id) AS (
+    SELECT run_id, group_id FROM page_roots root
+     WHERE NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead WHERE lead.owned_run_id=root.run_id)
+    UNION ALL
+    SELECT lead.owned_run_id, owner.group_id FROM page_runs owner
+      JOIN workflow_lead_tasks lead ON lead.lead_run_id=owner.run_id
+),
+page_tasks AS MATERIALIZED (
+    SELECT run_id AS task_id, group_id FROM page_runs
+    UNION ALL
+    SELECT routing.task_id, page_runs.group_id FROM ({micro_task.ROUTING_TASKS_SQL}) routing
+      JOIN page_runs ON page_runs.run_id=routing.run_id
+),
+history AS MATERIALIZED ({history_sql})
+""", [*macros, *standalone]
+
+
+def _page_members(connection, groups: list[str], clauses: list[str], values: list[Any]) -> dict:
+    """Load scalar cache dependencies only for groups returned to the caller."""
+    members = {group: [] for group in groups}
+    if groups:
+        from . import macro_task_summary_cache as memo
+
+        history, parameters = _page_history(groups, memo.PAGE_MEMBER_HISTORY_SQL)
+        matching = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
+        narrow = ",".join(memo.MEMBER_COLUMNS)
+        for row in connection.execute(
+            f"{history} SELECT group_id, {narrow}, CASE WHEN {matching} THEN 1 ELSE 0 END AS matching"
+            " FROM history ORDER BY task_id", [*parameters, *values],
+        ):
+            members[row["group_id"]].append(row)
+    return members
 
 
 def _summary_inputs(connection, groups: list[str], clauses: list[str], values: list[Any]) -> dict:
     """Derive the wanted groups' executions, matches and failed conclusions once.
 
-    Resolve ownership with the shared relation, then restrict the task-history
-    entry point to those runs and their Routers. Its lineage and stop-proof CTEs
-    remain intact: review readiness still covers every owned execution.
+    Review proof still covers every owned execution.
     """
     placeholders = ",".join("?" for _ in groups)
     matching = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
+    history, parameters = _page_history(groups, PAGE_HISTORY_SQL)
     rows = connection.execute(f"""
-WITH page_runs AS MATERIALIZED (
-    SELECT * FROM ({RUN_GROUPS_SQL}) WHERE group_id IN ({placeholders})
-),
-page_tasks AS (
-    SELECT run_id AS task_id FROM page_runs
-    UNION
-    SELECT routing.task_id FROM ({micro_task.ROUTING_TASKS_SQL}) routing
-      JOIN page_runs ON page_runs.run_id=routing.run_id
-),
-history AS MATERIALIZED ({PAGE_HISTORY_SQL})
-SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status,
+{history}
+SELECT h.*, conclusion.execution_status AS conclusion_status,
        CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
-  FROM history h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
+  FROM history h
   LEFT JOIN workflow_host_conclusions conclusion ON conclusion.run_id=h.micro_task_run_id
  ORDER BY h.summary_task_rowid
-""", [*groups, *values]).fetchall()
+""", [*parameters, *values]).fetchall()
     inputs = {group: {"members": [], "executions": [], "matching": 0, "failed": set()} for group in groups}
     for row in rows:
         group = inputs[row["group_id"]]

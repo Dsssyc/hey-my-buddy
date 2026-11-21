@@ -32,6 +32,16 @@ THIN_HISTORY_SQL = micro_task.replace_sql_once(
     "t.rowid AS task_rowid, t.task_id, t.adapter, t.state, t.selected_attempt_id, t.active_attempt_id,"
     " t.created_at, t.accepted_at, t.revision, t.updated_at,",
 )
+LIST_CANDIDATE_HISTORY_SQL = micro_task.replace_sql_once(
+    THIN_HISTORY_SQL,
+    "FROM tasks t\n",
+    "FROM candidate_tasks CROSS JOIN tasks t ON t.task_id=candidate_tasks.task_id\n",
+)
+PAGE_MEMBER_HISTORY_SQL = micro_task.replace_sql_once(
+    micro_task.replace_sql_once(THIN_HISTORY_SQL, "t.rowid AS task_rowid,", "page_tasks.group_id, t.rowid AS task_rowid,"),
+    "FROM tasks t\n",
+    "FROM page_tasks CROSS JOIN tasks t ON t.task_id=page_tasks.task_id\n",
+)
 MEMBER_COLUMNS = (
     "task_id", "task_rowid", "adapter", "state", "selected_attempt_id", "active_attempt_id",
     "created_at", "accepted_at", "revision", "updated_at", "micro_task_run_id",
