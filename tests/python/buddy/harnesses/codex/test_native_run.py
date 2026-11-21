@@ -82,6 +82,40 @@ def observed_activity(endpoint):
 
 
 class RejectionPhaseTests(unittest.TestCase):
+    def test_content_policy_message_is_bounded_from_the_completed_turn(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+
+        state = native_run._RunState()
+        state.turn_evidence = TurnEvidence("root", "current")
+        frame = {"method": "turn/completed", "params": {"threadId": "root", "turn": {
+            "id": "current", "status": "failed", "error": {
+                "codexErrorInfo": "cyberPolicy", "message": " " * 4096 + "Request blocked."}}}}
+        native_run._capture_native_error(state, frame, "root", "current")
+        state.turn_evidence.observe(frame)
+        native_run._collect_provider_rejection(state, stream_truncated=False)
+        rejection = native_run._provider_rejection_package(state.provider_rejection).value
+        self.assertEqual(rejection["message"], "Request blocked.")
+
+    def test_content_policy_error_event_supplies_the_rejection_without_completion(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+
+        state = native_run._RunState()
+        evidence = state.turn_evidence = TurnEvidence("root", "current")
+        carrier = native_run._FastProtocol("root", "current", {
+            "started": False, "completed": None, "final": None}, evidence, state)
+        carrier({"method": "turn/started", "params": {
+            "threadId": "root", "turn": {"id": "current"}}})
+        with self.assertRaises(CodexProtocolError):
+            carrier({"method": "error", "params": {"threadId": "root", "turnId": "current",
+                     "willRetry": False, "error": {
+                         "codexErrorInfo": "cyberPolicy", "message": "Request blocked."}}})
+        native_run._collect_provider_rejection(state, stream_truncated=False)
+        rejection = native_run._provider_rejection_package(state.provider_rejection).value
+        self.assertEqual(rejection["code"], "content-policy")
+        self.assertEqual(rejection["nativeCode"], "cyberPolicy")
+        self.assertEqual(rejection["message"], "Request blocked.")
+        self.assertEqual(rejection["rejectionPhase"], "before-model")
+
     def test_model_start_requires_root_output_instead_of_turn_start(self):
         root = {"threadId": "root", "turnId": "current"}
         empty = [
@@ -1629,6 +1663,19 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIsNotNone(result.provider_rejection.value)
         self.assertEqual(result.provider_rejection.value["nativeCode"], "usageLimitExceeded")
         self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")
+
+    def test_worker_content_policy_rejection_is_reported(self):
+        from hey_my_buddy.buddy.roles.run_execution import _worker_facts
+
+        result = self.worker_run("content-policy")
+        self.assertEqual(result.end.reason_code, "native-turn-failed", result.end.message)
+        rejection = _worker_facts(result)["providerRejection"]
+        self.assertIsNotNone(rejection.pop("observedAt"))
+        self.assertEqual(rejection, {
+            "code": "content-policy", "nativeCode": "cyberPolicy",
+            "source": "codex/app-server-turn-error",
+            "resetsAt": None, "rejectionPhase": "before-model",
+            "message": "The provider rejected this request under its content policy."})
 
     def test_worker_provider_rejection_phase_uses_only_root_model_activity(self):
         cases = (("quota-before", "before-model"), ("quota-before-truncated", "unknown"),

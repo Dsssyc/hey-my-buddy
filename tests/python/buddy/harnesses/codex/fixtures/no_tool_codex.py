@@ -189,6 +189,11 @@ def main():
                     event(method, turn_id, item=item)
             if case == "connection-notification":
                 send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
+            if case == "content-policy-error":
+                event("error", turn_id, willRetry=False, error={
+                    "message": "The provider rejected this request under its content policy.",
+                    "codexErrorInfo": "cyberPolicy"})
+                continue
             if case in ("quota-before", "quota-text", "quota-error", "overload-before", "overload-text", "overload-error"):
                 if case in ("quota-text", "overload-text"):
                     event("item/completed", turn_id, item={"id": "partial", "type": "agentMessage", "text": "partial"})

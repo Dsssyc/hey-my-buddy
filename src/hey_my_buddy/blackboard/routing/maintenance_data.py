@@ -12,7 +12,7 @@ from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
 from .evidence import kind_domain_statistics
 from ..evaluation.models import model_view
-from .statistics import NEITHER, PROVIDER_REJECTIONS, accumulate_cell, round_classification
+from .statistics import NEITHER, NON_ABILITY_PROVIDER_REJECTIONS, accumulate_cell, round_classification
 
 
 
@@ -33,7 +33,7 @@ ABILITY_WHERE = f"""w.state IN ({_sql_values(_ENDED_TURNS)})
     AND COALESCE(json_extract(a.result_json,'$.terminationReason'),'') NOT IN ({_sql_values(NEITHER)})
     AND COALESCE(json_extract(a.result_json,'$.result.code'),'') != 'harness-unavailable'
     AND COALESCE(json_extract(a.result_json,'$.result.providerRejection.code'),'')
-        NOT IN ({_sql_values(PROVIDER_REJECTIONS)})"""
+        NOT IN ({_sql_values(NON_ABILITY_PROVIDER_REJECTIONS)})"""
 
 PENDING_WHERE = """r.state IN ('accepted','concluded') AND (
     NOT EXISTS (SELECT 1 FROM micro_task_classifications c WHERE c.run_id=r.run_id)

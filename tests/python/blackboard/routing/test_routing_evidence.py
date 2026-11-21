@@ -34,6 +34,8 @@ class ClassificationTests(unittest.TestCase):
                 receipt["result"] = {"code": "harness-unavailable"}
                 self.assertEqual(round_classification(receipt),
                                  "neither" if termination in NEITHER else "infrastructure")
+                receipt["result"] = {"providerRejection": {"code": "content-policy"}}
+                self.assertEqual(round_classification(receipt), "neither")
                 receipt["result"] = {"code": "bad-answer", "error": "harness-unavailable quota-exceeded"}
                 self.assertEqual(round_classification(receipt), expected)
 
@@ -368,6 +370,15 @@ class RoutingEvidenceTests(WorkflowTestCase):
         facts = self.facts()[0]
         self.assertEqual(facts["statistics"]["overall"]["samples"], 0)
         self.assertEqual(facts["infrastructureFailures"], {"count": 1, "lastAt": self.clock()})
+
+    def test_content_policy_does_not_count_as_ability_or_infrastructure(self):
+        run, _ = self.end_turn(self.new_run(), failed=True, provider_rejection={
+            "code": "content-policy", "nativeCode": "cyberPolicy", "rejectionPhase": "before-model"})
+        self.conclude(run)
+        facts = self.facts()[0]
+        self.assertEqual(facts["statistics"]["overall"]["samples"], 0)
+        self.assertEqual(facts["statistics"]["overall"]["failures"], 0)
+        self.assertEqual(facts["infrastructureFailures"]["count"], 0)
 
     def test_every_infrastructure_turn_counts_without_terminal_run_or_ability_sample(self):
         run, _ = self.end_turn(self.new_run(), failed=True,

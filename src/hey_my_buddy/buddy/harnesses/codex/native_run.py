@@ -1871,9 +1871,11 @@ def _collect_provider_rejection(state: _RunState, *, stream_truncated: bool) -> 
         return
     if stream_truncated or state.reason in ("invalid-protocol", "transport-error", "invalid-native-result", "deadline"):
         evidence.collector_failed = True
-    failure_code = turn_failure_code(evidence.completed)
+    error_record = evidence.completed
+    failure_code = turn_failure_code(error_record)
     if failure_code is None and state.native_error is not None:
-        failure_code = turn_failure_code({"error": state.native_error["error"]})
+        error_record = state.native_error
+        failure_code = turn_failure_code(error_record)
     if failure_code is None:
         return
     classification = classify_provider_rejection_code(failure_code)
@@ -1881,6 +1883,8 @@ def _collect_provider_rejection(state: _RunState, *, stream_truncated: bool) -> 
         state.provider_rejection = {"code": classification, "nativeCode": failure_code,
                                "source": "codex/app-server-turn-error", "observedAt": utc_now(),
                                "resetsAt": None, "rejectionPhase": evidence.rejection_phase}
+        if classification == "content-policy":
+            state.provider_rejection["message"] = error_record["error"].get("message")
 
 
 def _checked_buddy(request: RunRequest, state: _RunState, mode: str) -> ResultBuddy:
