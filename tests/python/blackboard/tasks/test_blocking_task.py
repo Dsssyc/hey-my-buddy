@@ -85,3 +85,43 @@ class BlockingTaskTests(WorkflowTestCase):
         for view in (workflow, workflow["task"], task):
             self.assertEqual(view["queueReason"], "cwd-overlap")
             self.assertIsNone(view["blockingTask"])
+
+    def test_router_dispatch_holder_projects_owning_micro_task(self):
+        board = self.board(max_concurrent=4)
+        parent = self.workdir("routed-holder")
+        owner = self.submit(board, cwd=str(parent), title="Owning micro task", access="read",
+                            create_macro={"title": "Routed macro", "goal": "Verify router claim owner"})
+        router_task = board.submit_execution(requestId="router-internal", task="Route", cwd=str(parent),
+                                             adapter="command", argv=["fixture-never-run"])["task"]
+        self.assertIsNotNone(self.claim(board, run_id=router_task["runId"])["claim"])
+        now = board.store.now()
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,?,?)",
+                ("dec-router-1", "pending", now),
+            )
+            connection.execute(
+                "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,updated_at) "
+                "VALUES(?,?,?,?)",
+                ("dec-router-1", "req-router-1", "fp-router-1", now),
+            )
+            connection.execute(
+                "INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at) "
+                "VALUES(?,?,?,?,?)",
+                ("dec-router-1", owner["runId"], "pending", "ineligible", now),
+            )
+            connection.execute(
+                "INSERT INTO router_requests(decision_id,round,snapshot_json,frozen_at) VALUES(?,?,?,?)",
+                ("dec-router-1", 1, "{}", now),
+            )
+            connection.execute(
+                "INSERT INTO router_dispatches(task_id,decision_id,round,router_index,buddy_id,"
+                "harness,provider,model,effort,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (router_task["runId"], "dec-router-1", 1, 0, "router-1",
+                 "codex", "openai", "gpt-5", "high", now),
+            )
+        queued = self.submit(board, cwd=str(parent), request_id="waiting-on-router", access="read")
+        self.assertEqual(self.claim(board, run_id=queued["runId"])["reason"], "cwd-overlap")
+        self.assert_projection(board, queued, {
+            "runId": owner["runId"], "title": "Owning micro task", "macroTaskId": owner["macroTaskId"],
+        })

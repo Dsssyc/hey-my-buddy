@@ -652,6 +652,65 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["streamComplete"])
         self.assertEqual(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])), [])
 
+    def test_completed_turn_unobserved_items_mark_incomplete_and_are_not_filtered(self):
+        from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
+        from hey_my_buddy.buddy.harnesses.codex import native_run
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            binding = {"harness": "codex", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
+
+            # Case 1: unobserved dynamicToolCall with id & mounted name in turn/completed
+            projector = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector.observe_root("thread-1", "turn-1")
+            facts = native_run._RunFacts()
+            stream = native_run._EventChain(
+                facts, native_run._Classifier(facts), native_run._RunState(), projector, None,
+                overflow_raises=False)
+            phantom = {"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-1", "status": "completed",
+                "items": [{"type": "dynamicToolCall", "id": "phantom-1", "tool": "query_task"}]}}}
+            self.assertFalse(projector.completed_snapshot_item(phantom["params"], phantom["params"]["turn"]["items"][0]))
+            stream.observe_facts(phantom)
+            self.assertEqual(facts.unexplained_markers, 1)
+            package = projector.finish(True, verified_session_calls=())
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=state_dir),
+                             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+            # Case 2: unobserved forbidden tool in turn/completed in review mode flags unexplained
+            projector_review = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector_review.observe_root("thread-1", "turn-2")
+            review_facts = native_run._RunFacts()
+            review_stream = native_run._EventChain(
+                review_facts, native_run._Classifier(review_facts), native_run._RunState(),
+                projector_review, None, overflow_raises=False)
+            phantom_edit = {"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-2", "status": "completed",
+                "items": [{"type": "fileChange", "id": "edit-1"}]}}}
+            review_stream.observe_facts(phantom_edit)
+            self.assertEqual(review_facts.unexplained_markers, 1)
+            review_pkg = projector_review.finish(True, verified_session_calls=())
+            self.assertEqual(tool_evidence.judge_tool_evidence(review_pkg, "read", state_dir=state_dir),
+                             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+            # Case 3: observed mounted dynamicToolCall echoed in turn/completed is filtered cleanly
+            projector_ok = CodexToolEventProjector(binding, state_dir=state_dir, session_tools=("query_task",))
+            projector_ok.observe_root("thread-1", "turn-3")
+            ok_facts = native_run._RunFacts()
+            ok_stream = native_run._EventChain(
+                ok_facts, native_run._Classifier(ok_facts), native_run._RunState(), projector_ok, None,
+                overflow_raises=False)
+            ok_stream.observe_facts({"method": "item/started", "params": {
+                "threadId": "thread-1", "turnId": "turn-3",
+                "item": {"type": "dynamicToolCall", "id": "call-1", "tool": "query_task"}}})
+            ok_stream.observe_facts({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-3",
+                "item": {"type": "dynamicToolCall", "id": "call-1", "tool": "query_task", "status": "completed"}}})
+            ok_stream.observe_facts({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {
+                "id": "turn-3", "status": "completed",
+                "items": [{"type": "dynamicToolCall", "id": "call-1", "tool": "query_task", "status": "completed"}]}}})
+            self.assertEqual((ok_facts.markers, ok_facts.unexplained_markers), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -782,6 +782,60 @@ class ProjectionOrderingTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "invalid-protocol")
         self.assertEqual(list(tool_evidence.read_tool_calls(facts.finish(False), state_dir=self.state_dir)), [])
 
+    def test_terminal_summary_smuggling_streamed_count_forecast_and_drain_metadata(self):
+        from hey_my_buddy.buddy.harnesses.zcode import native_run
+        from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import carries_tool_marker
+
+        self.assertFalse(carries_tool_marker({"toolCallIds": [], "committedToolCallIds": []}))
+        self.assertTrue(carries_tool_marker({"toolCallIds": ["c-1"]}))
+        self.assertTrue(carries_tool_marker({"committedToolCallIds": ["c-1"]}))
+
+        snapshot_tool = "mcp__hmb_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(snapshot_tool,))
+        facts.add_root("s-1", "t-1")
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": snapshot_tool}, seq=2))
+        facts.observe(frame({"kind": "result", "toolCallId": "c-1", "result": {"success": True}}, seq=3))
+        clean_terminal = {"method": "v4/telemetry/event", "params": {
+            "sessionId": "s-1", "turnId": "t-1", "kind": "turn.terminal", "toolCallCount": 1}}
+        smuggled_terminal = {"method": "v4/telemetry/event", "params": {
+            "sessionId": "s-1", "turnId": "t-1", "kind": "turn.terminal", "toolCallCount": 1,
+            "extra": {"type": "tool_call", "name": "Bash"}}}
+        self.assertTrue(facts.explains_tool_frame(clean_terminal, read=False))
+        self.assertTrue(facts.explains_terminal_metadata(clean_terminal, read=False))
+        self.assertFalse(facts.explains_tool_frame(smuggled_terminal, read=False))
+
+        # Streamed-only forecast in session.updated must fail finish() when never canonically scheduled.
+        forecast = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(snapshot_tool,))
+        forecast.add_root("s-1", "t-1")
+        stream_start = frame({"kind": "tool_input_start", "toolCallId": "c-ghost", "toolName": snapshot_tool},
+                             seq=2, kind="model.streaming")
+        forecast.observe(stream_start)
+        self.assertTrue(forecast.explains_tool_frame(stream_start, read=False))
+        updated = frame({"stopReason": "tool-calls", "toolCallCount": 1}, seq=3, kind="session.updated")
+        self.assertTrue(forecast.explains_tool_frame(updated, read=False))
+        package = forecast.finish(True)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=self.state_dir),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+        # Post-close EOF drain accepts pure terminal metadata without firing observer-interrupt,
+        # while still flagging post-close tool starts.
+        import queue as py_queue
+        run_facts = native_run._RunFacts()
+        classifier = native_run._Classifier(run_facts)
+        classifier.admitted = True
+        protocol = native_run.NoToolProtocol("s-1", "input", facts)
+        state = native_run._RunState()
+        conn = mock.Mock()
+        conn.messages = py_queue.Queue()
+        conn.messages.put(clean_terminal)
+        conn.messages.put(None)
+        drained = native_run._drain(
+            conn, facts, classifier, protocol, run_facts, state,
+            lambda: None, None,
+            explain_terminal=lambda msg: facts.explains_terminal_metadata(msg, read=False))
+        self.assertTrue(drained)
+        self.assertEqual(run_facts.markers, 0)
+
 
 class FakeAppServerTests(unittest.TestCase):
     """The shared fake ZCode app-server harness (migrated from test_no_tool_zcode)."""

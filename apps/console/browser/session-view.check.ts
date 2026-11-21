@@ -416,15 +416,16 @@ for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) t
     await page.clock.install();
     const message = (text: string) => ({ sessionId: "att-a3-1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
     const row = (index: number) => message(`运行中的第 ${index} 行。\n第二行内容，占一点高度。\n`);
+    let allowGrowth = false;
     let grown = false;
     await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
       const params = new URL(route.request().url()).searchParams;
       const starts = params.get("before") === null && params.get("after") === null;
       const events = starts
         ? opening === 1 ? [message("运行中的唯一一行。")] : Array.from({ length: opening }, (_, index) => row(index + 1))
-        : grown ? [] : Array.from({ length: growth }, (_, index) => row(opening + index + 1));
-      if (!starts) grown = true;
-      const after = starts ? opening : opening + growth;
+        : allowGrowth && !grown ? Array.from({ length: growth }, (_, index) => row(opening + index + 1)) : [];
+      if (!starts && allowGrowth && !grown) grown = true;
+      const after = grown ? opening + growth : opening;
       await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before: 0, after, hasEarlier: false, events } });
     });
     await openSession(page, session("preview-run-a3", 3));
@@ -435,6 +436,7 @@ for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) t
       expect(overflow, "the opening page barely exceeds the viewport").toBeGreaterThan(0);
       expect(overflow).toBeLessThanOrEqual(320);
     }
+    allowGrowth = true;
     await page.clock.fastForward(12_000);
     await expect(panel(page).getByText(`运行中的第 ${opening + growth} 行。`)).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "New content" })).toHaveCount(0);

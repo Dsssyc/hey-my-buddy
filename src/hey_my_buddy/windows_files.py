@@ -78,6 +78,17 @@ class WindowsFileAPI:
                          handle, self.win32file.FileAttributeTagInfo)
         return tag["FileAttributes"], tag["ReparseTag"]
 
+    def file_id(self, handle):
+        info = self._call(self.win32file.GetFileInformationByHandle, handle)
+        return info[4], info[8], info[9]
+
+    def final_path(self, handle):
+        return self._call(self.win32file.GetFinalPathNameByHandle, handle, 0)
+
+    def long_path(self, path):
+        import win32api
+        return self._call(win32api.GetLongPathNameW, windows_path(path))
+
     def file_type(self, handle):
         return self._call(self.win32file.GetFileType, handle)
 
@@ -263,6 +274,15 @@ def _check_root_directory(api, handle):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must be a real directory')
 
 
+def _normalize_win_path(value: str) -> str:
+    return value.rstrip('\\').casefold()
+
+
+def _check_root_final_path(api, handle, expected_final: str) -> None:
+    if _normalize_win_path(api.final_path(handle)) != _normalize_win_path(expected_final):
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root handle resolved outside the target path')
+
+
 def check_state_root(path, *, create=False):
     """Check the Windows state boundary once at installation or cold start."""
     from .private_dirs import _absolute, linked
@@ -275,23 +295,35 @@ def check_state_root(path, *, create=False):
     api = WindowsFileAPI()
     try:
         access = READ_CONTROL | FILE_READ_ATTRIBUTES
-        handle = api._open(path, access, OPEN_EXISTING, share_delete=True)
+        reader = api._open(path, access, OPEN_EXISTING, share_delete=True)
+        writer = None
         try:
-            _check_root_directory(api, handle)
+            _check_root_directory(api, reader)
+            expected_final = api.long_path(path)
+            _check_root_final_path(api, reader, expected_final)
             try:
-                _validate_root_acl(api, handle)
+                _validate_root_acl(api, reader)
                 return
             except _UnsafeDacl:
                 if not create:
                     raise
+            reader_id = api.file_id(reader)
+            writer = api._open(path, access | WRITE_DAC, OPEN_EXISTING, share_delete=True)
+            try:
+                _check_root_directory(api, writer)
+                if api.file_id(writer) != reader_id:
+                    raise BoardError('PRIVATE_PATH_UNSAFE', 'State root changed while opening for ACL repair')
+                _check_root_final_path(api, writer, expected_final)
+            except BaseException:
+                api.close(writer)
+                writer = None
+                raise
         finally:
-            api.close(handle)
-        handle = api._open(path, access | WRITE_DAC, OPEN_EXISTING, share_delete=True)
+            api.close(reader)
         try:
-            _check_root_directory(api, handle)
-            _repair_root_dacl(api, handle)
+            _repair_root_dacl(api, writer)
         finally:
-            api.close(handle)
+            api.close(writer)
     except BoardError as error:
         error.details['path'] = str(path)
         raise

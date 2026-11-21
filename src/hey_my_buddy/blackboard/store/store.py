@@ -911,13 +911,19 @@ class BoardStore:
         claim = self._overlapping_claim(connection, task["cwd"], exclude_task=task["task_id"])
         if claim is None:
             return None
-        run_id = claim["task_id"]
-        from ..tasks.macro_tasks import group_for_task
-        run = connection.execute(
-            "SELECT title FROM workflow_runs WHERE run_id=?", (run_id,)
+        owner = connection.execute(
+            "SELECT run.run_id, run.title FROM workflow_runs run WHERE run.run_id=? "
+            "UNION ALL "
+            "SELECT run.run_id, run.title FROM router_dispatches dispatch "
+            "JOIN workflow_routes route USING(decision_id) "
+            "JOIN workflow_runs run ON run.run_id=route.run_id "
+            "WHERE dispatch.task_id=? LIMIT 1",
+            (claim["task_id"], claim["task_id"]),
         ).fetchone()
-        return {"runId": run_id, "title": run["title"] if run else None,
-                "macroTaskId": group_for_task(connection, run_id)}
+        run_id = owner["run_id"] if owner else claim["task_id"]
+        from ..tasks.macro_tasks import group_for_task
+        return {"runId": run_id, "title": owner["title"] if owner else None,
+                "macroTaskId": group_for_task(connection, run_id) if owner else None}
 
     def _admission_blocker(self, connection: sqlite3.Connection, spec: dict, *, exclude_task: str | None = None) -> str | None:
         """Why this specification cannot start right now, or ``None`` when it can.

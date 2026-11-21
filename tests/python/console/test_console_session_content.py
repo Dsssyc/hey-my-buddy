@@ -475,3 +475,25 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
             self.assertIn('continuation-supported', parent['reasons'])
             board.call('storage_apply', {'planId': plan['planId'], 'commandId': 'keep-session', 'confirm': True})
         self.assertEqual(self.get(browser, route)['events'], events)
+
+    def test_reverse_paging_keeps_interleaved_message_blocks_without_growing_clean_pages(self):
+        _, browser, route, path, _, _, _ = self.fixture(count=0)
+        msg0 = {'sessionId': 'session-attempt', 'update': {
+            'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': 'earlier unrelated'},
+            '_meta': {'nativeItemId': 'item-0', 'contentSegment': 'turn-1:body'}}}
+        msg_a1 = {'sessionId': 'session-attempt', 'update': {
+            'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': 'head '},
+            '_meta': {'nativeItemId': 'item-a', 'contentSegment': 'turn-1:body'}}}
+        plan = {'sessionId': 'session-attempt', 'update': {
+            'sessionUpdate': 'plan', 'entries': [{'content': 'step 1', 'priority': 'medium', 'status': 'in_progress'}]}}
+        msg_a2 = {'sessionId': 'session-attempt', 'update': {
+            'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': 'tail'},
+            '_meta': {'nativeItemId': 'item-a', 'contentSegment': 'turn-1:body'}}}
+        for item in (msg0, msg_a1, plan, msg_a2):
+            self.append(path, item)
+        latest = self.get(browser, route + '?limit=2')
+        self.assertEqual(latest['events'], [msg_a1, plan, msg_a2])
+        self.assertTrue(latest['hasEarlier'])
+        earlier = self.get(browser, route + f"?before={latest['before']}&limit=2")
+        self.assertEqual(earlier['events'], [msg0])
+        self.assertFalse(earlier['hasEarlier'])

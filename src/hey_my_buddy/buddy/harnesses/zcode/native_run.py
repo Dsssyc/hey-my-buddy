@@ -762,7 +762,8 @@ def _project_session(session: ZcodeSessionProjector | None, state: _RunState, me
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
            protocol, facts: _RunFacts, state: _RunState,
-           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector | None) -> bool:
+           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector | None,
+           explain_terminal: Callable[[dict], bool] | None = None) -> bool:
     """Keep every stopped stream frame, even after an earlier failure.
 
     The order of every frame is the run's own: projection first, then
@@ -797,7 +798,8 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
             # the following frames from being projected too.
             tools.observe(message)
             _project_session(session, state, message)
-            changed = classifier.observe(message)
+            explained = explain_terminal is not None and explain_terminal(message)
+            changed = explained or classifier.observe(message)
             if changed:
                 # The retained fact goes to the role before any protocol
                 # check of this frame runs; only the observer's stop ends
@@ -1184,9 +1186,14 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             state.error_text = "the native execution returned invalid or incomplete data"
             outcome.record = None
         finally:
+            explain_terminal = (
+                (lambda msg: tools.explains_terminal_metadata(msg, read=request.permission == "read"))
+                if tools is not None and request.snapshot_query is not None else None
+            )
             drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                        tools=tools, classifier=classifier, facts=facts, notify=notify,
-                                       completion_carrier=completion_carrier, outcome=outcome, session=session)
+                                       completion_carrier=completion_carrier, outcome=outcome, session=session,
+                                       explain_terminal=explain_terminal)
         if session is not None:
             session.record.project(session.close)
         if state.provider_rejection is not None:
@@ -1546,7 +1553,8 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
                      state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
                      facts: _RunFacts, notify: Callable[..., RunFeedback],
                      completion_carrier: bool, outcome: _CarrierOutcome,
-                     session: ZcodeSessionProjector | None) -> bool | None:
+                     session: ZcodeSessionProjector | None,
+                     explain_terminal: Callable[[dict], bool] | None = None) -> bool | None:
     """The stop phase: retained observations, bridge close, the conservative
     group stop and the EOF drain, in their established order."""
     if outcome.attempt_usage is not None:
@@ -1588,10 +1596,10 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
             # marks the stream incomplete here.
             if not completion_carrier and outcome.last_protocol is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.last_protocol, facts,
-                                 state, notify, session)
+                                 state, notify, session, explain_terminal=explain_terminal)
             elif completion_carrier and outcome.evidence is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.evidence, facts,
-                                 state, notify, session)
+                                 state, notify, session, explain_terminal=explain_terminal)
         try:
             spawn.process.stdout.close()
         except OSError:

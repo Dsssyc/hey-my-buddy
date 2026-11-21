@@ -25,7 +25,7 @@ export type SessionPanelProps = {
 /** One read-only attempt. Navigation and persistence are owned by the enclosing shell. */
 export default function SessionPanel({ routingMode, taskText, checkoutRoot, client, taskId, attemptId, harness, active, tabsSide }: SessionPanelProps) {
   const { t } = useTranslation("taskDetail");
-  const { data, error, earlierBusy, earlier, retry } = useSession(client, taskId, attemptId, active);
+  const { data, error, earlierError, earlierBusy, earlier, retryEarlier, retry } = useSession(client, taskId, attemptId, active);
   // Keep the existing immediate motion for initial positioning, streaming and
   // explicit return to the end, including prefers-reduced-motion.
   const { scrollRef, contentRef, scrollToBottom, stopScroll, isAtBottom, state } = useStickToBottom({ initial: "instant", resize: "instant" });
@@ -85,10 +85,18 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
     }, { root: node, rootMargin: "320px 0px 0px 0px" });
     observer.observe(trigger);
     return () => observer.disconnect();
-  }, [earlier, data?.before, scrollRef, contentRef, stopScroll, state, positioned]);
+  }, [earlier, data?.before, scrollRef, contentRef, stopScroll, state, positioned, error, earlierError]);
 
   const errors = ["SESSION_NOT_INTEGRATED", "SESSION_NOT_RECORDED", "SESSION_DELETED", "SESSION_INVALID_RECORD", "SESSION_UNREADABLE"] as const;
-  const failure = errors.find(code => error instanceof ApiError && code === error.code) ?? "SESSION_UNREADABLE";
+  const errorCode = (value: unknown) => errors.find(code => value instanceof ApiError && code === value.code) ?? "SESSION_UNREADABLE";
+  const failure = errorCode(error);
+  const earlierFailure = errorCode(earlierError);
+  const handleRetryEarlier = () => {
+    const body = contentRef.current?.querySelector<HTMLElement>('[data-slot="session-blocks"]');
+    prependEnd.current = body?.getBoundingClientRect().bottom ?? null;
+    if (!state.isNearBottom) stopScroll();
+    retryEarlier();
+  };
   const summary = [
     calls > 0 && t("sessionView.summary.calls", { count: calls }),
     messages > 0 && t("sessionView.summary.messages", { count: messages }),
@@ -105,7 +113,11 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
             {/* A uniform overflow value lets the hook recognize wheel events on the Radix viewport. */}
             <ScrollArea className="min-h-0 min-w-0 flex-1" viewportProps={{ ref: scrollRef, tabIndex: 0, "aria-label": t("sessionView.content"), style: { overflow: "auto" }, className: "overscroll-contain [overflow-anchor:none] [&>div]:block!" }}>
               <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[1060px] flex-col px-4 pb-8 sm:px-6">
-                {data.hasEarlier && positioned && <div ref={sentinel} aria-hidden="true" className="h-0 w-full" />}
+                {data.hasEarlier && positioned && !earlierError && <div ref={sentinel} aria-hidden="true" className="h-0 w-full" />}
+                {earlierError !== null && <div data-slot="session-earlier-error" role="alert" className="mb-3 flex flex-wrap items-center gap-3 border-b border-line pb-3 text-xs text-fail">
+                  <span>{t(`sessionView.errors.${earlierFailure}`)}</span>
+                  <Button variant="outline" size="sm" onClick={handleRetryEarlier}>{t("retry")}</Button>
+                </div>}
                 {rows.length ? <SessionBlocks routingMode={routingMode} rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
                   setExpanded(previous => { const next = new Set(previous); if (open) next.add(key); else next.delete(key); return next; });
                   // The disclosure keeps the viewport where the reader is interacting.

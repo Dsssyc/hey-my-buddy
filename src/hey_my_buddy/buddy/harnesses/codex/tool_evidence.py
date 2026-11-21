@@ -162,6 +162,66 @@ class CodexToolEventProjector:
             return item.get("name") == "exec" and item.get("namespace") in (None, "functions")
         return item.get("type") == "custom_tool_call_output" and key in self._dispatcher_starts
 
+    def _matches_observed_item(self, identity: dict | None, item: object) -> bool:
+        if identity is None or identity not in self.roots or not isinstance(item, dict):
+            return False
+        kind = item.get("type")
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(kind, str) or not isinstance(call_id, str) or not call_id:
+            return False
+        key = (canonical_json(identity), call_id)
+        started = self._started.get(key)
+        if started is None:
+            return False
+        if kind == "dynamicToolCall":
+            tool = item.get("tool")
+            if self.session_tools:
+                if key not in self._dynamic_phases:
+                    return False
+                typed_tool = self._dynamic_tools.get(key)
+                if typed_tool == "":
+                    return False
+                request = self._snapshot_requests.get(key)
+                if tool is not None:
+                    return (isinstance(tool, str) and tool in self.session_tools
+                            and typed_tool in (None, tool)
+                            and (request is None or request[0] == tool))
+                return True
+            return started[0] == "dynamicToolCall"
+        if kind in TYPED_TOOL_ITEMS:
+            return started[0] == kind
+        if kind in RAW_TOOL_STARTS:
+            name = item.get("name") if kind in NAMED_RAW_CALLS else kind
+            expected_native = "mcpToolCall" if item.get("namespace") not in (None, "functions") else None
+            return isinstance(name, str) and started == (name, expected_native)
+        return kind in TYPED_TOOL_OUTPUTS or kind in RAW_TOOL_OUTPUTS
+
+    def matches_observed_completed_item(self, params: object, item: object) -> bool:
+        if not isinstance(params, dict):
+            return False
+        turn = params.get("turn") or {}
+        turn_params = {**params, "turnId": params.get("turnId") or turn.get("id")}
+        return self._matches_observed_item(native_identity(turn_params), item)
+
+    def completed_snapshot_item(self, params: object, item: object) -> bool:
+        if not self.session_tools or not isinstance(params, dict) or not isinstance(item, dict):
+            return False
+        turn = params.get("turn") or {}
+        turn_params = {**params, "turnId": params.get("turnId") or turn.get("id")}
+        identity = native_identity(turn_params)
+        if not self._matches_observed_item(identity, item):
+            return False
+        call_id = item.get("call_id") or item.get("id")
+        key = (canonical_json(identity), call_id)
+        kind = item.get("type")
+        if kind == "dynamicToolCall":
+            return key in self._dynamic_phases and self.snapshot_frame({"params": {**turn_params, "item": item}})
+        if kind in ("function_call", "function_call_output"):
+            return key in self._session_starts and self.snapshot_frame({"params": {**turn_params, "item": item}})
+        if kind in ("custom_tool_call", "custom_tool_call_output"):
+            return key in self._dispatcher_starts and self.snapshot_frame({"params": {**turn_params, "item": item}})
+        return False
+
     def finish(self, stream_complete: bool, *, verified_session_calls=()) -> dict:
         """Close the stream and return the ``toolEvidence`` package.
 
@@ -182,7 +242,16 @@ class CodexToolEventProjector:
         params = message.get("params")
         if method == "turn/completed" and isinstance(params, dict):
             turn = params.get("turn") or {}
-            identity = native_identity({**params, "turnId": params.get("turnId") or turn.get("id")})
+            turn_params = {**params, "turnId": params.get("turnId") or turn.get("id")}
+            identity = native_identity(turn_params)
+            items = turn.get("items")
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict) and item.get("type") in NON_TOOL_ITEMS:
+                        continue
+                    if not self._matches_observed_item(identity, item):
+                        tool_name = (item.get("tool") or item.get("name") or item.get("type")) if isinstance(item, dict) else None
+                        self._incomplete(turn_params, tool_name=tool_name if isinstance(tool_name, str) else None, phase=None)
             if identity in self.roots:
                 self.evidence.close_root(identity)
             return

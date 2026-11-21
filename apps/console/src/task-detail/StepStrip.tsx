@@ -195,7 +195,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
       </button>
       <div data-slot="step-readout" className="flex min-w-0 flex-1 items-center gap-2.5 px-4 @max-[640px]:flex-wrap @max-[640px]:gap-y-0 @max-[440px]:pr-2">
         <span className="shrink-0 font-semibold text-ink">{title}</span>
-        {buddy && <span className="flex min-w-0 items-center font-mono text-[11.5px] text-ink2 @max-[520px]:hidden">
+        {buddy && <span className="flex min-w-0 items-center font-mono text-xs text-ink2 @max-[520px]:hidden">
           {color && <span aria-hidden="true" className="mr-1.5 size-2.5 shrink-0 rounded-[2px]" style={{ backgroundColor: color }}/>}
           <span className="truncate">{modelEffort(buddy)}</span><AliasTag alias={named(buddy)?.alias}/>
         </span>}
@@ -209,13 +209,13 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
       className="grid grid-rows-[0fr] overflow-hidden motion-safe:transition-[grid-template-rows] motion-safe:duration-200 data-[expanded=true]:grid-rows-[1fr]"
       data-expanded={expanded}>
       <div className="min-h-0 overflow-hidden">
-        <div ref={setGestureArea} data-slot="detail-timeline" className="relative flex border-t border-line bg-background" style={{ height: TIMELINE_AXIS_PX + STRIP_PX + 2 }}>
+        <div ref={setGestureArea} data-slot="detail-timeline" className="relative flex border-t border-line bg-background" style={{ height: TIMELINE_AXIS_PX + STRIP_PX + 1 }}>
             <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
               {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
-                <ZoomRuler ref={setRuler} className="border-b border-line bg-sunk" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
+                <ZoomRuler ref={setRuler} className="bg-sunk" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
                   <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
                 </ZoomRuler>
-                <div className="relative [&>[data-slot=timeline-track]]:border-t-0">
+                <div className="relative">
                   <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
                     selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection} itemLinks={links.items}
                     onOpen={(_runId, key) => links.onItem(key)} onSelect={() => {}}

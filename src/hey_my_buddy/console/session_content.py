@@ -71,37 +71,55 @@ def _track_tool_opening(update: SessionUpdate, missing: set[str]) -> None:
         missing.add(update.tool_call_id)
 
 
-def _message_item(update: SessionUpdate) -> tuple[str, str] | None:
+def _message_key(update: SessionUpdate) -> tuple[str, str] | None:
     if isinstance(update, MessageChunk) and update.meta is not None:
-        return update.session_update, update.meta.native_item_id
+        return update.meta.native_item_id, update.meta.content_segment
     return None
+
+
+def _track_open_block(update: SessionUpdate, missing: set[str], open_messages: set[tuple[str, str]]) -> None:
+    _track_tool_opening(update, missing)
+    key = _message_key(update)
+    if key is not None:
+        if update.meta.replace:
+            open_messages.discard(key)
+        else:
+            open_messages.add(key)
 
 
 def _align_before(stream, first: int, start: int, events: list[SessionNotification]) -> int:
     missing: set[str] = set()
+    open_messages: set[tuple[str, str]] = set()
     for event in reversed(events):
-        _track_tool_opening(event.update, missing)
-    leading_item = _message_item(events[0].update)
+        _track_open_block(event.update, missing, open_messages)
     earliest = max(start, first - _BACKTRACK_BYTES)
     # Include the delimiter just before the earliest allowed event, if there is one.
     floor = max(start, earliest - 1)
-    extra = []
+    committed: list[SessionNotification] = []
+    pending: list[tuple[int, SessionNotification]] = []
+    committed_first = cursor = first
     for _ in range(_BACKTRACK_LINES):
-        if first <= earliest or (not missing and leading_item is None):
+        if cursor <= earliest or (not missing and not open_messages):
             break
-        previous = _last_newline(stream, first - 1, floor) + 1
+        previous = _last_newline(stream, cursor - 1, floor) + 1
         if previous < earliest:
             break
         stream.seek(previous)
-        event = _event(stream.read(first - previous))
-        item = _message_item(event.update)
-        if not missing and item != leading_item:
-            break
-        extra.append(event)
-        _track_tool_opening(event.update, missing)
-        first, leading_item = previous, item
-    events[:0] = reversed(extra)
-    return first
+        event = _event(stream.read(cursor - previous))
+        cursor = previous
+        update = event.update
+        tool_match = isinstance(update, (ToolCall, ToolCallUpdate)) and update.tool_call_id in missing
+        msg_key = _message_key(update)
+        msg_match = msg_key is not None and msg_key in open_messages
+        pending.append((previous, event))
+        if tool_match or msg_match:
+            for offset, item in pending:
+                committed.append(item)
+                committed_first = offset
+                _track_open_block(item.update, missing, open_messages)
+            pending.clear()
+    events[:0] = reversed(committed)
+    return committed_first
 
 
 def _page(stream, params: dict) -> dict:

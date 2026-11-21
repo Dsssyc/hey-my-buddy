@@ -980,14 +980,25 @@ class _EventChain:
         if self.projector is not None:
             self.projector.observe_notification(message)
         snapshot_frame = self.projector is not None and self.projector.snapshot_frame(message)
-        if self.projector is not None and self.projector.session_tools and message.get("method") == "turn/completed":
+        unmatched_completed = False
+        if self.projector is not None and message.get("method") == "turn/completed":
             params = message.get("params") or {}
             turn = params.get("turn") or {}
             items = turn.get("items")
             if isinstance(items, list):
-                filtered = [item for item in items if not self.projector.snapshot_frame({
-                    "params": {**params, "item": item}})]
-                message = {**message, "params": {**params, "turn": {**turn, "items": filtered}}}
+                for item in items:
+                    if isinstance(item, dict) and item.get("type") in NON_TOOL_ITEMS:
+                        continue
+                    if not self.projector.matches_observed_completed_item(params, item):
+                        unmatched_completed = True
+                        break
+                if self.projector.session_tools:
+                    filtered = [item for item in items if not self.projector.completed_snapshot_item(params, item)]
+                    message = {**message, "params": {**params, "turn": {**turn, "items": filtered}}}
+        if unmatched_completed:
+            self.facts.note_marker(unexplained=True)
+            self.facts.dirty = True
+            return
         if snapshot_frame or self.classifier.observe(message):
             self.facts.dirty = True
 

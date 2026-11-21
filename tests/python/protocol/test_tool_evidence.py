@@ -564,7 +564,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         rows = call_rows(current)
         del rows[0]["sessionServiceVerified"]
         legacy["calls"] = tool_evidence.write_tool_calls(BINDING, rows, state_dir=STATE_DIR)
-        stored = Path(legacy["calls"]["path"])
+        stored = native_path(legacy["calls"]["path"])
         original = stored.read_bytes()
         self.assertEqual(call_rows(legacy), rows)
         self.assertIsNone(tool_evidence.judge_tool_evidence(legacy, "web", state_dir=STATE_DIR))

@@ -14,7 +14,7 @@ export function LiveActivity({ activity, stuck, nowMs, footer, className }: { ac
   return <div data-slot="detail-live" className={cn("flex min-w-0 items-center gap-2 text-xs", footer && "border-t border-line bg-card px-6 py-2", className)}>
     <StateMark kind={doing ? "live" : "idle"} />
     <span className={cn("min-w-0 truncate", doing ? "text-ink state-breathe" : "text-ink3")}>{phase}</span>
-    {activity?.toolName && !heartbeat && <span className={cn("min-w-0 truncate font-mono text-ink2", footer && "border border-line bg-sunk px-1.5 py-0.5 text-[11.5px] leading-none")}>{activity.toolName}</span>}
+    {activity?.toolName && !heartbeat && <span className={cn("min-w-0 truncate font-mono text-ink2", footer && "border border-line bg-sunk px-1.5 py-0.5 text-xs leading-none")}>{activity.toolName}</span>}
     <span className={cn("ml-auto shrink-0 whitespace-nowrap tabular-nums", stuck ? "text-hand" : "text-ink3")}>
       {Number.isFinite(at) ? t("activity.reported", { when: formatRelative(at, nowMs) }) : t("activity.notReported")}
     </span>

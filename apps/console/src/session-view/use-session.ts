@@ -12,6 +12,7 @@ export type SessionData = Omit<SessionPage, "events"> & { events: RecordedEvent[
 export function useSession(client: SessionClient, taskId: string, attemptId: string, active: boolean) {
   const [data, setData] = useState<SessionData | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [earlierError, setEarlierError] = useState<unknown>(null);
   const [earlierBusy, setEarlierBusy] = useState(false);
   const [generation, setGeneration] = useState(0);
   const latest = useRef<SessionData | null>(null);
@@ -32,6 +33,7 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
       latest.current = null;
       setData(null);
       setError(null);
+      setEarlierError(null);
     }
     if (!active) return;
     earlierPending.current = false;
@@ -111,6 +113,7 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
   const earlier = useCallback(async () => {
     if (!visible.current || earlierPending.current || !latest.current?.hasEarlier) return;
     earlierPending.current = true;
+    setEarlierError(null);
     setEarlierBusy(true);
     const controller = new AbortController();
     requests.current.add(controller);
@@ -119,12 +122,13 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
       if (!controller.signal.aborted) update(previous => ({ ...previous!, before: page.before, hasEarlier: page.hasEarlier,
         events: [...records(page), ...previous!.events], change: "earlier" }));
     } catch (failure) {
-      if (!controller.signal.aborted && !isAbortError(failure)) setError(failure);
+      if (!controller.signal.aborted && !isAbortError(failure)) setEarlierError(failure);
     } finally {
       requests.current.delete(controller);
       if (!controller.signal.aborted) { earlierPending.current = false; setEarlierBusy(false); }
     }
   }, [read]);
+  const retryEarlier = useCallback(() => { void earlier(); }, [earlier]);
   const retry = () => { setError(null); setGeneration(value => value + 1); };
-  return { data, error, earlierBusy, earlier, retry };
+  return { data, error, earlierError, earlierBusy, earlier, retryEarlier, retry };
 }

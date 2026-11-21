@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：开发者于 2026-11-19 确认（经独立只读设计审查 `7e3539ad` 核实源码并收口），待按原生探针门禁与分阶段执行计划实施。本决定修改 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4、6、7、8、9、10、11、16、20 条，[ADR-023](023-harness-integration-principles.md) 的“各角色共用一套档位”一节（含取消“维护大包切 `read`”的旧补充），[ADR-030](030-harness-layer-scope.md) 第 2、9 条（同步更新 `AGENTS.md` 中的清单表述），并沿用 [ADR-031](031-one-process-per-execution.md) 第 2、10、12 条及 [ADR-034](034-retire-helpers.md) 的历史封存不改写规则；同步更新 [CONTEXT.md](../../CONTEXT.md) 中 `不用工具 / no tools` 的表述、`src/hey_my_buddy/buddy/roles/texts/router.txt` 及相关参考文档。
+已接受并实施：开发者于 2026-11-19 确认（经独立只读设计审查 `7e3539ad` 核实源码并收口），已于 `0.72.0`–`0.72.1` 落地并安装验证（见 [0.72.0](../acceptance/installs/0.72.0.md)、[0.72.1](../acceptance/installs/0.72.1.md)）。本决定修改 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4、6、7、8、9、10、11、16、20 条，[ADR-023](023-harness-integration-principles.md) 的“各角色共用一套档位”一节（含取消“维护大包切 `read`”的旧补充），[ADR-030](030-harness-layer-scope.md) 第 2、9 条（同步更新 `AGENTS.md` 中的清单表述），并沿用 [ADR-031](031-one-process-per-execution.md) 第 2、10、12 条及 [ADR-034](034-retire-helpers.md) 的历史封存不改写规则；同步更新 [CONTEXT.md](../../CONTEXT.md) 中 `不用工具 / no tools` 的表述、`src/hey_my_buddy/buddy/roles/texts/router.txt` 及相关参考文档。
 
 ## 背景
 

@@ -115,12 +115,17 @@ it.each(["runtime", "source"] as const)("uses independent collapsed Radix disclo
 
 it.each([
   ["0.29.0", "0.30.0", true],
-  ["0.29.0-rc.2", "0.29.0-rc.10", true],
-  ["0.29.0-rc.1", "0.29.0", true],
+  ["0.72.0rc2", "0.72.0rc10", true],
+  ["0.72.0rc1", "0.72.0", true],
+  ["0.72.0.dev1", "0.72.0a1", true],
+  ["0.72.0", "0.72.0.post1", true],
+  ["0.72.0.post1.dev1", "0.72.0.post1", true],
+  ["0.72.0", "1!0.1.0", true],
   ["0.29.0", "0.29.0+metadata", false],
-  ["0.29.0", "0.29.0-rc.1", false],
+  ["0.72.0", "0.72.0rc1", false],
+  ["0.72.0", "0.72.0.dev1", false],
   ["0.29.0", "0.28.10", false],
-  ["0.29.0", "0.30.0-rc.01", false],
+  ["0.29.0", "0.30.0-rc.1", false],
   ["0.29.0", "0.30.0; install", false],
   ["0.29.0", null, false],
 ] as const)("compares the publication against the running version (%s, %s)", async (running, publishedVersion, show) => {

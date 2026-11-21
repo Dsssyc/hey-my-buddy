@@ -130,6 +130,9 @@ class StateRootACLTests(unittest.TestCase):
         self.reader, self.writer = FakeHandle(1), FakeHandle(2)
         self.api._open.side_effect = [self.reader, self.writer]
         self.api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
+        self.api.file_id.return_value = (1, 2, 3)
+        self.api.long_path.return_value = f"\\\\?\\{self.root}"
+        self.api.final_path.return_value = f"\\\\?\\{self.root}"
         self.api.close.side_effect = lambda handle: handle.Close()
 
         self.security = mock.Mock(TokenUser=1, SE_FILE_OBJECT=1, OWNER_SECURITY_INFORMATION=1,
@@ -284,6 +287,28 @@ class StateRootACLTests(unittest.TestCase):
         self.security.GetSecurityInfo.side_effect = [undecodable, self.descriptor(owner=USER), repaired]
         files.check_state_root(self.root, create=True)
         self.security.SetSecurityInfo.assert_called_once()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_reopened_different_file_id_is_refused_before_writing_acl(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=None)
+        self.api.file_id.side_effect = [(1, 2, 3), (1, 2, 9)]
+        with self.assertRaisesRegex(BoardError, 'changed while opening') as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertEqual(raised.exception.code, 'PRIVATE_PATH_UNSAFE')
+        self.assertEqual(raised.exception.details, {'path': str(self.root)})
+        self.security.SetSecurityInfo.assert_not_called()
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(self.writer.closed)
+
+    def test_reopened_outside_final_path_is_refused_before_writing_acl(self):
+        self.security.GetSecurityInfo.return_value = self.descriptor(aces=None)
+        self.api.final_path.side_effect = [f"\\\\?\\{self.root}", r"\\?\C:\outside\state"]
+        with self.assertRaisesRegex(BoardError, 'resolved outside') as raised:
+            files.check_state_root(self.root, create=True)
+        self.assertEqual(raised.exception.code, 'PRIVATE_PATH_UNSAFE')
+        self.assertEqual(raised.exception.details, {'path': str(self.root)})
+        self.security.SetSecurityInfo.assert_not_called()
         self.assertTrue(self.reader.closed)
         self.assertTrue(self.writer.closed)
 

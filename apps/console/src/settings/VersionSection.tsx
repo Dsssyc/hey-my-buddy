@@ -30,32 +30,42 @@ function Facts({ value }: { value: VersionFacts }) {
   </div>;
 }
 
-const numeric = /^(0|[1-9]\d*)$/;
-const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const pep440 = /^(?:([0-9]+)!)?([0-9]+(?:\.[0-9]+)*)(?:(a|b|rc)([0-9]+))?(?:\.post([0-9]+))?(?:\.dev([0-9]+))?(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?$/;
+const preOrder = { a: 0, b: 1, rc: 2 } as const;
 
 function versionParts(value: string) {
-  const match = semver.exec(value);
+  const match = pep440.exec(value);
   if (!match || match[0] !== value) return null;
-  const prerelease = match[4]?.split(".");
-  if (prerelease?.some(part => /^\d+$/.test(part) && !numeric.test(part))) return null;
-  return { core: match.slice(1, 4).map(BigInt), prerelease };
+  const release = match[2]!.split(".").map(BigInt);
+  while (release.length > 1 && release[release.length - 1] === 0n) release.pop();
+  const preKind = match[3] as keyof typeof preOrder | undefined;
+  const postNum = match[5] !== undefined ? BigInt(match[5]) : null;
+  const devNum = match[6] !== undefined ? BigInt(match[6]) : null;
+  const preRank = preKind === undefined ? (postNum === null && devNum !== null ? -1 : 3) : preOrder[preKind];
+  const preNum = match[4] !== undefined ? BigInt(match[4]) : 0n;
+  return {
+    epoch: BigInt(match[1] ?? "0"),
+    release,
+    tail: [
+      BigInt(preRank), preNum,
+      postNum === null ? 0n : 1n, postNum ?? 0n,
+      devNum === null ? 1n : 0n, devNum ?? 0n,
+    ] as const,
+  };
 }
 
 function isNewer(candidate: string, current: string | null) {
   const next = versionParts(candidate);
   const running = current && versionParts(current);
   if (!next || !running) return false;
-  for (const [index, part] of next.core.entries()) {
-    if (part !== running.core[index]) return part > running.core[index]!;
+  if (next.epoch !== running.epoch) return next.epoch > running.epoch;
+  const length = Math.max(next.release.length, running.release.length);
+  for (let index = 0; index < length; index++) {
+    const a = next.release[index] ?? 0n, b = running.release[index] ?? 0n;
+    if (a !== b) return a > b;
   }
-  const a = next.prerelease, b = running.prerelease;
-  if (!a || !b) return !a && !!b;
-  for (const [index, part] of a.entries()) {
-    const other = b[index];
-    if (other === undefined) return true;
-    if (part === other) continue;
-    if (numeric.test(part)) return numeric.test(other) && BigInt(part) > BigInt(other);
-    return numeric.test(other) || part > other;
+  for (let index = 0; index < next.tail.length; index++) {
+    if (next.tail[index] !== running.tail[index]) return next.tail[index]! > running.tail[index]!;
   }
   return false;
 }
