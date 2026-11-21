@@ -4,8 +4,6 @@
 
 ## 控制台
 
-**叫醒回合已经结束的 Host。** Host 一侧与 Lead 在 `await` 期间的新问题唤醒随 0.63.0 安装（[ADR-022](../decisions/022-expected-duration-and-graceful-stop.md)、[ADR-026](../decisions/026-delegation-authority.md) 2026-10-25 补充、[ADR-032](../decisions/032-host-interface-delegation-loop.md) 第 8 条），控制台微任务详情展示 `selectedAttempt.issues` 与未确认停止的 `finalizing` 状态随 [0.69.9](../acceptance/installs/0.69.9.md) 安装。剩余的是叫醒回合已经结束的 Host（2026-10-14 的 Host 门铃）：Codex 从 0.149.0 起有 `codex queue`（我们 10-14 在 CLI 与 app 上实测过），0.164.0 又让排进的消息能打断回合里的睡眠工具；缺的是我们的接法（谁排消息、Host 怎样知道自己会话的标识、等待进程能否活过回合），见[调研记录](../research/2026-10-26-codex-sleep-and-queue-wake.md)。
-
 **服务冷启动与升级启动的固定等待，在忙机器上可能太短。** `protocol/transport.py` 仍为冷启动设置 20 秒、首次安装时设置 300 秒的等待，`install/upgrade.py` 启动新服务的等待为 45 秒。尚未量清忙机器上的等待分布；先量出在哪一步到时，再决定是否调整时限及失败后的重试提示。
 
 ## 安装与存储
@@ -69,11 +67,7 @@
 
 **Codex 的审阅回合：冻结副本落在一个根目录有 `AGENTS.md` 的 Git 仓库之内时，线程创建不了。** 2026-10-12 验收 ADR-030 批次 4 时在真实的 Codex 0.162.1 上量到，没有调用模型，三种情形各跑一次：副本不在任何仓库里，线程建成，回执与回读都证实了只读的限制；副本在一个没有 `AGENTS.md` 的仓库里，也建成；副本在一个根目录有 `AGENTS.md` 的仓库里，Codex 拒绝 `thread/start`，说读不了 `AGENTS.md`（没有权限）。推断的原因是 Codex 经这个线程的权限档案去读项目的指令文件，而审阅的档案只放行冻结副本。副本写在状态目录之下，所以默认的安装不受影响；状态目录放在这样的仓库里（例如开发时把私有服务的状态放在检出里），或者用户的主目录本身是一个带 `AGENTS.md` 的仓库，审阅调用就全部失败。这不是批次 4 造成的，权限档案没有变。待定：让冻结副本自成一个项目的根，还是换个办法让 Codex 不去读副本之外的指令文件；动到审阅路径时（ADR-021 的 L6）一起定。
 
-**黑板把不知道的输入模态记成只收文本。** DSH CLI 的模型选项没有输入模态，`catalog.py` 却把空列表补成 `["text"]`；Claude Code CLI 直接声明文本，Codex CLI 缺少模态字段时也默认文本。Router 因此拿到未经原生声明支持的 `input:text` 能力。建议原生没有说明时记为未知，不发布相应的 `input:` 能力，再核对真实模态信息的来源。
-
 ## 委派与 Worker
-
-**执行层的内部规格还留着两个默认值。** `protocol/schemas.py` 的 `normalize_spec` 把未写的 `adapter` 当作 `dsh`、`expectedSeconds` 当作 1800 秒；`routing/decision.py` 也两次补上默认时长。当前 `request_select` 的请求不含必填时长，部分测试确实依赖这些默认值，不能直接删掉。需先明确内部提交与路由请求的必填字段、补齐调用者，再删除无用途的默认值。
 
 **已验收并回收检出的工作区引用仍会累积。** `refs/hey-my-buddy/` 下的 input、outputs 与 retained 引用保留到宏任务删除，仍会持有 Git 对象。验收与回收之后的读者见 [ADR-032 执行计划](adr032/execution-plan.md)的“验收和回收之后的引用读者”；保留到何时、读者能否改为不依赖 Git 对象，待开发者决定，调整时需核对存储形式。
 
@@ -99,7 +93,7 @@
 
 **harness 的声明还没有收成完整的单一来源。** `buddy/harnesses/registry.py` 已提供共用登记表与角色运行声明，仍有其他模块列出 harness 名字，`db.py` 的 CHECK 也写死四个名字，新增 harness 会改存储形式；中断恢复与存储归属的部分规则仍按名字分支。需要清点哪些是事实声明、哪些是两侧的行为边界，补齐能力的明确声明，运行与一致性检查共用；控制台名字与标志的核对也应使用实际前端解析与测试。
 
-**黑板与 buddy 两侧仍有越界引用。** 已登记的边界见 [ADR-025 清点](../acceptance/adr025/step5-cross-imports.tsv)。两侧共用的格式与小函数应归 `protocol/` 或根包，服务调用适配器行为的接口则牵涉进程归属，需要单独决定；现有[搬法方案](adr021/l14-cross-imports-plan.md)的旧计数不能当作当前数量。实施前重列读者与责任，核对跨模块使用的下划线接口及状态目录解析入口，再用检查守住选定的边界。
+**黑板与 buddy 两侧仍有 17 处行为边界引用。** 0.74.1 已将双方共用的格式、位置扫描、选择绑定与能力辅助收拢到 `protocol/` 与根包（`protocol/` 与根包共享模块对两侧均为 0 引用），并由 `tests/python/cli/test_repository_hygiene.py` 的纯 AST 检查按精确集合与计数守住剩余 17 处跨侧引用（`blackboard -> buddy` 12 处：适配器/发现/账户探针/会话记录调用；`buddy -> blackboard` 5 处：`workspace` 模块调用），同时拒绝新增或动态导入；[ADR-025 清点](../acceptance/adr025/step5-cross-imports.tsv) 仅作历史基线留存。剩余 17 处牵涉服务与执行进程的行为归属与工作区边界，待后续架构批次单独处理。
 
 **Claude Code CLI 模型发现的历史停止超时还缺当前复测。** 2.1.284 上曾出现约半数发现因无法确认进程组消失而作废的现象，原因未查明。当前已采用会话与后代的停止证据，旧失败率不能代表现在；若再次出现发现不可用，先记录剩余进程的完整身份、原生版本与停止证据，再判断原因，不直接放宽停止条件。
 

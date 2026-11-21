@@ -26,7 +26,7 @@ While the version is 0.x the source keeps neither defensive redundancy nor compa
   - `protocol/`: the interface between the two sides: C-Two contracts, transport, client and the fact formats that cross the boundary.
   - `cli/`: the public CLI and the check runner; `console/`: the console server and its built assets; `install/`: launcher, runtime materialization, install and upgrade.
   - `errors.py`, `home.py`, `locking.py`, `private_dirs.py`: base modules both sides use.
-  - Imports that still cross the two sides are registered in `docs/acceptance/adr025/step5-cross-imports.tsv`. ADR-025 ended with 56 of them instead of removing them; code both sides need belongs under `protocol/` or the root package (ADR-025 decision 12).
+  - Code both sides need belongs under `protocol/` or the root package ([ADR-025](docs/decisions/025-harness-run-module.md) decision 12). `tests/python/cli/test_repository_hygiene.py` enforces via AST that `protocol/` and shared root modules never import `blackboard/` or `buddy/`, and pins the exact remaining cross-side behavior imports (no new ones may be added); `docs/acceptance/adr025/step5-cross-imports.tsv` is retained only as the historical ADR-025 step-5 baseline.
 - `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
 - `tests/python/`: Python and cross-component verification, mirroring the package layout. Every test directory is a package; a test file outside one fails the check suite.
 - `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence; `docs/research/`: what was looked at before a decision.
