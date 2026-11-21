@@ -3,7 +3,7 @@ export default {
   access: {
     title: "访问", allowAuthorized: "只允许已授权的浏览器",
     description: "开启后，新浏览器须经 hey-my-buddy console 给出的链接授权才能打开控制台。本机有其他账户，或端口转发至其他机器时应开启。",
-    sessionData: "会话可能包含命令输入输出等敏感内容，仅在本机控制台显示，不进入备份或导出，随所属宏任务删除。",
+    sessionData: "会话可能包含命令输入输出等敏感内容，默认仅在本机控制台显示；同一微任务重建会话续接（含跨提供方切换）时，Worker 可按需读取先前尝试的非推理记录，内容会流向当前执行的模型提供方。会话不进入备份或导出，不提供给路由、维护与画像面，随所属宏任务删除。",
     browsers: "已授权的浏览器", current: "当前", revoke: "撤销", revokeBrowser: "撤销浏览器 {{id}}", revokeCurrent: "撤销当前浏览器",
     confirmTitle: "撤销当前浏览器？", confirmBody: "撤销后，此浏览器无法继续操作控制台；运行 hey-my-buddy console 并使用其链接可重新授权。", cancel: "取消", confirm: "确认撤销",
     enabled: "已开启浏览器授权，当前浏览器已授权。", disabled: "已关闭浏览器授权，原有授权均已撤销。", revoked: "已撤销该浏览器的授权。", loggedOut: "已撤销当前浏览器；运行 hey-my-buddy console 重新授权。",
