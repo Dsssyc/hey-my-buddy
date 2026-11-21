@@ -62,6 +62,23 @@ def _tool_call_id(frame: dict) -> str | None:
     return call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
 
 
+def carries_tool_marker(value) -> bool:
+    """Native tool parts count even without ids or inside child envelopes."""
+    if isinstance(value, dict):
+        kinds = (value.get('type', ''), value.get('kind', ''))
+        if (any(isinstance(kind, str) and kind.startswith(
+                ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
+                or value.get('toolCallId') is not None or value.get('role') == 'tool'
+                or any(key in value and value[key] is not None
+                       and not (type(value[key]) is int and value[key] == 0)
+                       for key in ('toolCalls', 'toolCallCount'))):
+            return True
+        return any(carries_tool_marker(item) for item in value.values())
+    if isinstance(value, list):
+        return any(carries_tool_marker(item) for item in value)
+    return False
+
+
 class ZcodeToolFacts:
     """One no-tool call's tool-fact projection across its correction sessions.
 
@@ -419,6 +436,49 @@ class ZcodeToolFacts:
 
         if method != "session/event" or not isinstance(payload, dict):
             return False
+        def allowed_tool(tool_name: str | None) -> bool:
+            return isinstance(tool_name, str) and (
+                tool_name in self.session_tools
+                or read and classify_tool_name(HARNESS, tool_name) in PERMISSION_TOOL_CATEGORIES["read"]
+            )
+
+        if kind == "session.updated":
+            if root in self._closed:
+                return False
+            counts = [record[field] for record in (params, payload) if isinstance(record, dict)
+                      for field in ("toolCallCount", "toolCalls") if field in record]
+            if not counts:
+                return False
+            allowed_keys = {
+                key for key in names if key[:2] == root and allowed_tool(self._names.get(key))
+            } | {
+                key for key, streamed_name in self._streamed_names.items()
+                if key[:2] == root and allowed_tool(streamed_name)
+            }
+            rest_params = {k: v for k, v in params.items() if k not in ("payload", "toolCallCount", "toolCalls")}
+            rest_payload = {k: v for k, v in payload.items() if k not in ("toolCallCount", "toolCalls")}
+            return (all(type(count) is int and 0 <= count <= len(allowed_keys) for count in counts)
+                    and not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload))
+        if kind == "streamRecovery.updated":
+            if root in self._closed or payload.get("kind") not in ("tool_result", "tool_error"):
+                return False
+            call_id = _tool_call_id(payload)
+            if call_id is None or (*root, call_id) not in names:
+                return False
+            known = self._names.get((*root, call_id))
+            raw_name = payload.get("toolName")
+            if known is None or (raw_name is not None and raw_name != known) or not allowed_tool(known):
+                return False
+            committed = payload.get("committedToolCallIds")
+            if committed is not None and not (
+                    isinstance(committed, list)
+                    and all(isinstance(cid, str) and (*root, cid) in names
+                            and allowed_tool(self._names.get((*root, cid))) for cid in committed)):
+                return False
+            rest_params = {k: v for k, v in params.items() if k != "payload"}
+            rest_payload = {k: v for k, v in payload.items()
+                            if k not in ("kind", "toolCallId", "toolName", "committedToolCallIds")}
+            return not carries_tool_marker(rest_params) and not carries_tool_marker(rest_payload)
         if kind == "model.streaming" and payload.get("kind") in _STREAMED_TOOL_KINDS:
             if root in self._closed:
                 return False

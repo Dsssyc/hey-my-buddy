@@ -53,12 +53,13 @@ NATIVE_EVENT_TYPES = frozenset({
     "message.upserted", "message.removed", "part.started", "part.delta",
     "part.upserted", "part.removed", "model.streaming", "permission.requested",
     "userInput.requested", "session.created", "session.resumed", "session.updated",
-    "session.titleUpdated", "session.closed",
+    "session.titleUpdated", "session.closed", "streamRecovery.updated",
 })
 NATIVE_NOTIFICATION_METHODS = frozenset({
     "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
     "session/event", "session/lifecycle/changed", "state.updated",
-    "computer-use/operation-event", "v4/telemetry/event", "v4/conversation/frame",
+    "computer-use/operation-event", "v4/telemetry/event", "v4/telemetry/model-request-metrics",
+    "v4/conversation/frame", "v4/conversation/contextCompositionChanged",
 })
 
 

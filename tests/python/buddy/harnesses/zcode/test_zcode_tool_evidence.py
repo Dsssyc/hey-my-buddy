@@ -185,13 +185,16 @@ for line in sys.stdin:
                 event('model.streaming', seq + 3, {'kind': 'tool_input_end', 'toolCallId': call_id})
                 event('model.streaming', seq + 4, {'kind': 'tool_call', **tool, 'input': args, 'done': False})
                 root = {'sessionId': f's-{session}', 'turnId': f't-{session}'}
+                send({'method': 'v4/telemetry/model-request-metrics', 'params': {**root, 'kind': 'model.request.metrics'}})
+                send({'method': 'v4/conversation/contextCompositionChanged', 'params': {**root}})
+                event('session.updated', seq + 5, {'stopReason': 'tool-calls', 'toolCallCount': 1})
                 for index, phase in enumerate(('scheduled', 'started')):
                     send({'method': 'computer-use/operation-event', 'params': {
                         **root, **tool, 'kind': 'tool-' + phase, 'sequenceNumber': seq + index}})
                 for index, phase in enumerate(('scheduled', 'started', 'progress')):
                     send({'method': 'v4/telemetry/event', 'params': {
                         **root, **tool, 'kind': 'tool.lifecycle', 'phase': phase, 'eventSeq': seq + index}})
-                event('tool.updated', seq + 5, {'kind': 'scheduled', **tool, 'inputOmitted': True})
+                event('tool.updated', seq + 6, {'kind': 'scheduled', **tool, 'inputOmitted': True})
                 if snapshot_fault == 'permission':
                     send({'method': 'v4/telemetry/event', 'params': {
                         **root, **tool, 'kind': 'permission.lifecycle', 'phase': 'requested',
@@ -200,9 +203,11 @@ for line in sys.stdin:
                 send({'method': 'v4/telemetry/event', 'params': {
                     **root, **tool, 'kind': 'tool.lifecycle', 'phase': 'completed', 'eventSeq': seq + 4}})
                 prefix = 'MCP tool returned an error:' + chr(10) if reply['isError'] else ''
-                event('tool.updated', seq + 6, {'kind': 'result', 'toolCallId': call_id,
+                event('tool.updated', seq + 7, {'kind': 'result', 'toolCallId': call_id,
                       'result': {'success': True, 'content': prefix + reply['content'][0]['text']}})
-                seq += 6
+                event('streamRecovery.updated', seq + 8, {
+                    'kind': 'tool_result', **tool, 'committedToolCallIds': [call_id]})
+                seq += 8
             send({'method': 'v4/telemetry/event', 'params': {
                 **root, 'kind': 'turn.terminal', 'eventSeq': seq,
                 'toolCallCount': 3 if snapshot_fault == 'count' else 2}})
@@ -429,6 +434,49 @@ class ProjectionTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertTrue(_carries_tool_marker({"toolCallCount": bad}))
                 self.assertTrue(_carries_tool_marker({"toolCalls": bad}))
+
+    def test_session_updated_and_stream_recovery_frames_require_known_allowed_calls(self):
+        name = "mcp__hey_my_buddy_snapshot__query_task"
+        facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir, session_tools=(name,))
+        facts.add_root("s-1", "t-1")
+        facts.observe(frame({"kind": "tool_input_start", "toolCallId": "q1", "toolName": name},
+                            kind="model.streaming"))
+        # session.updated before tool.updated scheduled is bounded by streamed allowed calls.
+        self.assertTrue(facts.explains_tool_frame(
+            frame({"stopReason": "tool-calls", "toolCallCount": 1}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"stopReason": "tool-calls", "toolCallCount": 2}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"toolCallCount": 1, "toolCallId": "smuggled"}, kind="session.updated"), read=False))
+        # streamRecovery.updated requires a scheduled allowed call and matching committed ids.
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"kind": "tool_result", "toolCallId": "q1", "toolName": name},
+                  kind="streamRecovery.updated"), read=False))
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "q1", "toolName": name}))
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "edit1", "toolName": "Edit"}))
+        for recovery_kind in ("tool_result", "tool_error"):
+            self.assertTrue(facts.explains_tool_frame(
+                frame({"kind": recovery_kind, "toolCallId": "q1", "toolName": name,
+                       "committedToolCallIds": ["q1"]}, kind="streamRecovery.updated"), read=False))
+            self.assertTrue(facts.explains_tool_frame(
+                frame({"kind": recovery_kind, "toolCallId": "q1", "toolName": name,
+                       "committedToolCallIds": ["q1"]}, kind="streamRecovery.updated"), read=True))
+        for bad_payload, read in (
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": "Read"}, False),
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": name, "committedToolCallIds": ["unknown"]}, False),
+            ({"kind": "tool_result", "toolCallId": "edit1", "toolName": "Edit"}, True),
+            ({"kind": "tool_result", "toolCallId": "q1", "toolName": name, "extra": {"role": "tool"}}, False),
+            ({"kind": "other", "toolCallId": "q1", "toolName": name}, False),
+        ):
+            with self.subTest(bad_payload=bad_payload, read=read):
+                self.assertFalse(facts.explains_tool_frame(
+                    frame(bad_payload, kind="streamRecovery.updated"), read=read))
+        facts.observe(frame({"resultType": "success"}, kind="turn.completed"))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"toolCallCount": 1}, kind="session.updated"), read=False))
+        self.assertFalse(facts.explains_tool_frame(
+            frame({"kind": "tool_result", "toolCallId": "q1", "toolName": name},
+                  kind="streamRecovery.updated"), read=False))
 
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
         for payload in ({'kind': 'started', 'toolCallId': 'foreign'},

@@ -116,7 +116,7 @@ from .protocol import (
     provider_rejection,
     native_turn_failure,
 )
-from .tool_evidence import ZcodeToolFacts
+from .tool_evidence import ZcodeToolFacts, carries_tool_marker as _carries_tool_marker
 from .session_content import ZcodeSessionProjector
 from ..session_record import SessionRecord
 from ..runtime_selection import environment_for
@@ -501,23 +501,6 @@ _PRE_ADMITTED_KINDS = NATIVE_EVENT_TYPES & {
 _ADMITTED_KINDS = NATIVE_EVENT_TYPES
 
 
-def _carries_tool_marker(value) -> bool:
-    """Native tool parts count even without ids or inside child envelopes."""
-    if isinstance(value, dict):
-        kinds = (value.get('type', ''), value.get('kind', ''))
-        if (any(isinstance(kind, str) and kind.startswith(
-                ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
-                or value.get('toolCallId') is not None or value.get('role') == 'tool'
-                or any(key in value and value[key] is not None
-                       and not (type(value[key]) is int and value[key] == 0)
-                       for key in ('toolCalls', 'toolCallCount'))):
-            return True
-        return any(_carries_tool_marker(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_carries_tool_marker(item) for item in value)
-    return False
-
-
 class _Classifier:
     """Normalize unknown legal events and tool markers into retained facts.
 
@@ -585,7 +568,8 @@ class NoToolProtocol:
                 raise NativeError("invalid-protocol", "native lifecycle notification has no identity parameters")
             return
         if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples',
-                      'process/resourceSample', 'session/lifecycle/changed'):
+                      'process/resourceSample', 'session/lifecycle/changed',
+                      'v4/conversation/contextCompositionChanged', 'v4/telemetry/model-request-metrics'):
             return
         if method == "session/event":
             kind = params.get("type")
