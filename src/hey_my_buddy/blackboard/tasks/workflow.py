@@ -35,6 +35,7 @@ from typing import Any
 from ...paths import is_absolute_path, native_path
 from ...protocol import schemas
 from ...protocol.capabilities import PERMISSION_LEVELS, require_permission
+from ...protocol.harness_declarations import HARNESS_DECLARATIONS, harness_declaration
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -4690,7 +4691,12 @@ class WorkflowCoordinator:
                 "SELECT a.task_id,a.adapter,t.input_json FROM attempts a JOIN workflow_turns t"
                 " ON t.attempt_id=a.attempt_id WHERE a.attempt_id=?", (attempt_id,),
             ).fetchone()
-        if row is None or row["adapter"] not in ("codex", "dsh"):
+        if row is None:
+            return {}
+        # Interrupted native facts exist only for harnesses that declare an
+        # interrupted resume; the command and decision carriers never do.
+        declaration = HARNESS_DECLARATIONS.get(row["adapter"])
+        if declaration is None or not declaration.interrupted_resume:
             return {}
         from ...private_dirs import attempt_root, native_root
         from ...private_files import open_read
@@ -4845,6 +4851,9 @@ class WorkflowCoordinator:
         manifest = self._run_manifest(connection, run_row)
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_count)
         buddy = self._buddy(run_row)
+        # The one read of the single static declaration the resume judgments
+        # below consume; a run without a buddy has no declaration either.
+        declaration = harness_declaration(buddy["harness"]) if buddy is not None else None
         native = self._previous_codex_checkpoint(connection, previous)
         prior = (connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                     (previous['attempt_id'],)).fetchone() if previous is not None else None)
@@ -4868,7 +4877,8 @@ class WorkflowCoordinator:
                 and checkpoint.get("nativeTurnStatus") in ("completed", "interrupted")
                 and checkpoint.get("bindingSaved") is True
                 and prior_result.get("shutdownConfirmed") is True)
-        elif previous is not None and previous["state"] == "interrupted" and buddy and buddy["harness"] == "dsh":
+        elif (previous is not None and previous["state"] == "interrupted" and declaration is not None
+              and declaration.interrupted_resume):
             native_completed = (prior_native_session.get("resumable") is True
                                 and prior_result.get("shutdownConfirmed") is True)
         harness_changed = False
@@ -4885,10 +4895,8 @@ class WorkflowCoordinator:
                 old_version = history[-1].get('harness', {}).get('version') if history else None
                 harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
                 native_session = (result.get('result') or result).get('nativeSession') or {}
-                native_home_changed = (buddy['harness'] == 'codex'
-                                       and native_session.get('storageOwner') != 'harness-user-store'
-                                       or buddy['harness'] == 'dsh'
-                                       and native_session.get('storageOwner') != 'hey-my-buddy-micro-task')
+                native_home_changed = (declaration.storage_mismatch_resume_reason is not None
+                                       and native_session.get('storageOwner') != declaration.session_storage_owner)
                 permission_reconstruction = (executor.native_resume
                                              and previous["access"] != execution_workspace["access"]
                                              and not executor.native_resume_permission_change)
@@ -4921,8 +4929,7 @@ class WorkflowCoordinator:
         elif harness_changed:
             context['resumeReason'] = 'harness-version-changed'
         elif native_home_changed:
-            context['resumeReason'] = ('native-storage-changed' if buddy['harness'] == 'codex'
-                                       else 'private-native-home-required')
+            context['resumeReason'] = declaration.storage_mismatch_resume_reason
         elif permission_reconstruction:
             context['resumeReason'] = 'permission-level-changed'
         if context.get('lastAssistantMessage') or context.get("interruptedTurn"):

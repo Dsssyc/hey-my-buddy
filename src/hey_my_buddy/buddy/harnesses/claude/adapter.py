@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ....errors import BoardError
 from ....protocol.capabilities import adapter_capabilities
+from ....protocol.harness_declarations import harness_declaration
 from .config import ClaudeUnavailable, cli_command
 from .native_run import validate_turn_provenance
 
@@ -33,13 +34,14 @@ class ClaudeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "claude"
-    native_resume = False
-    interrupted_resume = False
-    # A correction starts a fresh native session; the correction input
-    # reassembles the full role text, query entry and previous answer.
-    same_session_corrections = False
-    native_resume_permission_change = False
-    model_discovery = True
+    # The shared static facts are read from the one protocol declaration, so
+    # this description carries no second copy that can drift.
+    declaration = harness_declaration(name)
+    native_resume = declaration.native_resume
+    interrupted_resume = declaration.interrupted_resume
+    same_session_corrections = declaration.same_session_corrections
+    native_resume_permission_change = declaration.native_resume_permission_change
+    model_discovery = declaration.model_discovery
 
     @property
     def capabilities(self):

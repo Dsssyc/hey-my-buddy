@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .capabilities import InputLimit
+from .harness_declarations import InputLimit
 
 #: The units a declaration can be measured in. Unicode scalars count each code
 #: point of the text — a non-BMP character is one, a combining mark is one of

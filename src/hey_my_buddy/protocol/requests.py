@@ -14,6 +14,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationErr
 
 from ..errors import BoardError
 from ..paths import is_absolute_path
+from .harness_names import HARNESS_NAMES
 
 MAX_TEXT_BYTES = 1024 * 1024
 MAX_NOTE_BYTES = 10000
@@ -94,7 +95,7 @@ RelativePath = Annotated[str, AfterValidator(_relative_path)]
 BuddyName = Annotated[str, AfterValidator(_buddy)]
 Access = Literal["read", "write", "full"]
 Checkout = Literal["worktree", "existing", "none"]
-Harness = Literal["codex", "claude", "zcode", "dsh"]
+Harness = Literal[*HARNESS_NAMES]
 ExpectedSeconds = Annotated[int, Field(strict=True, ge=1, le=86400)]
 Paths = Annotated[list[RelativePath], Field(max_length=256)]
 

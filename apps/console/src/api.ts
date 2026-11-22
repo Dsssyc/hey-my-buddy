@@ -141,7 +141,7 @@ export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
 import type { HarnessHealth, ProviderCooling } from "./types";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
-const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
+export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
 const providersSchema = z.array(providerCoolingSchema);
 const harnessRowsSchema = z.array(z.unknown());

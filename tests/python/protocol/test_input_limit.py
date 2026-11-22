@@ -12,8 +12,9 @@ import json
 import unittest
 
 from hey_my_buddy.protocol.capabilities import (
-    INPUT_LIMITS, UNKNOWN_INPUT_LIMIT_NOTE, declared_input_limit, select_input_limit, version_matches,
+    INPUT_LIMITS, declared_input_limit, select_input_limit, version_matches,
 )
+from hey_my_buddy.protocol.harness_declarations import UNKNOWN_INPUT_LIMIT_NOTE
 from hey_my_buddy.protocol.harness_names import HARNESS_NAMES
 from hey_my_buddy.protocol.input_limit import (
     MEASUREMENT_UNITS, PROMPT_PARTS, UTF8_BYTES, UNICODE_SCALARS, PromptParts, check_prompt_input,

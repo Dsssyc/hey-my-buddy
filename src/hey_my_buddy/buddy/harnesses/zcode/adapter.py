@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from ....protocol.capabilities import adapter_capabilities
+from ....protocol.harness_declarations import harness_declaration
 from . import native_run
 from .config import cli_command, provider_paths
 from .protocol import NativeError
@@ -14,13 +15,14 @@ class ZcodeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "zcode"
-    native_resume = True
-    interrupted_resume = False
-    # A correction starts a fresh native session; the correction input
-    # reassembles the full role text, query entry and previous answer.
-    same_session_corrections = False
-    native_resume_permission_change = True
-    model_discovery = True
+    # The shared static facts are read from the one protocol declaration, so
+    # this description carries no second copy that can drift.
+    declaration = harness_declaration(name)
+    native_resume = declaration.native_resume
+    interrupted_resume = declaration.interrupted_resume
+    same_session_corrections = declaration.same_session_corrections
+    native_resume_permission_change = declaration.native_resume_permission_change
+    model_discovery = declaration.model_discovery
 
     @property
     def capabilities(self):

@@ -2,16 +2,19 @@
 
 Each check confirms one part of a harness integration from the declarations and
 structures the source already carries: run-seam and adapter registration, the
+single static declaration table and the per-topic tables derived from it, the
 capability surface, the run contract's four tool scopes as per-harness
 declarations, the interfaces each role call condition needs, inquiry delivery,
 the catalog and health entry points, the configuration variables that reach
 every child environment, the stored health form, the protocol name lists and
-the console's marks. No harness runs and no product code changes. Per ADR-023
-the harnesses differ by declaration: a check confirms that every harness
-declares each item explicitly, that a declared support has the interfaces its
-call path consumes, and that name lists agree in both directions — never that
-every harness supports everything. What this file cannot verify is recorded in
-the integration reference's closing section.
+the console's buddy-page order. No harness runs and no product code changes.
+Per ADR-023 the harnesses differ by declaration: a check confirms that every
+harness declares each item explicitly, that a declared support has the
+interfaces its call path consumes, and that name lists agree in both
+directions — never that every harness supports everything. What this file
+cannot verify is recorded in the integration reference's closing section; the
+console's own rendered mark and name are verified by the console suite
+(apps/console/src/buddies/harnesses.test.tsx).
 """
 import ast
 import inspect
@@ -37,7 +40,11 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_dirs import ADAPTERS as PRIVATE_STATE_ADAPTERS
-from hey_my_buddy.protocol.capabilities import ADAPTER_CAPABILITIES, PERMISSION_LEVELS, adapter_capabilities
+from hey_my_buddy.protocol.capabilities import (
+    ADAPTER_CAPABILITIES, INPUT_LIMITS, MODEL_START_UNSEEN, PERMISSION_LEVELS,
+    PERMISSIONS_VERIFIED_VERSIONS, ROUTER_SNAPSHOT_QUERY_HARNESSES, adapter_capabilities,
+)
+from hey_my_buddy.protocol.harness_declarations import HARNESS_DECLARATIONS
 from hey_my_buddy.protocol.schemas import CODING_HARNESSES
 from hey_my_buddy.protocol.tool_evidence import ACP_CATEGORIES, NATIVE_TOOL_CATEGORIES
 
@@ -45,15 +52,11 @@ ROOT = Path(__file__).resolve().parents[4]
 DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
 ENFORCEMENTS = ("enforced", "convention")
 PERMISSIONS = ("none", "web", "read", "write", "full")
+STORAGE_OWNERS = ("harness-user-store", "hey-my-buddy-micro-task", "none")
+SESSION_TOOL_CARRIERS = ("dynamic-tools", "stdio-mcp")
 #: The surface every coding harness shares; `native-session` is deliberately
 #: not here, because it tracks each adapter's own native-resume declaration.
 SHARED_CAPABILITIES = ("inquiry", "workspace", "cancel", "artifacts", "deadline")
-#: Each harness's own configuration-directory variable, or None when it keeps
-#: its configuration under the shared home directories only. The mapping is
-#: maintained here because the product carries no declaration for it; every
-#: child-environment builder below must pass the variable through.
-CONFIGURATION_DIRECTORY_VARIABLES = {"codex": "CODEX_HOME", "claude": "CLAUDE_CONFIG_DIR",
-                                     "zcode": "ZCODE_DATA_BASE_DIR", "dsh": "DSH_HOME"}
 #: The native request controls the role controller may ask a run module about
 #: (buddy/roles/controller.py); a module declares the subset it supports.
 REQUEST_CONTROLS = ("resume_checkpoint",)
@@ -126,58 +129,49 @@ def _string_collections(source):
             yield {item.value for item in node.elts}
 
 
-def _balanced_block(source, anchor, opener, closer):
-    """The first balanced block after one declaration anchor, whatever the layout."""
-    index = source.find(anchor)
-    if index < 0:
-        raise AssertionError(f"{anchor!r} is not declared in the console source")
-    start = source.find(opener, index)
-    if start < 0:
-        raise AssertionError(f"{anchor!r} has no {opener} initializer")
-    depth = 0
-    for position in range(start, len(source)):
-        character = source[position]
-        if character == opener:
-            depth += 1
-        elif character == closer:
-            depth -= 1
-            if depth == 0:
-                return source[start + 1:position]
-    raise AssertionError(f"{anchor!r} has an unbalanced initializer")
-
-
-def _split_entries(block):
-    """Comma-separated entries of one flat block, ignoring nested content and strings."""
-    entries, current, depth, quote = [], [], 0, None
-    for character in block:
-        if quote:
-            current.append(character)
-            if character == quote:
-                quote = None
-            continue
-        if character in "\"'":
-            quote = character
-            current.append(character)
-        elif character in "{[(":
-            depth += 1
-            current.append(character)
-        elif character in "}])":
-            depth -= 1
-            current.append(character)
-        elif character == "," and depth == 0:
-            entries.append("".join(current))
-            current = []
-        else:
-            current.append(character)
-    entries.append("".join(current))
-    return [entry.strip() for entry in entries if entry.strip()]
-
-
-def _identifier(value):
-    return value.strip() if value else None
-
-
 class HarnessConformanceTests(unittest.TestCase):
+    def test_the_single_declaration_table_covers_every_harness_and_derives_every_table(self):
+        """The one static declaration per harness, and every per-topic table read from it."""
+        self.assertEqual(set(HARNESS_DECLARATIONS), set(HARNESS_NAMES))
+        self.assertEqual(set(ADAPTER_CAPABILITIES), set(HARNESS_NAMES) | {"command", "decision"})
+        for name in HARNESS_NAMES:
+            with self.subTest(harness=name):
+                declaration = HARNESS_DECLARATIONS[name]
+                instance = built_in_adapters()[name]
+                self.assertEqual(declaration.name, name)
+                self.assertIs(instance.declaration, declaration)
+                for flag in ("native_resume", "interrupted_resume", "native_resume_permission_change",
+                             "same_session_corrections", "model_discovery"):
+                    self.assertIs(getattr(instance, flag), getattr(declaration, flag),
+                                  f"{name}'s adapter {flag} is not its declaration's")
+                self.assertEqual(ADAPTER_CAPABILITIES[name], declaration.capabilities)
+                self.assertEqual(PERMISSION_LEVELS[name], dict(declaration.permission_levels))
+                self.assertEqual(name in ROUTER_SNAPSHOT_QUERY_HARNESSES, declaration.router_snapshot_query)
+                self.assertEqual(PERMISSIONS_VERIFIED_VERSIONS.get(name), declaration.permissions_verified_version)
+                self.assertIs(INPUT_LIMITS.get(name), declaration.input_limit)
+                self.assertIs(MODEL_START_UNSEEN.get(name), declaration.model_start_unseen)
+                self.assertEqual(EXISTING_CAPABILITIES[name].inquiry_delivery, declaration.inquiry_delivery)
+
+    def test_every_declaration_field_is_well_formed(self):
+        for name in HARNESS_NAMES:
+            with self.subTest(harness=name):
+                declaration = HARNESS_DECLARATIONS[name]
+                self.assertIn(declaration.inquiry_delivery, DELIVERY_MODES)
+                self.assertTrue(declaration.config_dir_env_var,
+                                f"{name} declares no configuration-directory variable")
+                self.assertIn(declaration.session_storage_owner, STORAGE_OWNERS)
+                self.assertIn(declaration.session_tool_carrier, SESSION_TOOL_CARRIERS)
+                self.assertLessEqual(set(declaration.permission_levels), set(PERMISSIONS))
+                if declaration.interrupted_resume:
+                    self.assertTrue(declaration.native_resume,
+                                    f"{name} declares interrupted resume without native resume")
+                if declaration.web_allows_mcp:
+                    self.assertIn("web", declaration.permission_levels,
+                                  f"{name} allows web MCP without a declared web permission")
+                if declaration.storage_mismatch_resume_reason is not None:
+                    self.assertNotEqual(declaration.session_storage_owner, "none",
+                                        "a harness without native sessions declares no storage mismatch")
+
     def test_the_run_seam_registry_covers_exactly_the_harness_names(self):
         self.assertEqual(set(RUN_SEAMS), set(HARNESS_NAMES))
         for name in HARNESS_NAMES:
@@ -346,8 +340,9 @@ class HarnessConformanceTests(unittest.TestCase):
 
     def test_every_harness_configuration_variable_reaches_every_child_environment(self):
         """A harness's own configuration directory travels through every environment builder."""
-        self.assertEqual(set(CONFIGURATION_DIRECTORY_VARIABLES), set(HARNESS_NAMES))
-        variables = [value for value in CONFIGURATION_DIRECTORY_VARIABLES.values() if value is not None]
+        variables = [declaration.config_dir_env_var for declaration in HARNESS_DECLARATIONS.values()]
+        self.assertEqual(len(variables), len(set(variables)),
+                         "two harnesses declare the same configuration-directory variable")
         parent = {**{variable: "/fixture/daily" for variable in variables},
                   "HMB_AGENT_CREDENTIAL_FILE": "/fixture/credential.json", "PATH": "/usr/bin"}
         native = native_environment(dict(parent))
@@ -391,35 +386,21 @@ class HarnessConformanceTests(unittest.TestCase):
                                            {variables[0]: "/outside/the/fixture"})
             self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", fixture)
 
-    def test_the_console_lists_a_mark_and_a_name_for_every_harness(self):
-        """A static read of the console sources; it proves the records exist, not what renders.
+    def test_the_console_buddy_page_order_lists_every_harness_once(self):
+        """The cross-language inventory; the rendered mark and name are the console suite's checks.
 
-        The console is being reworked; once it settles, a frontend test should
-        assert the rendered name and mark instead of this source-level check.
+        The buddy page's fixed display order must hold every harness exactly
+        once, and the console suite that renders each entry must exist beside
+        the component it renders.
         """
-        logo = (ROOT / "apps/console/src/buddies/HarnessLogo.tsx").read_text(encoding="utf-8")
-        names = (ROOT / "apps/console/src/buddy-display.ts").read_text(encoding="utf-8")
         order = (ROOT / "apps/console/src/api.ts").read_text(encoding="utf-8")
-        imported = set(re.findall(r"import\s+([A-Za-z_$][\w$]*)\s+from", logo))
-        marks, display = {}, {}
-        for entry in _split_entries(_balanced_block(logo, "const logos", "{", "}")):
-            key, separator, value = entry.partition(":")
-            marks[key.strip().strip("\"'")] = _identifier(value) if separator else key.strip().strip("\"'")
-        for entry in _split_entries(_balanced_block(names, "const HARNESS_NAMES", "{", "}")):
-            key, separator, value = entry.partition(":")
-            self.assertTrue(separator, f"the display-name record has an entry without a value: {entry}")
-            display[key.strip().strip("\"'")] = value.strip().strip("\"'")
-        ranking = [value.strip("\"'") for value in
-                   _split_entries(_balanced_block(order, "const HARNESS_ORDER", "[", "]"))]
+        declared = re.search(r"HARNESS_ORDER\s*=\s*\[([^\]]*)\]", order)
+        self.assertIsNotNone(declared, "the console no longer declares HARNESS_ORDER")
+        ranking = re.findall(r"[\"']([^\"']+)[\"']", declared.group(1))
         self.assertEqual(len(ranking), len(set(ranking)), "the buddy page order lists a harness twice")
         self.assertEqual(set(ranking), set(HARNESS_NAMES))
-        for name in HARNESS_NAMES:
-            with self.subTest(harness=name):
-                self.assertIn(name, marks, f"the console logo record has no mark for {name}")
-                self.assertIn(marks[name], imported,
-                              f"the logo record's mark for {name} is not an imported asset")
-                self.assertIn(name, display, f"the console display-name record has no name for {name}")
-                self.assertTrue(display[name], f"the display name for {name} is empty")
+        self.assertTrue((ROOT / "apps/console/src/buddies/harnesses.test.tsx").is_file(),
+                        "the console harness rendering test is missing")
 
 
 if __name__ == "__main__":
