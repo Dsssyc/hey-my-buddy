@@ -726,20 +726,15 @@ class BuddyTests(unittest.TestCase):
                         RunBuddy(**requested)
 
     def test_unknown_selection_readback_continues_with_retained_facts(self):
-        unknown = []
         connection = mock.Mock()
         connection.call.side_effect = [{}, {}]
         result = configure_session(connection, {"session": {"sessionId": "native-default"}},
-                                   {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
-                                   note_unknown=unknown.append)
+                                   {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
         self.assertEqual(connection.call.call_count, 2)
         self.assertEqual(result, {"provider": None, "model": None, "effort": None})
-        self.assertEqual(unknown, ["buddy-catalog-unrecognized",
-                                   "buddy-selection-unrecognized"])
-        # The unconfirmed buddy readback names its closed shared fact, never an
-        # unknown event.
         self.assertEqual([call.args[0] for call in connection.on_unconfirmed.call_args_list],
-                         ["buddy-readback"])
+                         ["model-catalog", "buddy-readback"])
+        connection.on_unknown.assert_not_called()
 
     def test_identified_selection_mismatch_is_rejected_even_with_other_unknown_fields(self):
         requested = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
@@ -765,18 +760,21 @@ class BuddyTests(unittest.TestCase):
     def test_unrecognized_thought_level_is_unknown_and_buddy_continues(self):
         for thought in (None, [], False, "", " \t"):
             with self.subTest(thought=thought):
-                unknown = []
                 connection = mock.Mock()
                 connection.call.side_effect = [{}, {"settings": {
                     "model": {"current": {"providerId": "fixture-api", "modelId": "fixture-model",
                                           "options": {"reasoningLevel": "low"}}},
                     "thoughtLevel": {"current": thought}}}]
-                result = configure_session(connection, {"session": {"sessionId": "native-default"}},
-                    {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
-                    note_unknown=unknown.append)
+                snapshot = {"session": {"sessionId": "native-default"}, "settings": {"model": {"available": [{
+                    "ref": {"providerId": "fixture-api", "modelId": "fixture-model"},
+                    "reasoning": {"levels": [{"value": "low"}]},
+                }]}}}
+                result = configure_session(connection, snapshot,
+                    {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
                 self.assertEqual(result, {"provider": "fixture-api", "model": "fixture-model", "effort": None})
                 self.assertEqual([call.args[0] for call in connection.on_unconfirmed.call_args_list],
                                  ["buddy-readback"])
+                connection.on_unknown.assert_not_called()
 
     def test_catalog_preserves_each_models_real_efforts_and_omits_unconfigurable_models(self):
         def model(identifier, efforts, provider="api"):

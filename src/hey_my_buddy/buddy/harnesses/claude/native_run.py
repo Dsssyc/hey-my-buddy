@@ -111,6 +111,7 @@ from ..run_contract import (
     RunValue,
     StopEvidence,
     StopLayer,
+    fold_unknown_events,
 )
 from .config import (
     DEFAULT_EFFORT,
@@ -152,9 +153,15 @@ def _unknown_events(connection: Connection | None) -> dict | None:
     if connection is None:
         return None
     observations = connection.observations()
-    counts = {kind: observations[field] for kind, field in (
-        ("event-type-unread", "unknownEvents"),
-        ("control-response-unread", "unreadResponses")) if observations[field]}
+    event_counts = observations.get("unknownEventCounts")
+    if event_counts is None:
+        count = observations.get("unknownEvents")
+        event_counts = {"event-type-unread": count} if count else {}
+    counts: dict[str, int] = {}
+    for name, count in event_counts.items():
+        fold_unknown_events(counts, name, count)
+    if unread := observations.get("unreadResponses"):
+        fold_unknown_events(counts, "control-response-unread", unread)
     return {"countsByType": counts, "total": sum(counts.values())} if counts else None
 
 
@@ -1108,7 +1115,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     unconfirmed = []
     if (collector is not None and collector.expected_permission_mode is not None
             and evidence is not None and evidence.init_observed and evidence.permission_mode is None):
-        unconfirmed.append("settings-readback")
+        unconfirmed.append("permission-mode-readback")
     if state.catalog is not None and state.catalog["discoveries"][0]["status"] == "unknown":
         unconfirmed.append("model-catalog")
     native_evidence = NativeEvidence(

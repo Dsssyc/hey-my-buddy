@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.claude.protocol import (
     TurnEvidence,
     model_usage_keys,
 )
+from hey_my_buddy.buddy.harnesses.run_contract import MAX_UNKNOWN_EVENT_TYPES, UNLISTED_NATIVE_EVENTS
 from hey_my_buddy.protocol.usage import (
     classify_claude_rate_limit_event,
     classify_claude_result_rejection,
@@ -401,6 +402,7 @@ class ConnectionTests(unittest.TestCase):
         facts = self.connection.observations()
         self.assertEqual(facts["status"], "incomplete")
         self.assertEqual(facts["unknownEvents"], 3)
+        self.assertEqual(facts["unknownEventCounts"], {"event-type-unread": 3})
         self.assertEqual([item["typeShape"] for item in facts["samples"]], ["NoneType", "int", "dict"])
         self.assertNotIn("credential-fragment", json.dumps(facts))
         for _ in range(20):
@@ -408,6 +410,30 @@ class ConnectionTests(unittest.TestCase):
             self.connection.pump()
         self.assertEqual(len(self.connection.observations()["samples"]), 16)
         self.assertTrue(self.connection.observations()["samplesTruncated"])
+
+    def test_unknown_string_event_types_are_counted_with_bounded_diagnostics(self):
+        frames = []
+        self.connection.on_message = frames.append
+        frame_types = ["system", "future_event", "future_event", "private credential text"]
+        frame_types.extend(f"future-{index}" for index in range(MAX_UNKNOWN_EVENT_TYPES))
+        for frame_type in frame_types:
+            self._write_frame({"type": frame_type})
+            self.connection.pump()
+
+        self.assertEqual([frame["type"] for frame in frames], frame_types)
+        facts = self.connection.observations()
+        counts = facts["unknownEventCounts"]
+        self.assertEqual(facts["status"], "incomplete")
+        self.assertEqual(facts["unknownEvents"], len(frame_types) - 1)
+        self.assertEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(counts["future_event"], 2)
+        self.assertEqual(counts["unknown"], 1)
+        self.assertEqual(counts[UNLISTED_NATIVE_EVENTS], 3)
+        self.assertEqual(sum(counts.values()), facts["unknownEvents"])
+        self.assertEqual(facts["samples"][0]["kind"], "unknown-event")
+        self.assertEqual(facts["samples"][0]["eventType"], "future_event")
+        self.assertTrue(facts["samplesTruncated"])
+        self.assertNotIn("private credential text", json.dumps(facts))
 
     def test_unknown_control_response_continues_with_correlated_shape_facts(self):
         for subtype, body in (("future", {}), ("success", []), (None, None)):

@@ -79,7 +79,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertEqual(self.observations(result)["permissionModeStatus"], "unread")
                 self.assertIsNone(self.observations(result)["permissionMode"])
-                self.assertEqual(result.native_evidence.unconfirmed, ("settings-readback",))
+                self.assertEqual(result.native_evidence.unconfirmed, ("permission-mode-readback",))
 
     def test_multiple_denials_share_one_bounded_input_fact(self):
         collector = native_run._TurnCollector(mock.Mock(), lambda _facts: native_run.RunFeedback(action="continue"),

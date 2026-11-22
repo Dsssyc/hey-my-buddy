@@ -173,11 +173,7 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
         raise NativeError("configuration-mismatch", "native ZCode did not retain the requested permission mode")
 
 
-def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
-                      note_unknown: Callable[[str], None] = lambda _label: None,
-                      on_unconfirmed: Callable[[str], None] | None = None) -> dict:
-    if on_unconfirmed is None:
-        on_unconfirmed = connection.on_unconfirmed
+def configure_session(connection: NativeConnection, snapshot: dict, spec: dict) -> dict:
     session_id = snapshot["session"]["sessionId"]
     # spec is the frozen request's own selection: blank or non-string values
     # were refused when the RunRequest was built, so nothing is re-checked here.
@@ -196,14 +192,12 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     if efforts_known and effort not in efforts:
         raise NativeError("invalid-buddy", "the requested reasoning effort is not supported by this native model")
     if not catalog_known or not efforts_known:
-        note_unknown("buddy-catalog-unrecognized")
+        connection.on_unconfirmed("model-catalog")
     selection = {"providerId": provider, "modelId": model, "options": {"reasoningLevel": effort}}
     snapshot = connection.call("session/setModel", {"sessionId": session_id, "model": selection, "persistAsWorkspaceLastUsed": False})
     snapshot = connection.call("session/setThoughtLevel", {"sessionId": session_id, "thoughtLevel": effort, "persistAsWorkspaceLastUsed": False})
     actual = selected(snapshot)
     expected = {"provider": provider, "model": model, "effort": effort}
-    if any(item is None for item in actual.values()):
-        note_unknown("buddy-selection-unrecognized")
     settings = snapshot.get("settings")
     thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
     thought = thought.get("current") if isinstance(thought, dict) else None
@@ -212,7 +206,7 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
             or thought is not None and thought != effort):
         raise NativeError("buddy-mismatch", "native ZCode did not retain the requested model and reasoning settings")
     if any(item is None for item in actual.values()) or thought is None:
-        on_unconfirmed("buddy-readback")
+        connection.on_unconfirmed("buddy-readback")
     if thought != actual["effort"]:
         actual["effort"] = None
     return actual
@@ -906,7 +900,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
                                        require_interactive=require_interactive)
     if mode == "native-session":
         configure_mode(connection, session_id, state.create_params["mode"])
-    resolved = configure_session(connection, snapshot, spec, note_unknown=connection.on_unknown)
+    resolved = configure_session(connection, snapshot, spec)
     if on_configured is not None:
         # The run keeps its buddy facts the moment the native readback
         # returned them, so a later failure still reports known values and unknown fields.

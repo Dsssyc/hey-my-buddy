@@ -125,15 +125,16 @@ class BoundaryAndDrainTests(unittest.TestCase):
             self.assertEqual(error.exception.code, "invalid-buddy")
             connection.call.assert_not_called()
         with self.subTest(case="target-supported-effort-continues-with-the-fact"):
-            unknown = []
             connection = mock.Mock()
             connection.call.side_effect = [{}, {}]
             snapshot = {"session": {"sessionId": "root"},
                         "settings": {"model": {"available": [supporting, unreadable]}}}
-            result = native_run.configure_session(connection, snapshot, spec, note_unknown=unknown.append)
+            result = native_run.configure_session(connection, snapshot, spec)
             self.assertEqual([call.args[0] for call in connection.call.call_args_list],
                              ["session/setModel", "session/setThoughtLevel"])
-            self.assertIn("buddy-catalog-unrecognized", unknown)
+            self.assertEqual(connection.on_unconfirmed.call_args_list,
+                             [mock.call("model-catalog"), mock.call("buddy-readback")])
+            connection.on_unknown.assert_not_called()
             self.assertEqual(result, {"provider": None, "model": None, "effort": None})
         with self.subTest(case="readable-catalog-without-the-target-refuses"):
             connection = mock.Mock()
@@ -239,7 +240,7 @@ class NativeShapeRoundTests(NativeRunCase):
         self.assertEqual(receipt["discoveries"][0]["reason"],
                          {"code": "catalog.model-shape-unreadable", "params": {}})
 
-    def execute_shape(self, rewrite, unconfirmed=()):
+    def run_shape(self, rewrite):
         self.fake.write_text(rewrite(self.fake.read_text(encoding="utf-8")), encoding="utf-8", newline="\n")
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         seen = []
@@ -249,6 +250,10 @@ class NativeShapeRoundTests(NativeRunCase):
         result = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"), observer=observer,
                                 services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
+        return result, seen
+
+    def execute_shape(self, rewrite):
+        result, seen = self.run_shape(rewrite)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-run-facts")
         retained = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))["unknownEvents"]["countsByType"]
         self.assertTrue(any(f["unknownEvents"]["total"] for f in seen))
@@ -256,17 +261,20 @@ class NativeShapeRoundTests(NativeRunCase):
         shared = result.native_evidence.unknown_events
         self.assertEqual(dict(shared.counts_by_type), retained)
         self.assertEqual(shared.total, sum(retained.values()))
-        self.assertEqual(result.native_evidence.unconfirmed, unconfirmed)
+        self.assertEqual(result.native_evidence.unconfirmed, ())
         self.assertNotIn("evidenceRefs", native_run.native_evidence(result))
         return result, retained
 
-    def test_unknown_native_selection_continues_with_result_and_observer_facts(self):
-        result, facts = self.execute_shape(lambda source: source.replace(
+    def test_unconfirmed_native_selection_continues_without_unknown_events(self):
+        result, seen = self.run_shape(lambda source: source.replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
-            "'unrecognized':'secret'"), unconfirmed=("buddy-readback",))
-        self.assertIn("buddy-selection-unrecognized", facts)
+            "'unrecognized':'secret'"))
+        self.assertEqual(result.native_evidence.unconfirmed, ("buddy-readback",))
+        self.assertIsNone(result.native_evidence.unknown_events)
+        self.assertFalse(any(f["unknownEvents"]["total"] for f in seen))
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
+        self.assertIsNone(result.buddy.session_model)
 
     def test_rpc_shape_continues_with_result_and_observer_facts(self):
         _result, facts = self.execute_shape(lambda source: source.replace(

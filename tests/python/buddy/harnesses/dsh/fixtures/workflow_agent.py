@@ -79,6 +79,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         super().__init__(args)
         self.workflow_mode = args.workflow_mode
         self.native_error_code = args.native_error_code
+        self.fact_case = args.fact_case
         self.session_cwd: dict = {}
 
     # -- the session face: declared selectors and the mechanical mount binding --
@@ -91,6 +92,8 @@ class WorkflowAgent(fake_agent.FakeAgent):
             session = self.sessions.get(params.get("sessionId")) or {}
             result["configOptions"] = workflow_options(session.get("model", ""),
                                                        session.get("effort", "high"))
+            if self.fact_case == "missing-model" and params.get("configId") == "model":
+                del result["configOptions"][0]["currentValue"]
         if method == "session/new" and isinstance(result, dict):
             session_id = result.get("sessionId")
             self.session_cwd[session_id] = params.get("cwd")
@@ -113,6 +116,24 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     # -- the micro task turn ------------------------------------------------------
 
+    def run_final_prompt(self, message: dict) -> None:
+        if self.workflow_mode == "quota":
+            self.run_quota_turn(message)
+            return
+        session_id = message["params"]["sessionId"]
+        if self.fact_case == "unsupported-request":
+            reply = self.request_client("unknown/method", {"sessionId": session_id})
+            assert reply["error"]["code"] == -32601
+        elif self.fact_case == "permission-denial":
+            reply = self.request_client("session/request_permission", {
+                "sessionId": session_id,
+                "toolCall": {"toolCallId": "fixture-tool", "kind": "execute", "title": "run-command",
+                             "rawInput": {"command": "printf fixture"}},
+                "options": [{"optionId": "allow", "kind": "allow_once", "name": "Allow"},
+                            {"optionId": "deny", "kind": "reject_once", "name": "Deny"}]})
+            assert reply["result"]["outcome"]["optionId"] == "deny"
+        super().run_final_prompt(message)
+
     def run_micro_task_prompt(self, message: dict) -> None:
         turn_input = self.turn_input(message)
         index = (turn_input.get("context") or {}).get("turnIndex")
@@ -122,10 +143,10 @@ class WorkflowAgent(fake_agent.FakeAgent):
             self.workflow_mode == "auto" and index == 1
             and task_section.endswith("\n\n" + QUOTA_TASK))
         if quota and index == 1:
-            self.run_quota_turn(message, turn_input)
+            self.run_quota_turn(message)
             return
         if self.workflow_mode == "auto" and index == 1 and task_section.endswith("\n\n" + NETWORK_TASK):
-            self.run_quota_turn(message, turn_input, code="NETWORK_UNAVAILABLE",
+            self.run_quota_turn(message, code="NETWORK_UNAVAILABLE",
                                 edit=NETWORK_EDIT, message_text=NETWORK_MESSAGE)
             return
         self.prepare_workspace(message, turn_input)
@@ -142,7 +163,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
             native_path(root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}), encoding="utf-8", newline="\n")
         native_path(root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n", encoding="utf-8", newline="\n")
 
-    def run_quota_turn(self, message: dict, turn_input: dict, *, code: str | None = None,
+    def run_quota_turn(self, message: dict, *, code: str | None = None,
                        edit: str = QUOTA_EDIT, message_text: str = QUOTA_MESSAGE) -> None:
         """The offline provider rejection: real edits, one message, no finish call.
 
@@ -228,6 +249,7 @@ def main() -> int:
     parser = fake_agent.build_parser(log_required=False)
     parser.add_argument("--workflow-mode", default="auto", choices=["auto", "completed", "quota"])
     parser.add_argument("--native-error-code", default="QUOTA")
+    parser.add_argument("--fact-case", choices=["unsupported-request", "permission-denial", "missing-model"])
     # The micro task carrier with no checkpoint call: the mount binding is
     # derived from session/new instead.
     parser.set_defaults(prompt_mode="micro-task")

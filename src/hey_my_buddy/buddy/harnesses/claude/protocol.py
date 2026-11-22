@@ -26,12 +26,14 @@ from ....protocol.usage import (
     identifier as _identifier,
 )
 from ..native_observations import bound_native_text, native_counter
+from ..run_contract import fold_unknown_events, unknown_event_name
 from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.activity import native_tool_name
 
 _WINDOWS_PIPE = os.name == "nt"
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+KNOWN_EVENT_TYPES = frozenset({"system", "assistant", "user", "stream_event", "result", "rate_limit_event"})
 
 #: The exact closed set of statuses that settle one reported native background
 # task or workflow. Substring matching would wrongly settle "incomplete" or
@@ -76,6 +78,7 @@ class Connection:
         self.next_id = 1
         self.stream_closed = False
         self.unknown_events = 0
+        self.unknown_event_counts: dict[str, int] = {}
         self.unread_responses = 0
         self.shape_observations: list[dict] = []
         self.on_request = lambda _frame: None
@@ -199,8 +202,14 @@ class Connection:
         else:
             if not isinstance(frame_type, str):
                 self.unknown_events += 1
+                fold_unknown_events(self.unknown_event_counts, "event-type-unread")
                 self._observe_shape("event-type-unread", message,
                                     typeShape=type(frame_type).__name__)
+            elif frame_type not in KNOWN_EVENT_TYPES:
+                self.unknown_events += 1
+                name = unknown_event_name(frame_type)
+                fold_unknown_events(self.unknown_event_counts, name)
+                self._observe_shape("unknown-event", message, eventType=name)
             self.on_message(message)
 
     def _observe_shape(self, kind: str, frame: dict, **fields) -> None:
@@ -215,6 +224,7 @@ class Connection:
     def observations(self) -> dict:
         return {"status": "incomplete" if self.unknown_events or self.unread_responses else "complete",
                 "unknownEvents": self.unknown_events, "unreadResponses": self.unread_responses,
+                "unknownEventCounts": dict(self.unknown_event_counts),
                 "samples": list(self.shape_observations),
                 "samplesTruncated": self.unknown_events + self.unread_responses > len(self.shape_observations)}
 

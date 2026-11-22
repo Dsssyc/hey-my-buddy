@@ -75,7 +75,7 @@ def main():
             config = dict(native_config)
             if case == "config-mismatch":
                 config["web_search"] = "enabled"
-            send({"id": ident, "result": {"config": config,
+            send({"id": ident, "result": {"config": [] if case == "config-unreadable" and params.get("includeLayers") else config,
                  "layers": [{"name": {"type": "user", "file": "<native-user-config>"},
                              "config": {"mcp_servers": {"user-tool": {}}, "features": {"apps": True}}, "version": "1"}]}})
         elif method == "thread/start":
@@ -194,12 +194,15 @@ def main():
                     "message": "The provider rejected this request under its content policy.",
                     "codexErrorInfo": "cyberPolicy"})
                 continue
-            if case in ("quota-before", "quota-text", "quota-error", "overload-before", "overload-text", "overload-error"):
+            if case in ("quota-before", "quota-text", "quota-error", "rate-limited",
+                        "overload-before", "overload-text", "overload-error"):
                 if case in ("quota-text", "overload-text"):
                     event("item/completed", turn_id, item={"id": "partial", "type": "agentMessage", "text": "partial"})
                 error = {"message": "Selected model is at capacity. Please try a different model.",
                          "codexErrorInfo": "serverOverloaded"} if case.startswith("overload-") else {
                          "message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
+                if case == "rate-limited":
+                    error = {"message": "native provider rate limited", "codexErrorInfo": "rateLimitExceeded"}
                 if case in ("quota-error", "overload-error"):
                     event("error", turn_id, error=error, willRetry=False)
                 else:
@@ -221,6 +224,10 @@ def main():
             if case == "request":
                 send({"id": 99, "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": turn_id}})
+            if case == "unsupported-request":
+                send({"id": 99, "method": "unknown/method", "params": {}})
+                reply = json.loads(sys.stdin.readline())
+                assert reply["id"] == 99 and reply["error"]["code"] == -32601
             if case in ("typed", "collab"):
                 event("item/started", turn_id, item={"type": "collabAgentToolCall" if case == "collab" else "commandExecution"})
             if case in ("raw", "raw-no-id"):
