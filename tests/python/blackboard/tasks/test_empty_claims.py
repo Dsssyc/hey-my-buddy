@@ -12,7 +12,7 @@ NONCE = "a" * 32
 
 def submit_command(board, request_id: str, cwd, task: str = "do") -> dict:
     return board.submit_execution(
-        requestId=request_id, task=task, cwd=str(cwd), adapter="command", argv=["/bin/true"]
+        requestId=request_id, task=task, cwd=str(cwd), adapter="command", argv=["/bin/true"], expectedSeconds=1800
     )["task"]
 
 

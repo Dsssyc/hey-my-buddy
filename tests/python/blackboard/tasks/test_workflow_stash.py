@@ -20,7 +20,7 @@ from unittest import mock
 from mock_workspace import MockWorkspace
 from support import BoardTestCase, enable_fixture_buddy
 
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
 

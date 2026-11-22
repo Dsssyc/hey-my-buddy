@@ -51,7 +51,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         self._stack.append(board)
         client = board.client()
         task = board.submit_execution(requestId='interruption', task='work', adapter='command',
-                             cwd=str(self.workdir()), argv=['echo', 'work'])['task']
+                             cwd=str(self.workdir()), argv=['echo', 'work'], expectedSeconds=1800)['task']
         claim = admit_execution(client, 'n' * 32)['claim']
         actor = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'],
                  'nonce': 'n' * 32}
@@ -890,7 +890,7 @@ class InterruptionRecoveryTests(BoardTestCase):
             with self.subTest(case=name):
                 board, client, task, _, actor = self.claimed()
                 good_task = board.submit_execution(requestId='later', task='later', adapter='command',
-                    cwd=str(self.workdir(name + '-later')), argv=['echo', 'later'])['task']
+                    cwd=str(self.workdir(name + '-later')), argv=['echo', 'later'], expectedSeconds=1800)['task']
                 good = admit_execution(client, 'g' * 32)['claim']
                 good_actor = {'attemptId': good['attempt']['attemptId'], 'generation': 1, 'nonce': 'g' * 32}
                 board.call('execution_progress', {**good_actor, 'processIdentity': IDENTITY})

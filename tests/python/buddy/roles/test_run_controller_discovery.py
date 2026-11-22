@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.buddy.roles import run_controller
 from hey_my_buddy.buddy.roles import run_execution
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.harness_selection import bound
 from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.protocol import process_controller, process_identity
 from hey_my_buddy.errors import BoardError

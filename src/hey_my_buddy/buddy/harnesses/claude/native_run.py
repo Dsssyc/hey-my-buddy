@@ -131,7 +131,7 @@ from .protocol import (
     total_cost_usd,
 )
 from .tool_evidence import ReadOnlyToolEvidence
-from ..runtime_selection import environment_for
+from ....harness_selection import environment_for
 from ..session_record import SessionRecord
 from .session_content import ClaudeSessionProjector
 
@@ -190,7 +190,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
             efforts = list(dict.fromkeys(levels))
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
-                       "inputModalities": ["text"], "available": True})
+                       "inputModalities": [], "available": True})
     catalog = {"source": "claude-code-initialize", "harness": "claude", "harnessVersion": version,
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "claude", "provider": provider,

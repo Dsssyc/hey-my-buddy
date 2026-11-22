@@ -256,7 +256,7 @@ def canonical_payload(value: dict) -> dict:
                 "name": _text(model.get("name"), 200) or model_id,
                 "description": _text(model.get("description")),
                 "contextWindow": context,
-                "inputModalities": _strings(model.get("inputModalities")) or ["text"],
+                "inputModalities": _strings(model.get("inputModalities")),
                 "efforts": efforts,
                 "available": available,
                 "unavailableReason": None if available else native_reason,
@@ -350,7 +350,7 @@ def discover(*, directory: Path, harnesses: list[dict]) -> dict:
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
-        from ...buddy.harnesses.runtime_selection import bound
+        from ...harness_selection import bound
         selected_health = next(item for item in harnesses if item['harness'] == name)
         try:
             environment = dict(os.environ)

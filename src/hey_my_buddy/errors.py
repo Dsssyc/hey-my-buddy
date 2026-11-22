@@ -20,3 +20,10 @@ class BoardError(RuntimeError):
         if self.details:
             error["details"] = {key: value for key, value in self.details.items() if value is not None}
         return error
+
+
+class CodexProtocolError(Exception):
+    def __init__(self, code: str, message: str, *, native_error: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.native_error = native_error

@@ -12,7 +12,8 @@ from support import BoardTestCase, enable_fixture_buddy
 class HarnessServiceTests(BoardTestCase):
     def test_unknown_preflight_wait_reason_is_visible_in_get_and_clears_when_ready(self):
         task = self.board.task_submit({'requestId': 'preflight-wait', 'task': 'fixture',
-                                      'cwd': str(self.directory), 'adapter': 'command', 'argv': ['/bin/true']})['task']
+                                      'cwd': str(self.directory), 'adapter': 'command', 'argv': ['/bin/true'],
+                                       'expectedSeconds': 1800})['task']
         claim = self.board.admit_execution('n' * 32)['claim']
         attempt = claim['attempt']
         with self.board.db.write() as db:

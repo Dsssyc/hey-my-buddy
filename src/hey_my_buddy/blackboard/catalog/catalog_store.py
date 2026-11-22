@@ -7,7 +7,7 @@ from itertools import islice
 from ..evaluation import user_policy
 from . import buddy_state
 from .catalog import CatalogView
-from ..store.db import canonical_json
+from ...json_codec import canonical_json
 from ...errors import BoardError
 from ...protocol import schemas
 from ...protocol.reasons import reason, reason_from_json
@@ -297,7 +297,7 @@ def buddies(evaluation, params):
         rows = list(islice((row for row in candidates if matches(row)), limit + 1))
         references = removal_references(db)
         values = [evaluation._buddy_view(row, references) for row in rows[:limit]]
-        from ...protocol.billing import for_provider
+        from ..service.harness_health import for_provider
         from ..routing.quota_routing import cooling
         for value in values:
             value['billing'] = for_provider(db, value['harness'], value['provider'])

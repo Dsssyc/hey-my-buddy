@@ -8,7 +8,6 @@ from ...errors import BoardError
 from ...protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities
 from ...private_dirs import context_root, ensure_private_dir
 from ...paths import native_path
-from ...blackboard.routing import router
 from ...private_files import read_snapshot
 from ...protocol import router_selection
 from ...protocol.workspace_manifest import resolve_manifest
@@ -272,7 +271,7 @@ class DecisionAdapter(Adapter):
             **({"profileFeedback": native_result.get("profileFeedback")}
                if document.get("kind") == "profile" else {}),
             "inputVerification": verification,
-            **(router.routing_facts(document) if document.get("kind", "select") == "select" else {}),
+            **(router_selection.routing_facts(document) if document.get("kind", "select") == "select" else {}),
             "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                              "native": native_result.get("processState"),
                              "nativeInterruptRequested": native_result.get("nativeInterruptRequested"),

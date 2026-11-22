@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from ..store.db import canonical_json
+from ...json_codec import canonical_json
 from ...protocol import router_selection
 
 CLAIM_EVENT = "router.claimed"

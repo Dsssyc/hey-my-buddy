@@ -93,7 +93,8 @@ class ConsoleSessionTests(ConsoleTestCase):
 
     def queued_task(self, board):
         return board.submit_execution(**{'requestId': 'console-session-task', 'task': 'still pending',
-            'cwd': str(self.workdir()), 'adapter': 'command', 'argv': ['/bin/echo', 'ok']})['task']['runId']
+            'cwd': str(self.workdir()), 'adapter': 'command', 'argv': ['/bin/echo', 'ok'],
+                                         'expectedSeconds': 1800})['task']['runId']
 
     def test_independent_sessions_can_publish_without_revision_fences(self):
         board = self.board()

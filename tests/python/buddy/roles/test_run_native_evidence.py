@@ -179,7 +179,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         project = "read_review_result" if mode == "review" else "read_fast_result"
         with mock.patch("hey_my_buddy.buddy.roles.run_execution." + project, return_value=payload), \
                 mock.patch.object(router, "read_snapshot", return_value=frozen), \
-                mock.patch.object(router.router, "routing_facts", return_value={}):
+                mock.patch.object(router.router_selection, "routing_facts", return_value={}):
             return router.DecisionAdapter().collect(handle, context)
 
     def test_unknown_router_end_never_adopts_an_answer_and_keeps_native_facts(self):

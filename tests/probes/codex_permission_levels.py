@@ -36,7 +36,8 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CHECKOUT / "src"))
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Connection
+from hey_my_buddy.errors import CodexProtocolError
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection
 from hey_my_buddy.buddy.harnesses.discovery import native_environment
 from hey_my_buddy.buddy.harnesses.native_support import halt_owned_session
 from hey_my_buddy.buddy.runtime.windows_process import owned_popen

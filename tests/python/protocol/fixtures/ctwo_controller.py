@@ -23,7 +23,7 @@ from unittest.mock import patch
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
-from hey_my_buddy.buddy.harnesses.live import (
+from hey_my_buddy.protocol.live import (
     InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
 )
 from hey_my_buddy.buddy.harnesses.run_contract import (

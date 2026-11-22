@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import NativeIdentity
@@ -110,7 +111,7 @@ class CompleteOutcomeTests(unittest.TestCase):
             with self.subTest(harness=harness):
                 value = outcome(decisions=["汉" * 1365 + "a"], remaining=["item"] * 32)
                 record, raw = self.record(self.result(harness, value))
-                expected = {"version": 2, **self.turn, "inputSha256": turn_io.input_hash(self.turn),
+                expected = {"version": 2, **self.turn, "inputSha256": input_hash(self.turn),
                     "promptSha256": hashlib.sha256(b"prompt").hexdigest(), "sessionId": "native-session",
                     "outcome": value, "provenance": {**self.facts, "turnEnd": "completed",
                                                        worker_format(harness).validation_key: True}}

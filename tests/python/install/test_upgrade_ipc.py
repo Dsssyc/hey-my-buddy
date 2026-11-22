@@ -101,7 +101,7 @@ class UpgradeIpcTests(BoardTestCase):
         try:
             board = self.board()
             board.submit_execution(requestId='after-target-start', task='retained work',
-                cwd=str(self.workdir()), adapter='command', argv=[sys.executable, '-c', 'pass'])
+                cwd=str(self.workdir()), adapter='command', argv=[sys.executable, '-c', 'pass'], expectedSeconds=1800)
             claim = admit_execution(board.client(), 'n' * 32)['claim']
             self.assertIsNotNone(claim)
             self.busy_task = claim['task']['taskId']

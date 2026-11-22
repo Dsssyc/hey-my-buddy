@@ -27,7 +27,7 @@ from hey_my_buddy.private_dirs import attempt_root
 class DirectAdmissionTests(BoardTestCase):
     def submit(self, board, name: str, *, cwd: Path | None = None):
         params = {"requestId": name, "task": "offline business work", "cwd": str(cwd or self.workdir(name)),
-                  "adapter": "command", "argv": ["/bin/true"]}
+                  "adapter": "command", "argv": ["/bin/true"], "expectedSeconds": 1800}
         return board.submit_execution(**params)["task"]
 
     def test_total_capacity_and_workspace_resource_admission(self):
@@ -68,15 +68,18 @@ class ModelServiceAdmissionTests(BoardTestCase):
             "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [buddy_id]},
             "modelServiceConcurrency": [{**model, "limit": 1}],
         })
-        first = board.store.decisions.request_select({"requestId": "decision-one", "task": "pick"})
+        first = board.store.decisions.request_select({"requestId": "decision-one", "task": "pick",
+                                                      "expectedSeconds": 1800})
         board.store.admit_execution("n" * 32, task_id=first["runId"])
-        second = board.store.decisions.request_select({"requestId": "decision-two", "task": "pick again"})
+        second = board.store.decisions.request_select({"requestId": "decision-two", "task": "pick again",
+                                                       "expectedSeconds": 1800})
         refused = board.store.admit_execution("m" * 32, task_id=second["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "model-capacity")
         command = board.submit_execution(**{
             "requestId": "command-free", "task": "offline command",
             "cwd": str(self.workdir("command-free")), "adapter": "command", "argv": ["/bin/true"],
+            "expectedSeconds": 1800,
         })["task"]
         claim = board.store.admit_execution("p" * 32)["claim"]
         self.assertEqual(claim["task"]["taskId"], command["runId"])
@@ -95,24 +98,28 @@ class ModelServiceAdmissionTests(BoardTestCase):
                 "dsh:deepseek-official:deepseek-v4-pro:off"]},
             "modelServiceConcurrency": [{**deep, "limit": 1}],
         })
-        first = board.store.decisions.request_select({"requestId": "deep-first", "task": "choose"})
+        first = board.store.decisions.request_select({"requestId": "deep-first", "task": "choose",
+                                                      "expectedSeconds": 1800})
         claimed = board.store.admit_execution("a" * 32, task_id=first["runId"])["claim"]
         attempt_id = claimed["attempt"]["attemptId"]
         with board.store.db.write() as connection:
             connection.execute("UPDATE attempts SET execution_state='uncertain', ownership='uncertain', "
                                "connection_reason='execution-connection-unknown' WHERE attempt_id=?", (attempt_id,))
             connection.execute("UPDATE resource_claims SET state='retained' WHERE attempt_id=?", (attempt_id,))
-        second = board.store.decisions.request_select({"requestId": "deep-second", "task": "choose again"})
+        second = board.store.decisions.request_select({"requestId": "deep-second", "task": "choose again",
+                                                       "expectedSeconds": 1800})
         blocked = board.store.admit_execution("b" * 32, task_id=second["runId"])
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         self.assertEqual(board.call("task_get", {"runId": second["runId"]})["task"]["queueReason"],
                          "model-capacity")
         command = board.submit_execution(**{"requestId": "deep-other", "task": "offline", "adapter": "command",
-                                                  "argv": ["/bin/true"], "cwd": str(self.workdir("deep-other"))})["task"]
+                                                  "argv": ["/bin/true"], "cwd": str(self.workdir("deep-other")),
+                                            "expectedSeconds": 1800})["task"]
         self.assertIsNotNone(board.store.admit_execution("c" * 32, task_id=command["runId"])["claim"])
         third = board.submit_execution(**{"requestId": "deep-third", "task": "offline", "adapter": "command",
-                                                "argv": ["/bin/true"], "cwd": str(self.workdir("deep-third"))})["task"]
+                                                "argv": ["/bin/true"], "cwd": str(self.workdir("deep-third")),
+                                          "expectedSeconds": 1800})["task"]
         blocked_total = board.store.admit_execution("d" * 32, task_id=third["runId"])
         self.assertEqual(blocked_total["reason"], "capacity")
         capacity = board.store.capacity_report()

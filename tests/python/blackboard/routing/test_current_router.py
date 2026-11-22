@@ -15,7 +15,7 @@ from support import BoardTestCase, FakeClock, seed_buddy
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 

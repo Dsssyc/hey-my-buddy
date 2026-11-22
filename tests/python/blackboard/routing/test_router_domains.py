@@ -22,7 +22,7 @@ class RouterDomainTests(WorkflowTestCase):
     def seed_domains(self):
         task = self.board_.submit_execution(
             requestId="domain-maintenance", task="Synthetic maintenance", adapter="command",
-            argv=["true"], cwd=str(self.workdir("maintenance")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("maintenance")), expectedSeconds=1800)["task"]["runId"]
         with self.board_.store.db.write() as db:
             now = self.board_.store.now()
             model_id = current_model(db, 'dsh', 'deepseek-official', 'deepseek-flash')
@@ -42,7 +42,8 @@ class RouterDomainTests(WorkflowTestCase):
                        " VALUES('dsh',?,'off','old-ipc','debug',2,1,1,0,1,1)", (model_id,))
 
     def request(self, request_id="domain-route"):
-        return self.board_.store.decisions.request_select({"requestId": request_id, "task": "Fix transport ownership"})
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": "Fix transport ownership",
+                                                           "expectedSeconds": 1800})
 
     def packet(self, request):
         return self.board_.call("selection_get", {"decisionId": request["decisionId"],

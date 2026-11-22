@@ -35,14 +35,14 @@ from hey_my_buddy.protocol.router_selection import answer_schema
 from hey_my_buddy.protocol.session_reader import PRIOR_SESSION_TOOL_NAMES
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_format
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.harness_selection import bound
 from hey_my_buddy.protocol import owned_process as windows_process
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -62,7 +62,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.roles.run_observers import CORRECTION_SUFFIX, FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import correction_code
 from hey_my_buddy.buddy.roles.prompts import PromptText
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.errors import BoardError
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from hey_my_buddy.paths import native_path
@@ -913,7 +913,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_an_offset_endpoint_shifts_codex_live_publications_without_seeding(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
-        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.protocol.live import LiveCapabilities
         request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt="Select from the frozen packet")
         endpoint = CTwoLiveEndpoint(request.identity, LiveCapabilities(inquiry_delivery="unsupported"),
                                     event_seq_offset=31)
@@ -935,7 +935,7 @@ class ReviewSeamTests(CodexSeamCase):
 
     def test_an_offset_fresh_session_continues_the_attempt_activity_sequence(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.protocol.live import LiveCapabilities
         self.set_case("ok")
         prompt = "Select from the frozen packet"
         first_request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
@@ -1502,7 +1502,7 @@ class WorkerSeamTests(CodexSeamCase):
                 input_file = root / "turn-input.json"
                 native_run.private_json(input_file, turn_input, exclusive=True)
                 request = request.model_copy(update={"identity": request.identity.model_copy(
-                    update={"input_sha256": run_execution.input_hash(turn_input)})})
+                    update={"input_sha256": input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
                            "sessionRecordPath": request.session_record_path,
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}

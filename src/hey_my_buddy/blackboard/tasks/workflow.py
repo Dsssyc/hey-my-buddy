@@ -34,10 +34,11 @@ from typing import Any
 
 from ...paths import is_absolute_path, native_path
 from ...protocol import schemas
-from ...protocol.capabilities import PERMISSION_LEVELS
+from ...protocol.capabilities import PERMISSION_LEVELS, require_permission
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
+from ...protocol.turn_checkpoint import checkpoint_resumable, validated_checkpoint
 from ...protocol.turn_input import NONE_TURN_INPUT_VERSION, turn_buddy
 from ...protocol.turn_output import (
     HISTORICAL_TURN_OUTPUT_VERSION, TURN_OUTPUT_VERSION, validate_historical_outcome, validate_outcome,
@@ -55,7 +56,7 @@ from .micro_task import buddy_view
 from .request_reasons import request_reason
 from .scheduling import DECISION_ADAPTER
 from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
-from ..store.db import canonical_json, sha256_text
+from ...json_codec import canonical_json, sha256_text
 from ..store.work import autonomous_tasks
 from ...errors import BoardError
 from ... import private_dirs
@@ -1319,11 +1320,6 @@ class WorkflowCoordinator:
         return buddy
 
     @staticmethod
-    def _require_permission(buddy: dict | None, access: str) -> None:
-        from ...buddy.harnesses.registry import require_permission
-        require_permission(buddy, access)
-
-    @staticmethod
     def _execution_adapter(name: str):
         from ...buddy.harnesses.registry import adapter
 
@@ -1526,7 +1522,7 @@ class WorkflowCoordinator:
                     continue
             buddy = self._buddy(run)
             try:
-                self._require_permission(buddy, json.loads(run["execution_workspace_json"])["access"])
+                require_permission(buddy, json.loads(run["execution_workspace_json"])["access"])
                 checked = self._validated_buddy(buddy)
                 if checked != buddy:
                     raise BoardError("INVALID_BUDDY", "The installed native tuple changed; choose a current buddy")
@@ -1681,7 +1677,7 @@ class WorkflowCoordinator:
             intent.update(includeUntracked=normalized.get('inputs', []), writeScope=normalized.get('writeScope', []))
         if "accessNote" in normalized:
             intent["accessNote"] = normalized["accessNote"]
-        self._require_permission(buddy, normalized["access"])
+        require_permission(buddy, normalized["access"])
         buddy = self._validated_buddy(spec)
         request_id = "creation-" + key
         if intent["kind"] == "worktree":
@@ -1933,7 +1929,8 @@ class WorkflowCoordinator:
         the run, independent of the cursor. Only compact decision fields are exposed;
         no task prompt, model input/output or table payload is embedded.
         """
-        from ..routing.router import routing_facts, selection_source
+        from ...protocol.router_selection import routing_facts
+        from ..routing.router import selection_source
         from ..routing.router_sequence import dispatch, request_snapshot
         run_id = run_row["run_id"]
         total = int(
@@ -2274,7 +2271,7 @@ class WorkflowCoordinator:
         reroute=params.get("buddy")=="route"
         if buddy is not None:
             buddy=self._validated_buddy(buddy)
-        self._require_permission(buddy if "buddy" in params else self._buddy(snapshot),params.get("access",current_choice["access"]))
+        require_permission(buddy if "buddy" in params else self._buddy(snapshot), params.get("access", current_choice["access"]))
         if snapshot['checkout'] != 'none':
             with self._cleanup_allocation_lock(self.board.directory,physical if physical["kind"]=="worktree" else None):
                 if physical["kind"]=="existing":
@@ -3993,7 +3990,7 @@ class WorkflowCoordinator:
             choice=json.loads(snapshot["execution_workspace_json"])
             if snapshot["delegation_authority"] and (params.get("buddy")=="route" or params.get("access",choice["access"])!="full"):
                 raise BoardError("INVALID_ARGUMENT","A Lead requires full access and a complete explicit buddy")
-            self._require_permission(buddy if "buddy" in params else self._buddy(snapshot),params.get("access",choice["access"]))
+            require_permission(buddy if "buddy" in params else self._buddy(snapshot), params.get("access", choice["access"]))
             with self.db.read() as connection:
                 self._validate_continuation(connection,snapshot,params,buddy,params.get("buddy")=="route")
         def admit_resolution():
@@ -4696,7 +4693,6 @@ class WorkflowCoordinator:
         if row is None or row["adapter"] not in ("codex", "dsh"):
             return {}
         from ...private_dirs import attempt_root, native_root
-        from ...buddy.roles.turn_io import validated_checkpoint
         from ...private_files import open_read
 
         def private_record(path: Path) -> dict | None:
@@ -4866,7 +4862,6 @@ class WorkflowCoordinator:
                             and prior_result.get('status') == 'ok'
                             and prior_result.get('shutdownConfirmed') is True)
         if native is not None:
-            from ...buddy.roles.turn_io import checkpoint_resumable
             checkpoint = native[1]
             native_completed = checkpoint_resumable(*native) or (
                 previous["state"] == "interrupted"
@@ -5019,7 +5014,6 @@ class WorkflowCoordinator:
         if (attempt is None or attempt["adapter"] != "codex" or attempt["execution_state"] != "finished"
                 or attempt["shutdown_confirmed"] != 1):
             return None
-        from ...buddy.roles.turn_io import validated_checkpoint
         payload = self.result_payload(json.loads(attempt["result_json"] or "{}"))
         checkpoint = validated_checkpoint(payload, json.loads(previous["input_json"]))
         return (payload, checkpoint) if checkpoint is not None else None

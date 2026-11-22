@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, run_seam
@@ -294,7 +295,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         result = handle.result
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.permission, "write")
-        self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
+        self.assertEqual(request.identity.input_sha256, input_hash(context.turn_input))
         self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
         self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)
         self.assertFalse((context.directory / "role-run-control.json").exists())

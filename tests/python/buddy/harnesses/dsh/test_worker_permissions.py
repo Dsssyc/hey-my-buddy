@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.dsh import native_run
-from hey_my_buddy.buddy.harnesses.registry import require_permission
+from hey_my_buddy.protocol.capabilities import require_permission
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation, RunResult
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from hey_my_buddy.paths import native_path

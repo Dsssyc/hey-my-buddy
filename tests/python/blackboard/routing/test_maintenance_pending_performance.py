@@ -70,7 +70,7 @@ class MaintenancePendingPerformanceTests(WorkflowTestCase):
 
         maintenance_task_id = board.submit_execution(
             requestId="pending-benchmark-maintenance", task="Synthetic maintenance record",
-            adapter="command", argv=["true"], cwd=str(self.workdir("maintenance")),
+            adapter="command", argv=["true"], cwd=str(self.workdir("maintenance")), expectedSeconds=1800,
         )["task"]["runId"]
         maintenance_id = "pending-benchmark-maintenance"
         with board.store.db.write() as connection:

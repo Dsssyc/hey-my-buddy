@@ -7,7 +7,7 @@ import time
 import unittest
 
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
-from hey_my_buddy.buddy.harnesses import live as lv
+from hey_my_buddy.protocol import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json

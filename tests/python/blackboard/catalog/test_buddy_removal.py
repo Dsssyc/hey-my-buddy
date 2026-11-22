@@ -215,7 +215,8 @@ class BuddyRemovalTests(WorkflowTestCase):
 
     def fixture_task(self, name):
         return self.b.submit_execution(requestId=name, task=name, adapter='command',
-                                       argv=['true'], cwd=str(self.workdir(name)))['task']['runId']
+                                       argv=['true'], cwd=str(self.workdir(name)),
+                                       expectedSeconds=1800)['task']['runId']
 
     def read_evaluation(self, model_id):
         projection, _deadline = console_snapshot_projection(self.b.service)

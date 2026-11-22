@@ -9,7 +9,7 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import NONCE, WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.buddy.harnesses.dsh.session_records import session_record_facts
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import attempt_root, native_root
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json

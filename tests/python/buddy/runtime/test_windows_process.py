@@ -13,7 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Connection
+from hey_my_buddy.errors import CodexProtocolError
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection
 from hey_my_buddy.protocol.owned_process import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_SUSPENDED,
@@ -392,7 +393,7 @@ class WindowsPipeTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.zcode import protocol as zcode_protocol
         # CPython >=3.12 supports nonblocking Windows pipes. Exercise the same
         # branch with real nonblocking pipes; it must never use socket select.
-        for module, error_type in ((codex_protocol, codex_protocol.CodexProtocolError),
+        for module, error_type in ((codex_protocol, CodexProtocolError),
                                    (claude_protocol, claude_protocol.ClaudeProtocolError),
                                    (zcode_protocol, zcode_protocol.NativeError)):
             for cancel in (False, True):

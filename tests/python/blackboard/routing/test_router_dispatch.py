@@ -21,7 +21,7 @@ from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.catalog import buddy_state
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -64,7 +64,8 @@ class RouterDispatchTestCase(BoardTestCase):
             router._write_settings(db, merged)
 
     def request(self, *, request_id="pick-1", task="fix the parser"):
-        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task})
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task,
+                                                           "expectedSeconds": 1800})
 
     def decision_row(self, decision_id):
         return self.board_.call("selection_get", {"decisionId": decision_id})["decision"]
@@ -566,7 +567,8 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_request_snapshot_and_dispatch_preserve_the_response_wait(self):
         self.set_settings(mode="review")
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
-            response = self.board_.store.decisions.request_select({"requestId": "deadline", "task": "choose"})
+            response = self.board_.store.decisions.request_select({"requestId": "deadline", "task": "choose",
+                                                                   "expectedSeconds": 1800})
         with self.board_.store.db.read() as db:
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
         snapshot = self.snapshot_of(response["decisionId"])

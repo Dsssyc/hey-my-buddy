@@ -24,7 +24,8 @@ class DshWorkspaceDefaultTests(unittest.TestCase):
     def test_the_removed_workspace_switch_is_rejected_on_submission(self):
         from hey_my_buddy.errors import BoardError
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
-            common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
+            common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root,
+                      "adapter": "dsh", "expectedSeconds": 1800}
             # Every DSH run is execution-private now: the grouping switch is an
             # unknown submit field whatever harness or value carries it.
             for params in ({**common, "workspace": True}, {**common, "workspace": False},
@@ -34,7 +35,7 @@ class DshWorkspaceDefaultTests(unittest.TestCase):
                         normalize_spec(params)
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
                     self.assertEqual(raised.exception.details.get("field"), "workspace")
-            spec = normalize_spec({**common, "adapter": "dsh"})
+            spec = normalize_spec(common)
             self.assertNotIn("workspace", spec)
 
 

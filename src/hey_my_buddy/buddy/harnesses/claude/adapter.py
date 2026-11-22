@@ -46,7 +46,7 @@ class ClaudeAdapter:
         return adapter_capabilities(self.name)
 
     def available(self) -> tuple[bool, str | None]:
-        from ..runtime_selection import selected
+        from ....harness_selection import selected
         record = selected("claude")
         if record is not None:
             return record.get('status') == 'ready', (record.get('reason') or {}).get('code')
@@ -54,7 +54,7 @@ class ClaudeAdapter:
         if not usable:
             return False, reason
         try:
-            from ..runtime_selection import environment_for
+            from ....harness_selection import environment_for
             metadata = _cached_native_metadata(state_dir=Path(environment_for()["HMB_STATE_DIR"]))
         except BoardError as error:
             return False, error.code

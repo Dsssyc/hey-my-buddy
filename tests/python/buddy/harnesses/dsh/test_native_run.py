@@ -46,7 +46,7 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.protocol.turn_output import validate_outcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -1202,7 +1202,7 @@ class WorkerSeamTests(NativeRunCase):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount, forge_receipt=True)
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
         services = dataclasses.replace(bound.services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
@@ -1221,7 +1221,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_the_micro_task_activity_callback_publishes_bounded_phases(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         request, bound, mount = self.worker_request()
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
@@ -1264,7 +1264,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
         request, bound, mount = self.worker_request()
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
         services = dataclasses.replace(bound.services, live=endpoint)
@@ -1377,17 +1377,18 @@ class RoleSeamFunctionTests(unittest.TestCase):
         self.assertNotIn("token", credentials)
 
     def test_check_preparation_confirms_a_selected_or_discoverable_command(self):
-        from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
+        from hey_my_buddy import harness_selection
+        from hey_my_buddy.buddy.harnesses import discovery
         state = Path(os.environ["HMB_STATE_DIR"])
         environment = {"HMB_STATE_DIR": str(state)}
         record = {"status": "ready", "command": ["/installed/dsh"]}
-        with mock.patch.object(runtime_selection, "selected", return_value=record):
+        with mock.patch.object(harness_selection, "selected", return_value=record):
             self.assertIsNone(native_run.check_preparation({}, environment))
         # The unbound path reuses the same bounded discovery launch_for falls
         # back to: a discoverable installed command keeps the harness usable
         # without a pinned selection, and a failed scan still refuses here.
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
-        with mock.patch.object(runtime_selection, "selected", return_value=None), \
+        with mock.patch.object(harness_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=detected) as scan:
             self.assertIsNone(native_run.check_preparation({}, environment))
         scan.assert_called_once_with("dsh", state_dir=state, environment=environment)
@@ -1396,7 +1397,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                  ({"status": "missing"}, None),
                  ({"status": "ready", "command": []}, None))
         for selected, detected_result in cases:
-            with mock.patch.object(runtime_selection, "selected", return_value=selected), \
+            with mock.patch.object(harness_selection, "selected", return_value=selected), \
                     mock.patch.object(discovery, "discover", return_value=detected_result) as scan:
                 with self.assertRaises(BoardError) as caught:
                     native_run.check_preparation({}, environment)
@@ -1499,14 +1500,14 @@ class InquirySeamTests(NativeRunCase):
         return request, bound, credentials, channel
 
     def ask_when_ready(self, channel):
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveRequest
         self.assertTrue(self.wait_for(
             lambda: any(entry.get("event") == "startup" for entry in self.agent_log())))
         request = LiveRequest(identity=channel.identity, request_id="live-1", kind="inquiry",
                               payload=InquiryPayload(question_id="inq-1", question=self.QUESTION))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            from hey_my_buddy.buddy.harnesses.live import LiveReply
+            from hey_my_buddy.protocol.live import LiveReply
             reply = LiveReply.model_validate_json(channel.request_local(
                 request, timeout_ms=1000, deadline_monotonic=time.monotonic() + 1))
             if reply.status != "unavailable":
@@ -1625,7 +1626,7 @@ class InquirySeamTests(NativeRunCase):
                          "nothing is journaled delivered without a verified root receipt")
 
     def test_the_shared_endpoint_declares_the_registered_capability(self):
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
+        from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES, LiveCapabilities
         _, _, credentials, channel = self.inquiry_worker()
         self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()), EXISTING_CAPABILITIES["dsh"],
                       "the binding carries the declared capability fact, whatever the registry states")

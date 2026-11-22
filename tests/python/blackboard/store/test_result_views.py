@@ -45,7 +45,8 @@ class ResultViewTests(BoardTestCase):
     def test_large_workspace_seal_is_bounded_in_all_public_result_replies(self):
         board = self.board()
         task = board.submit_execution(requestId="large-workspace-result", task="collect workspace output",
-                                      cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+                                      cwd=str(self.workdir()), adapter="command", argv=["true"],
+                                      expectedSeconds=1800)["task"]
         attempt = admit_execution(board.client(), "n" * 32, task_id=task["runId"])["claim"]["attempt"]
         paths = [f"src/{index:04d}-" + "a" * 2990 for index in range(3000)]
         seal = {

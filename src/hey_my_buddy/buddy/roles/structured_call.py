@@ -11,7 +11,8 @@ from ...errors import BoardError
 from ...private_dirs import ensure_private_dir
 from ...paths import native_path
 from ...protocol.structured_schema import schema_errors
-from .turn_io import private_json, canonical_json
+from .turn_io import private_json
+from ...json_codec import canonical_json
 from .prompts import PromptText
 
 

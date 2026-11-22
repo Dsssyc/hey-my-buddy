@@ -15,9 +15,11 @@ from buddy.harnesses.dsh import test_native_run as dsh_cases
 from buddy.harnesses.zcode import test_native_run as zcode_cases
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 from fake_executable import make_fake_executable
+from hey_my_buddy import harness_locations
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound, launch_for
+from hey_my_buddy.harness_selection import bound
+from hey_my_buddy.buddy.harnesses.runtime_selection import launch_for
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -104,10 +106,10 @@ class HarnessLaunchChainTests(unittest.TestCase):
                              f'"%~dp0{executable.name}" --fixture-internals "%~dp0fixture.asar\\cli.js" %*\n',
                              encoding='utf-8')
         environment = {**os.environ, "PATH": str(entry_dir) if path else ""}
-        with mock.patch.object(discovery, "_home", return_value=root), \
-             mock.patch.object(discovery, "_common_dirs", return_value=[]), \
-             mock.patch.object(discovery, "_app_paths", return_value=[]), \
-             mock.patch.object(discovery, "_registry_paths", return_value=[]):
+        with mock.patch.object(harness_locations, "_home", return_value=root), \
+             mock.patch.object(harness_locations, "_common_dirs", return_value=[]), \
+             mock.patch.object(harness_locations, "_app_paths", return_value=[]), \
+             mock.patch.object(harness_locations, "_registry_paths", return_value=[]):
             record = discovery.discover(harness, manual_path=None if path else str(entry),
                                         environment=environment, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(record["status"], "ready", record)

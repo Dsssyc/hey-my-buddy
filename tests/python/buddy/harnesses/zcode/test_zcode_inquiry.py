@@ -47,7 +47,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest, LiveSnapshot
+from hey_my_buddy.protocol.live import InquiryPayload, LiveCapabilities, LiveRequest, LiveSnapshot
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}

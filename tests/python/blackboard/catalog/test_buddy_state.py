@@ -37,7 +37,7 @@ class BuddyStateTests(BoardTestCase):
                 self.assertEqual(bool(actual['available']), expected is None)
                 self.assertEqual(bool(actual['catalog_available']), not (retired or absent or native))
                 self.assertEqual(actual['unavailable_content'], 'native restriction' if native and not (retired or absent) else None)
-                self.assertEqual(json.loads(actual['capabilities_json']), ['execution:dsh', 'effort:max', 'input:text'])
+                self.assertEqual(json.loads(actual['capabilities_json']), ['execution:dsh', 'effort:max'])
 
     def test_unhealthy_harness_without_a_reason_fails_even_with_a_catalog_cause(self):
         from unittest.mock import patch

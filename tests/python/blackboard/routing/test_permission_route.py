@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 from support import BoardTestCase, seed_buddy
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 
 

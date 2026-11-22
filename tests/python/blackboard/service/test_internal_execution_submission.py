@@ -17,7 +17,7 @@ class InternalExecutionSubmissionTests(BoardTestCase):
             self.assertTrue(_lock_held(self.directory / "control-daemon.lock"))
             params = {
                 "requestId": "internal-command", "task": "Private execution fixture",
-                "cwd": str(self.workdir()), "adapter": "command",
+                "cwd": str(self.workdir()), "adapter": "command", "expectedSeconds": 1800,
                 "argv": [sys.executable, "-c", "print('internal execution')"],
             }
             started = time.monotonic()

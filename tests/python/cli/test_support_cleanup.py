@@ -351,10 +351,10 @@ class FixtureCleanupTests(unittest.TestCase):
                 from hey_my_buddy.blackboard.store.store import BoardStore
                 from hey_my_buddy.blackboard.catalog.catalog import discover
                 from hey_my_buddy.install.runtime import runtime_root
-                from hey_my_buddy.buddy.harnesses import discovery
+                from hey_my_buddy import harness_locations
                 def reject_native(harness, **kwargs):
                     raise AssertionError('R-06: native discovery forbidden: ' + harness)
-                discovery.candidate_snapshot = reject_native
+                harness_locations.candidate_snapshot = reject_native
                 with patch.object(home, 'default_state_dir', side_effect=AssertionError('default state lookup')):
                     state = get_state_dir()
                     store = BoardStore(state)
@@ -446,7 +446,7 @@ class FixtureCleanupTests(unittest.TestCase):
             environment = _child_environment(directory, {"HMB_MODEL_CATALOG_FILE": str(catalog)})
             fixture = runpy.run_path(str(PYTHON_ROOT.parent / "tests/python/blackboard/service/fixtures/daemon_with_catalog.py"))
             with patch.dict(os.environ, environment, clear=True), patch(
-                "hey_my_buddy.buddy.harnesses.discovery.candidate_snapshot",
+                "hey_my_buddy.harness_locations.candidate_snapshot",
                 side_effect=AssertionError("R-05: native discovery forbidden"),
             ) as native:
                 daemon = Daemon(directory)

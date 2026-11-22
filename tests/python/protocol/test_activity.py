@@ -20,7 +20,7 @@ from support import BoardTestCase, wait_for
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.protocol.activity import ActivityPublisher, is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
-from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+from hey_my_buddy.protocol.live import LiveCapabilities
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError

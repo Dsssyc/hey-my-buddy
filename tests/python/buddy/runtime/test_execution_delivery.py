@@ -133,7 +133,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                     self.assertIs(report['result']['nativeRequestSent'], False)
 
     def test_profile_correction_checks_stop_and_deadline_after_rearming_budget(self):
-        from hey_my_buddy.buddy.harnesses import runtime_selection
+        from hey_my_buddy import harness_selection
         from hey_my_buddy.buddy.roles import inline_run
 
         for stop in (False, True):
@@ -187,7 +187,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                                        return_value=AdapterOutcome('failed', shutdown_confirmed=True)), \
                      mock.patch.object(entry, 'fsync_json', side_effect=fsync), \
                      mock.patch.object(entry, 'time', SimpleNamespace(monotonic=lambda: clock[0])), \
-                     mock.patch.object(runtime_selection, 'selected', return_value=None), \
+                     mock.patch.object(harness_selection, 'selected', return_value=None), \
                      mock.patch.object(inline_run, '_inline_live', return_value=nullcontext(None)), \
                      mock.patch.object(inline_run, 'run_harness', side_effect=run) as native, \
                      mock.patch.object(inline_run.run_execution, 'profile_request', side_effect=[

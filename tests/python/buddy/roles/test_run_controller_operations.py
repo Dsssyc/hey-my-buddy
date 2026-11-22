@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.roles import run_controller, run_execution
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 

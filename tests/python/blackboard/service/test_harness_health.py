@@ -182,7 +182,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(self.health._path_hints, tuple(directories))
 
     def test_alternating_empty_path_hints_do_not_rebuild_health_or_reread_catalog(self):
-        from hey_my_buddy.buddy.harnesses import discovery
+        from hey_my_buddy import harness_locations
         self.scan.stop()
         cli = self.directory / 'bin' / ('codex' + CLI_SUFFIX)
         cli.parent.mkdir()
@@ -191,9 +191,9 @@ class HarnessHealthTests(BoardTestCase):
         paths = [str(cli.parent), os.pathsep.join([str(other), str(cli.parent)]),
                  os.pathsep.join([*(str(self.directory / f'empty-{index}') for index in range(100)),
                            str(cli.parent)])]
-        with patch.object(discovery, '_home', return_value=self.directory), \
-             patch.object(discovery, '_common_dirs', return_value=[]), \
-             patch.object(discovery, '_app_paths', return_value=[]), \
+        with patch.object(harness_locations, '_home', return_value=self.directory), \
+             patch.object(harness_locations, '_common_dirs', return_value=[]), \
+             patch.object(harness_locations, '_app_paths', return_value=[]), \
              patch.dict('os.environ', {'PATH': ''}):
             self.health.add_path_hint(paths[0])
             first = self.health.refresh('codex')
@@ -209,15 +209,15 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(len(self.refreshed), 1)
 
     def test_alternating_callers_with_distinct_executables_do_not_rebuild_health_or_reread_catalog(self):
-        from hey_my_buddy.buddy.harnesses import discovery
+        from hey_my_buddy import harness_locations
         self.scan.stop()
         directories = [self.directory / name for name in ('caller-a', 'caller-b')]
         for directory in directories:
             directory.mkdir()
             (directory / ('codex' + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
-        with patch.object(discovery, '_home', return_value=self.directory), \
-             patch.object(discovery, '_common_dirs', return_value=[]), \
-             patch.object(discovery, '_app_paths', return_value=[]), \
+        with patch.object(harness_locations, '_home', return_value=self.directory), \
+             patch.object(harness_locations, '_common_dirs', return_value=[]), \
+             patch.object(harness_locations, '_app_paths', return_value=[]), \
              patch.dict('os.environ', {'PATH': ''}):
             for directory in directories:
                 self.health.add_path_hint(str(directory))
@@ -234,7 +234,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(len(self.refreshed), 1)
 
     def test_location_fingerprint_ignores_absent_candidates_without_rereading_catalog(self):
-        from hey_my_buddy.buddy.harnesses import discovery
+        from hey_my_buddy import harness_locations
         self.scan.stop()
         binaries = [self.directory / name for name in ('bin-a', 'bin-b')]
         empty = [self.directory / name for name in ('empty-a', 'empty-b')]
@@ -251,14 +251,14 @@ class HarnessHealthTests(BoardTestCase):
         environments = [{'PATH': os.pathsep.join(map(str, paths))} for paths in caller_paths]
         # Supply caller PATHs directly: add_path_hint already filters empty
         # directories and would hide a regression in the service fingerprint.
-        with patch.object(discovery, '_home', return_value=self.directory), \
-             patch.object(discovery, '_common_dirs', return_value=[]), \
-             patch.object(discovery, '_app_paths', return_value=[]), \
-             patch.object(discovery, '_registry_paths', return_value=[]), \
+        with patch.object(harness_locations, '_home', return_value=self.directory), \
+             patch.object(harness_locations, '_common_dirs', return_value=[]), \
+             patch.object(harness_locations, '_app_paths', return_value=[]), \
+             patch.object(harness_locations, '_registry_paths', return_value=[]), \
              patch.object(self.health, 'environment', return_value=environments[0]) as environment:
             self.assertNotEqual(
-                discovery.candidate_snapshot('codex', environment=environments[0]),
-                discovery.candidate_snapshot('codex', environment=environments[1]))
+                harness_locations.candidate_snapshot('codex', environment=environments[0]),
+                harness_locations.candidate_snapshot('codex', environment=environments[1]))
             first = self.health.refresh('codex', preflight=True)
             environment.return_value = environments[1]
             second = self.health.refresh('codex', preflight=True)
@@ -1022,7 +1022,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
 
     def test_ordinary_account_read_failure_records_its_reason_without_success_event(self):
         from hey_my_buddy.errors import BoardError
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         for error, reason in ((BoardError('ACCOUNT_QUERY_DENIED', 'fixture query denied'), 'ACCOUNT_QUERY_DENIED'),
                               (CodexProtocolError('native-rpc-error', 'fixture RPC denied'), 'native-rpc-error'),
                               (OSError('fixture read transport failed'), 'HARNESS_ACCOUNT_READ_FAILED')):
@@ -1050,7 +1050,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertNotIn('accountReadFailure', recovered)
 
     def test_account_wait_expiry_keeps_health_and_billing_then_retries(self):
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         billing = {'kind': 'metered', 'provider': 'openai', 'source': 'codex/account-read', 'observedAt': _stamp(0)}
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=billing):
             first = self.health.refresh('codex', force=True)
@@ -1107,7 +1107,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
     def test_confirmed_stop_with_account_data_failure_restores_health_and_records_failure(self):
         from hey_my_buddy.errors import BoardError
         from hey_my_buddy.buddy.harnesses.codex import account_probe
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         with patch.object(account_probe, 'read', side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'unknown stop')):
             self.assertNotEqual(self.health.refresh('codex', force=True)['status'], 'ready')
         with self.board.db.write() as db:

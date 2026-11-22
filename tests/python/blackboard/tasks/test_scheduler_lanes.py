@@ -54,7 +54,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
             task="no model at all",
             cwd=str(self.workdir("command-runnable")),
             adapter="command",
-            argv=["/bin/true"],
+            argv=["/bin/true"], expectedSeconds=1800,
         )
         claim = admit_execution(client, "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])

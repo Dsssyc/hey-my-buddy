@@ -132,7 +132,7 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         self.assertEqual(recorded["commit"], commit)
         self.assertIn("\ufffd", recorded["description"])
         # The frozen record must survive the board's canonical JSON and hashing.
-        from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+        from hey_my_buddy.json_codec import canonical_json, sha256_text
         digest = sha256_text(canonical_json({"sharedStash": {"start": inventory}}))
         self.assertEqual(len(digest), 64)
         unchanged = workspace.shared_stash_comparison(inventory, inventory)

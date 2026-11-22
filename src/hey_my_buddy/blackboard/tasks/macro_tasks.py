@@ -20,8 +20,8 @@ from typing import Any
 from . import fixes, micro_task, projects as project_records, reminders
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_macro_task
-from ..routing import router, router_sequence
-from ...protocol import schemas
+from ..routing import router_sequence
+from ...protocol import router_selection, schemas
 from ...protocol.turn_input import turn_buddy
 from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
@@ -1146,7 +1146,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
     round_facts = router_sequence.request_snapshot(connection, record["decision_id"], record["routing_round"])["facts"] if record else {}
     routing = {
-        **router.routing_facts({**json.loads(record["requested_json"]),
+        **router_selection.routing_facts({**json.loads(record["requested_json"]),
                                 **round_facts}
                                if record else {}),
         "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
@@ -1168,7 +1168,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         error = receipt.get("error")
         span_routing = routing
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
-            span_routing = {**routing, **router.routing_facts(attempt_output, include_wait=False)}
+            span_routing = {**routing, **router_selection.routing_facts(attempt_output, include_wait=False)}
             if attempt_output.get('code') == 'router-review-unavailable':
                 span_routing.update(selectedBuddy=None,
                                     policyCheck=None, usage=None)

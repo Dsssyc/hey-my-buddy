@@ -42,7 +42,7 @@ from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SC
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+from hey_my_buddy.protocol.live import EXISTING_CAPABILITIES
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.paths import native_path
 

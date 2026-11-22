@@ -21,17 +21,17 @@ from pathlib import Path
 from support import FIXTURE_CATALOG, BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks.inquiry import (
     observe,
 )
 
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, MAX_JOURNAL_BYTES
-from hey_my_buddy.buddy.harnesses.live import (
+from hey_my_buddy.protocol.live import (
     LiveCapabilities, LiveJournal, LiveObservation, LiveReply, LiveSnapshot, _journal_states,
 )
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy.paths import native_path
 
@@ -454,7 +454,7 @@ class TestInquiry(BoardTestCase):
             task="do",
             cwd=str(self.workdir("other")),
             adapter="command",
-            argv=["/bin/true"],
+            argv=["/bin/true"], expectedSeconds=1800,
         )["task"]
         command_result = board.call("inquiry_observe", {"runId": command_task["runId"]})
         self.assertIsNone(command_result["bridge"]["reason"])
@@ -492,7 +492,8 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         client = board.client()
         task = board.submit_execution(
-            requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
+            requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+            expectedSeconds=1800
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
@@ -664,7 +665,8 @@ class TestInquiry(BoardTestCase):
     def test_an_active_adapter_without_inquiry_never_keeps_an_unanswerable_question_queued(self):
         board = self.board()
         client = board.client()
-        task = board.submit_execution(requestId="no-inquiry", task="work", cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+        task = board.submit_execution(requestId="no-inquiry", task="work", cwd=str(self.workdir()), adapter="command", argv=["true"],
+                                      expectedSeconds=1800)["task"]
         admit_execution(client, "a" * 32, task_id=task["runId"])
         result = board.call("inquiry_observe", {"runId": task["runId"], "question": "status?", "waitMs": 3000})
         self.assertEqual(result["inquiry"]["state"], "unavailable")
@@ -974,7 +976,7 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         client = board.client()
         inactive = board.submit_execution(requestId="inactive-question", task="fixture",
-            cwd=str(self.workdir("inactive")), adapter="command", argv=["true"])["task"]
+            cwd=str(self.workdir("inactive")), adapter="command", argv=["true"], expectedSeconds=1800)["task"]
         posted = board.store._message_post(inactive["runId"], "q-inactive", "status?")["message"]
         self.assertEqual(posted["reason"], {"code": "inquiry-no-live-agent", "params": {}})
         client.cancel(runId=inactive["runId"])

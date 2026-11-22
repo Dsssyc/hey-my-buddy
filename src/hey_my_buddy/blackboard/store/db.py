@@ -17,8 +17,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
-
 ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
@@ -1405,10 +1403,6 @@ def utc_now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def initialize_defaults(connection: sqlite3.Connection) -> None:

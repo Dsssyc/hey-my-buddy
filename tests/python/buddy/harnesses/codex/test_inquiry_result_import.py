@@ -13,7 +13,8 @@ from admission import admit_execution
 from support import BoardTestCase
 
 from hey_my_buddy.buddy.harnesses.codex.native_run import _NativeInquiry, prepare_inquiry_services
-from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtocolError, TurnEvidence
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, TurnEvidence
+from hey_my_buddy.errors import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.roles.worker_services import ANSWER_SCHEMA
 
@@ -28,7 +29,8 @@ class InquiryResultImportTests(BoardTestCase):
     def exercise_final_answer(self, sampled_state: str) -> None:
         board = self.board()
         task = board.submit_execution(requestId=f"inquiry-result-{sampled_state}", task="fixture work",
-                                      cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+                                      cwd=str(self.workdir()), adapter="command", argv=["true"],
+                                      expectedSeconds=1800)["task"]
         attempt = admit_execution(board.client(), NONCE, task_id=task["runId"])["claim"]["attempt"]
         task_id, attempt_id = task["runId"], attempt["attemptId"]
         identity = {"taskId": task_id, "attemptId": attempt_id,

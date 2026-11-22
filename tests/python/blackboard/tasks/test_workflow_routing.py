@@ -100,12 +100,11 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
-        for harness in (None, "dsh", "zcode"):
+        for harness in ("dsh", "zcode"):
             with self.subTest(harness=harness):
                 with self.assertRaises(BoardError) as raised:
-                    board.submit_execution(**{"requestId": f"bypass-{harness}", "task": "code",
-                                               "cwd": str(self.workdir("bypass")),
-                                               **({"adapter": harness} if harness else {})})
+                    board.submit_execution(requestId=f"bypass-{harness}", task="code", adapter=harness,
+                                           cwd=str(self.workdir("bypass")), expectedSeconds=1800)
                 self.assertEqual(raised.exception.code, "MICRO_TASK_REQUIRED")
         self.register(board)
         claim = self.claim(board)
@@ -221,7 +220,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.select(board, self.router_claim(board, submitted))
         self.catalog_validation.side_effect = BoardError("CATALOG_UNAVAILABLE", "installed tuple disappeared")
         other = board.submit_execution(**{"requestId": "plain", "adapter": "command", "argv": ["true"],
-                                           "task": "ordinary", "cwd": str(self.workdir("plain"))})
+                                           "task": "ordinary", "cwd": str(self.workdir("plain")),
+                                           "expectedSeconds": 1800})
         self.register(board)
         claim = self.claim(board)
         self.assertEqual(claim["claim"]["task"]["taskId"], other["task"]["runId"])
@@ -371,7 +371,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board)
         self.select(board, self.router_claim(board, submitted))
         blocker = board.submit_execution(**{"requestId": "capacity-holder", "adapter": "command", "argv": ["true"],
-                                             "task": "occupy one slot", "cwd": str(self.workdir("capacity-holder"))})
+                                             "task": "occupy one slot", "cwd": str(self.workdir("capacity-holder")),
+                                             "expectedSeconds": 1800})
         self.register(board, "holder")
         held = self.claim(board, "holder", run_id=blocker["task"]["runId"], claim_request_id="capacity-holder")["claim"]
         self.register(board)

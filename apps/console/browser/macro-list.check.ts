@@ -754,3 +754,59 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
     });
   });
 }
+
+for (const theme of ["dark", "light"] as const) {
+  test.describe(`filter tab pointer vs keyboard focus (${theme})`, () => {
+    test.use({ locale: "zh-CN", colorScheme: theme, viewport: { width: 1280, height: 800 } });
+    test("fresh-page mouse click shows no focus frame while keyboard navigation shows neutral focus", async ({ page }) => {
+      await open(page, "#tasks");
+      const tabs = page.locator("[data-slot=macro-filter-tabs] [role=tab]");
+      const activeTab = tabs.nth(1);
+      await expect(activeTab).toBeVisible();
+
+      const box = (await activeTab.boundingBox())!;
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await settle(page);
+      const afterMouse = await activeTab.evaluate(node => {
+        const style = getComputedStyle(node);
+        return {
+          active: document.activeElement === node,
+          pointerFocus: node.getAttribute("data-pointer-focus"),
+          outlineStyle: style.outlineStyle,
+          bg: style.backgroundColor,
+          hasShadowSpread: /[1-9]\d*px/.test(style.boxShadow),
+        };
+      });
+      expect(afterMouse.active).toBe(true);
+      expect(afterMouse.pointerFocus).toBe("true");
+      expect(afterMouse.outlineStyle).toBe("none");
+      expect(afterMouse.bg).toBe("rgba(0, 0, 0, 0)");
+      expect(afterMouse.hasShadowSpread).toBe(false);
+
+      await page.keyboard.press("ArrowRight");
+      await expect(tabs.nth(2)).toBeFocused();
+      await page.keyboard.press("ArrowLeft");
+      await expect(activeTab).toBeFocused();
+      await settle(page);
+      const afterKeyboard = await activeTab.evaluate(node => {
+        const style = getComputedStyle(node);
+        const probe = document.createElement("div");
+        probe.style.backgroundColor = "var(--selection)";
+        document.body.append(probe);
+        const selection = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return {
+          active: document.activeElement === node,
+          pointerFocus: node.getAttribute("data-pointer-focus"),
+          outlineStyle: style.outlineStyle,
+          bg: style.backgroundColor,
+          selection,
+        };
+      });
+      expect(afterKeyboard.active).toBe(true);
+      expect(afterKeyboard.pointerFocus).toBeNull();
+      expect(afterKeyboard.outlineStyle).toBe("none");
+      expect(afterKeyboard.bg).toBe(afterKeyboard.selection);
+    });
+  });
+}

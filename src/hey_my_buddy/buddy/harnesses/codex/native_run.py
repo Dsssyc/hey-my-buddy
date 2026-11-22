@@ -44,8 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ....errors import BoardError
-from ....json_codec import decode_strict_json
+from ....errors import BoardError, CodexProtocolError
+from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.reasons import reason as make_reason
 from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
@@ -59,7 +59,7 @@ from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
 from ....paths import native_path
-from ...roles.turn_io import canonical_json, private_json
+from ...roles.turn_io import private_json
 from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
@@ -121,7 +121,6 @@ from .config import (
     native_provider,
 )
 from .protocol import (
-    CodexProtocolError,
     Connection,
     TurnEvidence,
     attempt_token_usage,
@@ -138,7 +137,7 @@ from .tool_evidence import (
 )
 from .session_content import CodexSessionProjector
 from ..session_record import SessionRecord
-from ..runtime_selection import environment_for
+from ....harness_selection import environment_for
 
 _NATIVE_STDERR_FILE = "native.stderr.log"
 #: The checkpoint's retained root assistant message bound, in serialized bytes.
@@ -499,7 +498,7 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     """Preparation phase: private evidence roots and native environment."""
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
-    from ..runtime_selection import environment_for
+    from ....harness_selection import environment_for
     incoming = dict(environment_for())
     try:
         command, environment = launch(incoming)
@@ -607,9 +606,10 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
             if warning not in warnings:
                 warnings.append(warning)
             continue
+        modalities = item.get("inputModalities")
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
-                       "inputModalities": item.get("inputModalities") or ["text"], "available": True})
+                       "inputModalities": modalities if isinstance(modalities, list) else [], "available": True})
     catalog = {"source": "codex-native-app-server", "harness": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "codex", "provider": provider, "displayName": provider,

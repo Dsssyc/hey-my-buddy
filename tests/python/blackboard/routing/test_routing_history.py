@@ -57,7 +57,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
     def select_decision(self, board, request_id):
         return board.store.decisions.request_select({"requestId": request_id,
-                                                     "task": f"select for {request_id}"})
+                                                     "task": f"select for {request_id}", "expectedSeconds": 1800})
 
     def state_fingerprint(self, board) -> dict:
         tables = (
@@ -82,7 +82,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         missing = self.routed(board, request_id="judgment-absent")
         task_id = board.submit_execution(
             requestId="judgment-domain-source", task="Synthetic maintenance", adapter="command",
-            argv=["true"], cwd=str(self.workdir("judgment-domain-source")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("judgment-domain-source")), expectedSeconds=1800)["task"]["runId"]
         with board.store.db.write() as db:
             now = board.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES('judgment-source','manual','fixture',?,'completed',NULL,NULL,?,?)",
@@ -220,7 +220,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         board = self.board()
         plain = board.submit_execution(**{
             "requestId": "plain", "adapter": "command", "argv": ["true"],
-            "task": "ordinary", "cwd": str(self.workdir("plain")),
+            "task": "ordinary", "cwd": str(self.workdir("plain")), "expectedSeconds": 1800,
         })
         view = board.call("workflow_get", {"runId": plain["task"]["runId"], "routingHistory": {"limit": 5}})
         self.assertEqual(view["task"]["lineage"]["kind"], "execution")

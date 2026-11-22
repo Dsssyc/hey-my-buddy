@@ -297,7 +297,7 @@ class Probe:
         from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
         from hey_my_buddy.buddy.harnesses.dsh.acp.client import PermissionPolicy
         from hey_my_buddy.buddy.harnesses.discovery import discover
-        from hey_my_buddy.buddy.harnesses.runtime_selection import selected
+        from hey_my_buddy.harness_selection import selected
         from hey_my_buddy.buddy.roles.turn_io import private_json
         from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 

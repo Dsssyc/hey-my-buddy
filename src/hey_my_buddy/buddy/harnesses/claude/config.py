@@ -1,7 +1,7 @@
 """Claude Code executable selection and native permission arguments."""
 from __future__ import annotations
 
-from ...roles.turn_io import canonical_json
+from ....json_codec import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
 #: omits ``--effort`` for it, so a drifting native default cannot mix two

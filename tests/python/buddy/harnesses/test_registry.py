@@ -23,7 +23,7 @@ class CapabilityReportInputLimitTests(unittest.TestCase):
         names = (*INPUT_LIMITS, "command", "decision")
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapters",
                         return_value={name: adapter() for name in names}), \
-             mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected",
+             mock.patch("hey_my_buddy.harness_selection.selected",
                         return_value=None):
             return capability_report()
 

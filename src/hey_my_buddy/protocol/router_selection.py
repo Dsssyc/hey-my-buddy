@@ -19,6 +19,18 @@ FORMAT_ERROR_CODES = frozenset({"answer-empty", "answer-invalid-json", "answer-s
 HARD_BOUND_CODES = frozenset({"router-out-of-bounds", "router-evidence-out-of-bounds", "router-exploration-out-of-bounds"})
 
 
+def routing_facts(request: dict, *, actor: dict | None = None, include_wait: bool = True) -> dict:
+    facts = {key: request.get(key) for key in
+             ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
+              "routingMode", "routerRetryIntervalSeconds", "routerProblem")}
+    if include_wait:
+        facts["modelResponseWaitSeconds"] = request.get("modelResponseWaitSeconds")
+    if actor is not None:
+        facts.update(routerBuddyId=actor["buddyId"], routerBuddy=actor["buddy"],
+                     routerIndex=actor["routerIndex"])
+    return facts
+
+
 def answer_schema(routing_mode: str, *, exploration: bool = False) -> dict:
     """The model's protocol-20 schema, independent of the frozen input's size."""
     evidence_kinds = ["preference", "statistics", "summary"]

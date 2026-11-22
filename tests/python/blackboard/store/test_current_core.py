@@ -151,7 +151,8 @@ class CurrentCoreTests(BoardTestCase):
         self.assertTrue({"input_fingerprint", "fingerprint_version", "selected_attempt_id"}.issubset(columns))
         self.assertNotIn("result_command_id", attempt_columns)
         self.assertFalse(any(name.startswith("legacy") for name in columns))
-        request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"]}
+        request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()),
+                   "adapter": "command", "argv": ["/bin/true"], "expectedSeconds": 1800}
         first = board.submit_execution(**request)
         reopened = BoardStore(self.directory)
         self.addCleanup(reopened.db.close)
@@ -165,7 +166,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_host_task_identity_and_state_have_one_name(self):
         board = self.board()
         task = board.submit_execution(requestId="one-name", task="work", cwd=str(self.workdir()),
-                                      adapter="command", argv=["true"])["task"]
+                                      adapter="command", argv=["true"], expectedSeconds=1800)["task"]
         self.assertNotIn("taskId", task)
         self.assertNotIn("status", task)
         self.assertEqual(task["state"], "queued")
@@ -291,11 +292,13 @@ class CurrentCoreTests(BoardTestCase):
                 board = self.board()
                 client = board.client()
                 task = board.submit_execution(requestId=f"inquiry-end-{status}-{confirmed}", task="return data",
-                    cwd=str(self.workdir(f"{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
+                    cwd=str(self.workdir(f"{status}-{confirmed}")), adapter="command", argv=["true"],
+                                              expectedSeconds=1800)["task"]
                 claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
                 attempt = claim["attempt"]
                 other = board.submit_execution(requestId=f"other-{status}-{confirmed}", task="still running",
-                    cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
+                    cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"],
+                                               expectedSeconds=1800)["task"]
                 other_attempt = admit_execution(client, "o" * 32, task_id=other["runId"])["claim"]["attempt"]
                 board.store._message_post(other["runId"], "q-other", "Still there?")
                 for inquiry_id in ("q-pending", "q-delivered", "q-answered"):
@@ -331,7 +334,8 @@ class CurrentCoreTests(BoardTestCase):
     def test_current_receipt_keeps_result_opaque(self):
         board = self.board()
         client = board.client()
-        task = board.submit_execution(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+                                      expectedSeconds=1800)["task"]
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
         attempt = claim["attempt"]

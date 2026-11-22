@@ -143,7 +143,7 @@ class NativeProviderRejectionTests(unittest.TestCase):
 
     def test_codex_publishes_the_code_table_classification(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        from hey_my_buddy.errors import CodexProtocolError
         for native, expected in (("usageLimitExceeded", "quota-exceeded"), ("rateLimitExceeded", "rate-limited"),
                                  ("contextWindowExceeded", None)):
             with self.subTest(native=native):

@@ -17,8 +17,8 @@ import uuid
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.codex.native_run import _control_connection
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.errors import CodexProtocolError
+from hey_my_buddy.harness_selection import bound
 
 
 def artifacts(home: Path, session_id: str) -> dict:

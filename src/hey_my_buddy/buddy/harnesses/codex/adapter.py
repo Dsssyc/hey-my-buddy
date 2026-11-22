@@ -25,7 +25,7 @@ class CodexAdapter:
         return adapter_capabilities(self.name)
 
     def available(self) -> tuple[bool, str | None]:
-        from ..runtime_selection import selected
+        from ....harness_selection import selected
         record = selected("codex")
         if record is not None:
             return record.get('status') == 'ready', (record.get('reason') or {}).get('code')

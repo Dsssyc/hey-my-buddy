@@ -120,7 +120,7 @@ from .protocol import (
 from .tool_evidence import ZcodeToolFacts, carries_tool_marker as _carries_tool_marker
 from .session_content import ZcodeSessionProjector
 from ..session_record import SessionRecord
-from ..runtime_selection import environment_for
+from ....harness_selection import environment_for
 
 _END_FACTS_FILE = "run-end-facts.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"

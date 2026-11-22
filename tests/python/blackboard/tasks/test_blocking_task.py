@@ -45,7 +45,7 @@ class BlockingTaskTests(WorkflowTestCase):
         child = parent / "child"
         child.mkdir()
         holder = board.submit_execution(requestId="command", task="Hold the directory", cwd=str(parent),
-                                        adapter="command", argv=["fixture-never-run"])["task"]
+                                        adapter="command", argv=["fixture-never-run"], expectedSeconds=1800)["task"]
         self.assertIsNotNone(self.claim(board)["claim"])
         queued = self.submit(board, cwd=str(child), request_id="waiting")
         self.assert_projection(board, queued, {"runId": holder["runId"], "title": None, "macroTaskId": None})
@@ -73,7 +73,7 @@ class BlockingTaskTests(WorkflowTestCase):
         _, claim = self.lead(board)
         cwd = str(self.workdir("unrelated"))
         holder = board.submit_execution(requestId="unrelated", task="Hold another directory", cwd=cwd,
-                                        adapter="command", argv=["fixture-never-run"])["task"]
+                                        adapter="command", argv=["fixture-never-run"], expectedSeconds=1800)["task"]
         self.assertIsNotNone(self.claim(board, run_id=holder["runId"])["claim"])
         queued = self.owned(board, claim, cwd=cwd, checkout="existing", access="read")
         self.assertEqual(self.claim(board, run_id=queued["runId"])["reason"], "cwd-overlap")
@@ -92,7 +92,8 @@ class BlockingTaskTests(WorkflowTestCase):
         owner = self.submit(board, cwd=str(parent), title="Owning micro task", access="read",
                             create_macro={"title": "Routed macro", "goal": "Verify router claim owner"})
         router_task = board.submit_execution(requestId="router-internal", task="Route", cwd=str(parent),
-                                             adapter="command", argv=["fixture-never-run"])["task"]
+                                             adapter="command", argv=["fixture-never-run"],
+                                             expectedSeconds=1800)["task"]
         self.assertIsNotNone(self.claim(board, run_id=router_task["runId"])["claim"])
         now = board.store.now()
         with board.store.db.write() as connection:

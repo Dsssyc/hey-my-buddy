@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from hey_my_buddy import harness_selection
 from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
 from hey_my_buddy.buddy.harnesses.claude import config as claude
 from hey_my_buddy.buddy.harnesses.codex import config as codex
@@ -54,7 +55,7 @@ class ExplicitEntryTests(unittest.TestCase):
         records = [{'harness': name, 'status': 'ready', 'command': ['selected.exe']}
                    for name in ('claude', 'codex', 'zcode', 'dsh')]
         environment = {f'HMB_{record["harness"].upper()}_CLI': 'override.exe' for record in records}
-        with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '0'}), runtime_selection.bound(records), \
+        with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '0'}), harness_selection.bound(records), \
              mock.patch.object(discovery, '_launch_command') as resolve:
             for record in records:
                 with self.subTest(harness=record['harness']):

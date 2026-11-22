@@ -23,7 +23,7 @@ from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.protocol.workspace_manifest import record_reference, resolve_manifest
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import transport

@@ -427,7 +427,7 @@ class ResumeInquiryTests(NativeResumeCase):
 
     def test_a_resumed_turn_delivers_this_attempts_question_over_its_own_channel(self):
         from buddy.harnesses.zcode.test_native_run import fixture_live_channel
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveReply, LiveRequest
         request1, _bound1, _mount1, result1 = self.first_turn(inquiry=True)
         self.assertEqual(result1.end.status, "ok", result1.end.message)
         previous = result1.native_identity.session_id

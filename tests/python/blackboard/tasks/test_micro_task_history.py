@@ -36,7 +36,7 @@ class MicroTaskTestCase(WorkflowTestCase):
                 "task": task_text or f"ordinary {request_id}",
                 "cwd": str(cwd or self.workdir()),
                 "adapter": "command",
-                "argv": ["/bin/echo", request_id],
+                "argv": ["/bin/echo", request_id], "expectedSeconds": 1800,
             })["task"]
 
     def task_view(self, board, run_id: str) -> dict:

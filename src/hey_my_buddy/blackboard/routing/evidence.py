@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 import heapq
 
-from ...protocol.billing import for_provider
+from ..service.harness_health import for_provider
 from ..evaluation.models import current_model, model_view
 from .statistics import (
     COUNTS, IDENTITY, KIND, METRICS, approximate_median, key as _key, time as _time,

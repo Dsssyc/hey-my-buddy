@@ -17,7 +17,7 @@ class InquirySettlementTests(BoardTestCase):
         board = self.board()
         client = board.client()
         task = board.submit_execution(requestId="inquiry-settlement", task="work",
-            cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+            cwd=str(self.workdir()), adapter="command", argv=["true"], expectedSeconds=1800)["task"]
         attempt = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]["attempt"]
         board.store._message_post(task["runId"], "q-pending", "Status?")
         return board, client, task, attempt

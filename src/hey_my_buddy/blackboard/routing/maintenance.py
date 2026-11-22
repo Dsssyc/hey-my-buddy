@@ -16,7 +16,7 @@ from ...private_files import read_bytes
 from ...protocol import maintenance as files, schemas, tool_evidence
 from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.snapshot_query import QueryError
-from ..store.db import canonical_json
+from ...json_codec import canonical_json
 from . import maintenance_data, router
 
 

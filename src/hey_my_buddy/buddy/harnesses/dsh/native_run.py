@@ -90,7 +90,8 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from ..runtime_selection import launch_for, environment_for, selected
+from ....harness_selection import environment_for, selected
+from ..runtime_selection import launch_for
 from ..session_record import SessionRecord
 from .session_content import DshSessionProjector
 from .tool_inventory import read_tool_rows, UNREADABLE, UNRECOGNIZED
@@ -378,7 +379,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
     launches, never a prompt or a model call. A missing or unhealthy command
     refuses here, before any attempt builds a run.
     """
-    from ..runtime_selection import selected
+    from ....harness_selection import selected
     record = selected("dsh", environment)
     if record is None:
         from ..discovery import discover

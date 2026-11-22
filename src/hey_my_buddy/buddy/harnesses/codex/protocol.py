@@ -8,19 +8,13 @@ import select
 import threading
 import time
 
+from ....errors import CodexProtocolError
 from ....json_codec import canonical_json, decode_strict_json
 from ..native_support import NATIVE_SUMMARY_BYTES, truncate_utf8
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 _WINDOWS_PIPE = os.name == "nt"
 _UNREADABLE_RESULT = "rpc/result-unreadable"
-
-
-class CodexProtocolError(Exception):
-    def __init__(self, code: str, message: str, *, native_error: dict | None = None):
-        super().__init__(message)
-        self.code = code
-        self.native_error = native_error
 
 
 class Connection:

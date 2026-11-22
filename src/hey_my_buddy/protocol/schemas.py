@@ -15,7 +15,7 @@ from typing import Any
 
 from ..paths import is_absolute_path
 from .harness_names import HARNESS_NAMES, ADAPTER_NAMES as ADAPTERS
-from ..blackboard.store.db import canonical_json, sha256_text
+from ..json_codec import canonical_json, sha256_text
 from ..errors import BoardError
 
 FINGERPRINT_VERSION_CURRENT = 2
@@ -25,7 +25,6 @@ MAX_REQUEST_ID = 128
 MAX_METADATA = 256
 MIN_EXPECTED_SECONDS = 1
 MAX_EXPECTED_SECONDS = 86400
-DEFAULT_EXPECTED_SECONDS = 1800
 MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES_PER_RUN = 32
@@ -110,15 +109,18 @@ def optional_bool(params: dict, name: str, default: bool) -> bool:
     return value
 
 
-def optional_int(params: dict, name: str, default: int, minimum: int, maximum: int) -> int:
-    value = params.get(name, default)
+def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not (minimum <= value <= maximum):
         raise BoardError("INVALID_ARGUMENT", f"{name} must be an integer between {minimum} and {maximum}")
     return value
 
 
+def optional_int(params: dict, name: str, default: int | None, minimum: int, maximum: int) -> int:
+    return _bounded_int(params.get(name, default), name, minimum, maximum)
+
+
 def expected_duration(params: dict) -> int:
-    return optional_int(params, "expectedSeconds", DEFAULT_EXPECTED_SECONDS, MIN_EXPECTED_SECONDS, MAX_EXPECTED_SECONDS)
+    return _bounded_int(params.get("expectedSeconds"), "expectedSeconds", MIN_EXPECTED_SECONDS, MAX_EXPECTED_SECONDS)
 
 
 def optional_positive_int(params: dict, name: str) -> int | None:
@@ -201,7 +203,7 @@ def normalize_spec(params: dict) -> dict:
         raise BoardError("INVALID_ARGUMENT", "task must be a nonempty string")
     if len(task_text.encode("utf-8")) > MAX_TASK_BYTES:
         raise BoardError("INVALID_ARGUMENT", f"task must contain at most {MAX_TASK_BYTES} bytes")
-    adapter = optional_string(params, "adapter") or "dsh"
+    adapter = required_string(params, "adapter")
     if adapter not in ADAPTERS:
         raise BoardError(
             "UNSUPPORTED_ADAPTER",

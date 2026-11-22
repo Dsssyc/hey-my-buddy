@@ -16,7 +16,8 @@ class ResultReferenceTests(BoardTestCase):
         super().setUp()
         self.board_fixture = self.board()
         task = self.board_fixture.submit_execution(requestId="receipt-ref", task="collect output facts",
-                                                  cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
+                                                  cwd=str(self.workdir()), adapter="command", argv=["true"],
+                                                   expectedSeconds=1800)["task"]
         self.nonce = "n" * 32
         self.claim = admit_execution(self.board_fixture.client(), self.nonce, task_id=task["runId"])["claim"]
         self.attempt = self.claim["attempt"]

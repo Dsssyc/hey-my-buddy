@@ -22,13 +22,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
+from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam, worker_format
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.harnesses.run_contract import (
     RunResult)
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor, worker_stop
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -157,29 +158,30 @@ class DescriptionSeamTests(DshRoleCase):
         the run seam falls back to, and a failed discovery scan refuses — all
         decided from mocked records, never a launched harness.
         """
-        from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
+        from hey_my_buddy import harness_selection
+        from hey_my_buddy.buddy.harnesses import discovery
         state = Path(os.environ["HMB_STATE_DIR"])
         environment = {"HMB_STATE_DIR": str(state)}
         seam = run_seam("dsh")
         description = adapter("dsh")
         ready = {"status": "ready", "command": ["/installed/dsh"]}
-        with mock.patch.object(runtime_selection, "selected", return_value=ready):
+        with mock.patch.object(harness_selection, "selected", return_value=ready):
             self.assertIsNone(seam.check_preparation({}, environment))
             self.assertEqual(description.available(), (True, None))
         bad = {"status": "login-required", "reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
-        with mock.patch.object(runtime_selection, "selected", return_value=bad):
+        with mock.patch.object(harness_selection, "selected", return_value=bad):
             self.assertEqual(description.available(), (False, "harness.login-required"))
             with self.assertRaises(Exception) as caught:
                 seam.check_preparation({}, environment)
             self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
-        with mock.patch.object(runtime_selection, "selected", return_value=None), \
+        with mock.patch.object(harness_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=detected):
             self.assertEqual(description.available(), (True, None))
             self.assertIsNone(seam.check_preparation({}, environment))
         failed = {"status": "missing", "available": False,
                   "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}
-        with mock.patch.object(runtime_selection, "selected", return_value=None), \
+        with mock.patch.object(harness_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=failed):
             self.assertEqual(description.available(), (False, "harness.not-found"))
             with self.assertRaises(Exception) as caught:
@@ -259,7 +261,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(request.identity, handle.role_run_identity)
         self.assertEqual(request.permission, "write")
         self.assertNotIn("frozenAccount", request.to_payload())
-        self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
+        self.assertEqual(request.identity.input_sha256, input_hash(context.turn_input))
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"], result.value.parsed.value)
         provenance = turn["provenance"]
@@ -283,7 +285,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
     def test_an_answered_host_question_flows_through_the_micro_task_turn(self):
         import threading
         import time as time_module
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest
+        from hey_my_buddy.protocol.live import InquiryPayload, LiveReply, LiveRequest
         context = self.context()
         self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")
@@ -421,7 +423,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
 
 class DiscoverySeamTests(DshRoleCase):
     def test_discovery_routes_through_the_seam_without_a_prompt(self):
-        from hey_my_buddy.buddy.harnesses.runtime_selection import bound, environment_for
+        from hey_my_buddy.harness_selection import bound, environment_for
         self.point_record("--prompt-mode", "final")
         record = {"harness": "dsh", **json.loads(self.record.read_text(encoding="utf-8"))["dsh"]}
         with mock.patch.dict(os.environ, self.environment):

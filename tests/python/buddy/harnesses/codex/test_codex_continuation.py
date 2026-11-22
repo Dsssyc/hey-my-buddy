@@ -9,7 +9,7 @@ from buddy.harnesses.fixture_selection import select_fixture
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.controller import worker_executor
-from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 

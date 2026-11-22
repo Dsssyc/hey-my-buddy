@@ -157,7 +157,7 @@ class _BaseResource:
                     permitted = permitted or (operation == "service.control" and params.get("action") in {"restart", "status"})
                     if not permitted:
                         raise BoardError("UPGRADE_IN_PROGRESS", "Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity")
-                from ...buddy.harnesses.runtime_selection import bound
+                from ...harness_selection import bound
                 health = getattr(self, 'harnesses', None)
                 with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
                     result = handler(params)
@@ -309,7 +309,7 @@ class BoardService(_BaseResource):
         def handler(params: dict) -> dict:
             from ...buddy.harnesses.registry import local_capabilities
             from .harness_health import HARNESSES
-            from ...buddy.harnesses.runtime_selection import bound
+            from ...harness_selection import bound
             if params.get('refresh',False):
                 for name in [params['harness']] if params.get('harness') else HARNESSES:
                     self.harnesses.refresh(name, force=True)
@@ -474,7 +474,7 @@ class BoardService(_BaseResource):
         from ...protocol.reasons import reason
         from ..catalog import catalog, catalog_store
         from ...buddy.harnesses.registry import adapter
-        from ...buddy.harnesses.runtime_selection import bound
+        from ...harness_selection import bound
         if self.harnesses.get(name)['revision'] != record['revision']:
             return
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
@@ -630,7 +630,7 @@ class BoardService(_BaseResource):
                 for name in HARNESSES:
                     self.harnesses.refresh(name, force=True)
                 return catalog_store.response(self.evaluation)
-            from ...buddy.harnesses.runtime_selection import bound
+            from ...harness_selection import bound
             observation = catalog_store.begin(self.evaluation)
             with bound(observation['harnesses']):
                 discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])

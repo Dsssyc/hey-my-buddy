@@ -24,7 +24,7 @@ from hey_my_buddy.errors import BoardError
 
 class WorkflowReceiptTests(WorkflowTestCase):
     def test_cleanup_keeps_all_retained_artifacts_and_distinct_allocation_manifests(self):
-        from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+        from hey_my_buddy.json_codec import canonical_json, sha256_text
 
         board = self.board()
         submitted = self.submit(board)
@@ -157,7 +157,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
     def test_small_answers_remain_exact(self):
         board = self.board()
         params = {"requestId": "small-receipt", "adapter": "command", "task": "Record a command",
-                  "cwd": str(self.workdir()), "argv": ["/bin/true"]}
+                  "cwd": str(self.workdir()), "argv": ["/bin/true"], "expectedSeconds": 1800}
         answer = board.store.task_submit(params, command_id="small-submit")
         board.client().cancel(runId=answer["task"]["runId"])
         self.assertEqual(board.client().get(runId=answer["task"]["runId"])["state"], "cancelled")

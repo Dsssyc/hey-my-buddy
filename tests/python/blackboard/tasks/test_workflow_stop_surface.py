@@ -41,7 +41,7 @@ class ReceiptStopTests(WorkflowTestCase):
         board = self.board()
         self.register(board)
         run = board.submit_execution(**{"requestId": "execution", "task": "opaque data", "cwd": str(self.workdir()),
-                                       "adapter": "command", "argv": ["true"]})
+                                       "adapter": "command", "argv": ["true"], "expectedSeconds": 1800})
         attempt = self.claim(board)["claim"]["attempt"]
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'turn': {'outcome': {'disposition': 'attention'}}}})
         view = board.call("task_get", {"runId": run["task"]["runId"]})["task"]

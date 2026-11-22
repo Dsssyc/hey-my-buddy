@@ -196,7 +196,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.accept_run(board, board.call("workflow_get", {"runId": run["runId"]}))
         task_id = board.submit_execution(
             requestId="maintenance-read-task", task="Synthetic maintenance", adapter="command",
-            argv=["true"], cwd=str(self.workdir("maintenance-read-task")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("maintenance-read-task")), expectedSeconds=1800)["task"]["runId"]
         with board.store.db.write() as db:
             now = board.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES('maintenance-read','manual',?,?,'completed',NULL,NULL,?,?)",

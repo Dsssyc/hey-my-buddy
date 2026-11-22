@@ -309,7 +309,8 @@ class CoolingWorkflowTests(WorkflowTestCase):
             self.assertIsNone(candidate_bound(db, other_harness, {"routingBasis": {"overloadedModelServices": excluded}}, T0,
                                              require_health=False, apply_preferences=False, check_cooling=False))
         # A fresh request has no task-local exclusion, even on the same provider.
-        fresh = self.board_.store.decisions.request_select({"requestId": "fresh-request", "task": "choose"})
+        fresh = self.board_.store.decisions.request_select({"requestId": "fresh-request", "task": "choose",
+                                                            "expectedSeconds": 1800})
         fresh_basis = self.board_.call("selection_get", {"decisionId": fresh["decisionId"]})["decision"]["routingBasis"]
         self.assertEqual((fresh_basis["candidateCount"], len(fresh_basis["excludedBuddies"])), (2, 1))
         self.assertEqual(fresh_basis["overloadedModelServices"], [])
@@ -371,7 +372,8 @@ class CoolingWorkflowTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             for index, identity in enumerate(self.identities):
                 quota_routing.record_rejection(db, "dsh", identity["provider"], failure(reset=moment(300 - index * 60)), now=T0)
-        selected = self.board_.store.decisions.request_select({"requestId": "all-cooling", "task": "choose"})
+        selected = self.board_.store.decisions.request_select({"requestId": "all-cooling", "task": "choose",
+                                                               "expectedSeconds": 1800})
         view = self.board_.call("selection_get", {"decisionId": selected["decisionId"]})["decision"]
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["reason"], {"code": "all-candidates-cooling", "params": {"retryAt": moment(180)}})

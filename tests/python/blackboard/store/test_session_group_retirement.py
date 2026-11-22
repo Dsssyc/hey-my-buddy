@@ -55,7 +55,8 @@ class SessionGroupRetirementTests(WorkflowTestCase):
             self.assertEqual(claim['sessionRecordPath'], str(path))
             self.assertFalse(native_path(path).exists())
         plain = board.submit_execution(requestId='command', task='Independent execution',
-                                       cwd=str(self.workdir('command')), adapter='command', argv=['test-command'])
+                                       cwd=str(self.workdir('command')), adapter='command', argv=['test-command'],
+                                       expectedSeconds=1800)
         run_id = plain['task']['runId']
         claim = self.claim(board, run_id=run_id)['claim']
         self.assertIsNone(claim['sessionRecordPath'])

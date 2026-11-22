@@ -14,7 +14,7 @@ from hey_my_buddy.blackboard.routing import maintenance_data, router
 from hey_my_buddy.blackboard.routing.maintenance import Scheduler
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
-from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination
@@ -980,7 +980,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def test_ordinary_capacity_blocks_maintenance_until_released(self):
         occupied = self.board_.submit_execution(
             requestId="capacity-holder", task="A model-free occupied slot", adapter="command",
-            argv=["true"], cwd=str(self.workdir("capacity")))["task"]["runId"]
+            argv=["true"], cwd=str(self.workdir("capacity")), expectedSeconds=1800)["task"]["runId"]
         blocker = admit_board(self.board_, {"nonce": "c" * 32, "taskId": occupied})["claim"]
         self.assertIsNotNone(blocker)
         self.configure()

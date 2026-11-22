@@ -12,6 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
@@ -198,7 +199,7 @@ class SchemaWorkerTests(NativeRunCase):
                    "live": {"instanceId": "a" * 64, "token": "b" * 64}}
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"], turn_id="turn",
-                               input_sha256=run_execution.input_hash(turn))
+                               input_sha256=input_hash(turn))
         handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True), \

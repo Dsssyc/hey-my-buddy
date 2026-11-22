@@ -10,7 +10,7 @@ import unittest
 
 from support import BoardTestCase, FakeClock
 
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.blackboard.routing.router_history import record_outcome
 from hey_my_buddy.blackboard.routing import router_sequence
 

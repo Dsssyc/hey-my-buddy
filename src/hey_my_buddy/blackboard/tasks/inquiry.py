@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...protocol import schemas
+from ...protocol import capabilities, schemas
 from ...protocol.reasons import reason as make_reason
 from ...errors import BoardError
 from ..store.store import BoardStore
@@ -16,7 +16,7 @@ from ...protocol.inquiry import (
 )
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
-from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveObservation, LiveRequest, LiveReply, LiveSnapshot
+from ...protocol.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveObservation, LiveRequest, LiveReply, LiveSnapshot
 from ...protocol.harness_names import HARNESS_NAMES
 
 if TYPE_CHECKING:
@@ -41,22 +41,17 @@ LIMITS = {
 
 
 def adapter_capabilities(adapter: str) -> frozenset[str]:
-    """The adapter registry's declared capability set, or empty when unknown."""
+    """The adapter's declared capability set, or empty when unknown."""
     try:
-        from ...buddy.harnesses.registry import adapters
-
-        return frozenset(adapters()[adapter].capabilities)
+        return frozenset(capabilities.adapter_capabilities(adapter))
     except (KeyError, TypeError):
         return frozenset()
 
 
 def inquiry_capable(adapter: str) -> bool:
-    """Whether this adapter declares correlated ``inquiry`` in its registry.
+    """Whether this adapter declares correlated ``inquiry`` support.
 
-    The registry is the single declaration point. A harness without it answers
-    honestly that it has no inquiry capability instead of half-observing a bridge
-    that was never mounted; the check never probes the native CLI or starts
-    anything, so a read-only observation stays free of side effects.
+    The declaration can be read without probing or starting the native CLI.
     """
     return "inquiry" in adapter_capabilities(adapter)
 
@@ -70,7 +65,7 @@ def observe_capable(adapter: str) -> bool:
 def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
     from ...protocol.requests import parse_request, dump_request
-    from ..store.db import canonical_json, sha256_text
+    from ...json_codec import canonical_json, sha256_text
     params = dump_request(parse_request("inquire", params, audience="service"))
     timeout_ms = params.get("timeoutMs", DEFAULT_TRANSPORT_TIMEOUT_MS)
     wait_ms = params.get("waitMs", 0)

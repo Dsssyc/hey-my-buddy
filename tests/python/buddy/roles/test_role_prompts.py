@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
@@ -168,7 +169,7 @@ class RolePromptTests(unittest.TestCase):
                 frozen_turn = freeze_turn_input(root, turn)
                 turn_io.private_json(root / "input.json", frozen_turn)
                 frozen_input = (root / "input.json").read_bytes()
-                frozen_hash = turn_io.input_hash(frozen_turn)
+                frozen_hash = input_hash(frozen_turn)
                 with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
                                "stateDir": str(root),
@@ -193,9 +194,9 @@ class RolePromptTests(unittest.TestCase):
                     self.assertGreater(request.input_text.index(task), len(role))
                     self.assertEqual(request.input_text.count(task), 1)
                     self.assertTrue(request.input_text.endswith(
-                        turn_io.canonical_json(prompt_input(turn))))
+                        canonical_json(prompt_input(turn))))
                     self.assertEqual((root / "input.json").read_bytes(), frozen_input)
-                    self.assertEqual(turn_io.input_hash(frozen_turn), frozen_hash)
+                    self.assertEqual(input_hash(frozen_turn), frozen_hash)
                     self.assertNotIn("private stash fact", request.input_text)
                     self.assertNotIn("task", turn["context"])
                     self.assertNotIn("taskTruncated", turn["context"])

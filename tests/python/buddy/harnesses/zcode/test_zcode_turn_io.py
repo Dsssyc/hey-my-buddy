@@ -10,6 +10,7 @@ import unittest
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from protocol.fixtures import native_turn
+from hey_my_buddy.protocol.turn_checkpoint import input_hash
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.roles import turn_io
 from private_acl import assert_private_path
@@ -29,7 +30,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         context.spec.update(adapter="zcode", harness="zcode")
         context.agent_credential = "private-agent-token"
         turn_io.prepare_turn(context)
-        self.assertEqual(hashlib.sha256(native_path(context.turn_input_file()).read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
+        self.assertEqual(hashlib.sha256(native_path(context.turn_input_file()).read_bytes()).hexdigest(), input_hash(context.turn_input))
         self.assertNotIn(context.agent_credential, native_path(context.turn_input_file()).read_text(encoding="utf-8"))
         assert_private_path(self, context.credential_file(), 0o600)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)

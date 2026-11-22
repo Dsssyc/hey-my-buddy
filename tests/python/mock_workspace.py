@@ -12,7 +12,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.json_codec import canonical_json, sha256_text
 from hey_my_buddy.errors import BoardError
 from support import native_read_bytes, native_read_text, native_write_bytes
 
