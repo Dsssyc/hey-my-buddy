@@ -83,11 +83,13 @@ from ..native_support import (
 )
 from ..native_observations import native_counter
 from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
+from ....protocol.usage import classify_claude_result_rejection
 from ..snapshot_mount import (
     SNAPSHOT_MCP_SERVER_NAME, claude_mcp_config, snapshot_coverage_refs, stdio_tool_names,
     verify_mounted_calls,
 )
 from ..run_contract import (
+    MAX_UNSUPPORTED_METHODS,
     CheckedBuddy,
     CheckedValue,
     CompletionEvidence,
@@ -96,6 +98,7 @@ from ..run_contract import (
     EvidenceRef,
     InterruptEvidence,
     NativeEvidence,
+    NativeRequestsFacts,
     PolicyFact,
     ResultBuddy,
     RunBuddy,
@@ -127,7 +130,6 @@ from .protocol import (
     ProviderRejected,
     TurnEvidence,
     model_usage_keys,
-    result_quota_denial,
     total_cost_usd,
 )
 from .tool_evidence import ReadOnlyToolEvidence
@@ -488,6 +490,7 @@ class _TurnCollector:
         self.denied_operation_summary = ""
         self.expected_permission_mode = expected_permission_mode
         self.unsupported_requests = 0
+        self.unsupported_methods: list[str] = []
         self.early_messages: list[tuple[bool, dict]] = []
         self.user_sent = False
         self.user_send_attempted = False
@@ -562,7 +565,15 @@ class _TurnCollector:
             # waiting, so a stop takes effect at once after the peer's answer.
             self._notify(settled=False, raw=None)
         else:
+            # The documented unsupported-callback refusal: no Host answer exists
+            # for these native requests, so the refusal is evidence only and
+            # never an attention fact. The controlled subtype name is retained
+            # deduplicated in first-seen order, bounded by the shared cap.
             self.unsupported_requests += 1
+            name = request.get("subtype")
+            name = name if isinstance(name, str) and 0 < len(name) <= 128 else "unknown"
+            if len(self.unsupported_methods) < MAX_UNSUPPORTED_METHODS and name not in self.unsupported_methods:
+                self.unsupported_methods.append(name)
             self._connection.send(_native_request_response(frame))
 
     def send_input(self, connection: Connection, session_id: str, cwd: str, input_text: str) -> None:
@@ -830,8 +841,10 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
     # Success is explicit: subtype "success" with is_error exactly false.
     if subtype == "success" and native_result.get("is_error") is False:
         return True
-    if result_quota_denial(native_result):
-        raise ProviderRejected("unknown", None, source="claude/stream-json-result")
+    rejection = classify_claude_result_rejection(native_result)
+    if rejection is not None:
+        raise ProviderRejected(rejection[1], None, classification=rejection[0],
+                               source="claude/stream-json-result")
     if (native_result.get("is_error") is True or subtype == "error"
             or isinstance(subtype, str) and subtype.startswith("error_")):
         source = {"code": native_result.get("error_code", native_result.get("code", subtype)),
@@ -886,18 +899,17 @@ def _retain(evidence_refs: list, invocation_root: Path, kind: str, name: str, va
 
 def _native_observations(collector: _TurnCollector, native_result: dict | None,
                          state: _RunState) -> dict:
-    """The observed session model, model set and costs, as facts.
+    """The observed costs and run-stage facts that stay private evidence.
 
-    Each value keeps its native source; none is ever filled from a requested
-    buddy, and an unobserved one stays null. The interrupt pair appears only when an
-    interrupt was actually requested, as the strict booleans the shared
-    projection keeps — the acknowledged value is the peer's own reply, never
-    an inference from the process stop.
+    The observed session model, the model set and the unsupported native
+    requests are typed fields of the common result itself; this file keeps the
+    facts without a typed field. Each value keeps its native source; none is
+    ever filled from a requested buddy, and an unobserved one stays null. The
+    interrupt pair appears only when an interrupt was actually requested, as
+    the strict booleans the shared projection keeps — the acknowledged value is
+    the peer's own reply, never an inference from the process stop.
     """
-    observations = {"sessionModel": collector.evidence.session_model if collector.evidence else None,
-                    "observedModels": model_usage_keys(native_result) if native_result is not None else [],
-                    "totalCostUsd": total_cost_usd(native_result) if native_result is not None else None,
-                    "unsupportedNativeRequests": collector.unsupported_requests}
+    observations = {"totalCostUsd": total_cost_usd(native_result) if native_result is not None else None}
     if collector._connection is not None:
         observations["protocol"] = collector._connection.observations()
     if state.catalog is not None:
@@ -923,10 +935,11 @@ def _incomplete_result_provider_rejection(collector: _TurnCollector | None,
     """Retain a confirmed root result rejection when collection fails after it."""
     evidence = collector.evidence if collector is not None else None
     result = evidence.result if evidence is not None else None
-    if (result is None or not result_quota_denial(result) or not evidence.init_observed
+    rejection = classify_claude_result_rejection(result) if result is not None else None
+    if (rejection is None or not evidence.init_observed
             or preparation is None or result.get("session_id") != preparation.session_id):
         return None
-    return {"code": "quota-exceeded", "nativeCode": "unknown",
+    return {"code": rejection[0], "nativeCode": rejection[1],
             "source": "claude/stream-json-result", "observedAt": utc_now(),
             "resetsAt": None, "rejectionPhase": "unknown"}
 
@@ -1044,14 +1057,14 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         completion = CompletionEvidence(stream_end=stream_ended)
     checked = CheckedBuddy()
     if state.catalog_checked:
-        # Initialize reports the provider as used and confirms model and effort
-        # membership; the provider is never copied from the request. No
-        # applied-effort readback exists in the native result, so none is
-        # claimed for it.
+        # Initialize reports the provider as used (a native readback) and the
+        # on-the-spot catalog validates model and effort membership; the
+        # provider is never copied from the request. No applied-effort readback
+        # exists in the native result, so none is claimed for it.
         checked = CheckedBuddy(
-            provider=CheckedValue(value=state.provider),
-            model=CheckedValue(value=request.buddy.model),
-            effort=CheckedValue(value=request.buddy.effort))
+            provider=CheckedValue(value=state.provider, basis="native-readback"),
+            model=CheckedValue(value=request.buddy.model, basis="catalog-validated"),
+            effort=CheckedValue(value=request.buddy.effort, basis="catalog-validated"))
     effective = _effective_policy(preparation) if preparation is not None else EffectivePolicy()
     continuation = None
     if session_confirmed and session_id is not None:
@@ -1112,6 +1125,11 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
+            native_requests=NativeRequestsFacts(
+                permission_denials=len(collector.denied)
+                + (evidence.permission_denials if evidence is not None else 0),
+                unsupported_requests=collector.unsupported_requests,
+                unsupported_methods=tuple(collector.unsupported_methods)) if collector is not None else None,
             model_responded=(True if collector is not None and collector.model_responded
                            else False if not (collector is not None and collector.user_send_attempted)
                            or is_input_too_large(state.native_admission_error)
@@ -1123,7 +1141,9 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
                 requested=RunBuddy(provider=request.buddy.provider,
                                    model=request.buddy.model,
                                    effort=request.buddy.effort),
-                checked=checked),
+                checked=checked,
+                session_model=evidence.session_model if evidence is not None else None,
+                observed_models=tuple(model_usage_keys(native_result)) if native_result is not None else ()),
             native_identity=native_identity,
             value=value if packages else None,
             completion_evidence=completion if packages else None,

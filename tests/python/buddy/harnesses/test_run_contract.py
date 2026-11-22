@@ -130,7 +130,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
 
     def test_unknown_end_and_bounded_native_evidence_roundtrip_losslessly(self):
         evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future-event": 2}, "total": 2},
-                                     unconfirmed=["buddy-readback", "tool-scope"])
+                                     unconfirmed=["buddy-readback", "settings-readback"])
         result = full_result().model_copy(update={
             "end": rc.RunEnd(status="unknown", reason_code="native-end-unread"),
             "native_evidence": evidence})
@@ -138,7 +138,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
         self.assertEqual(decoded, result)
         self.assertEqual(decoded.native_evidence.to_payload(), {
             "unknownEvents": {"countsByType": {"future-event": 2}, "total": 2},
-            "unconfirmed": ["buddy-readback", "tool-scope"]})
+            "unconfirmed": ["buddy-readback", "settings-readback"]})
         self.assertEqual(decoded.native_evidence.unknown_events.counts_by_type, (("future-event", 2),))
 
     def test_native_evidence_refuses_bad_shapes_counts_and_unconfirmed_names(self):
@@ -153,20 +153,21 @@ class NativeEvidenceContractTests(unittest.TestCase):
             {"unknownEvents": {"countsByType": {"a" * 129: 1}, "total": 1}},
             {"unknownEvents": {"countsByType": {}, "total": False}},
             {"unknownEvents": {"countsByType": {}, "total": rc.MAX_COUNT + 1}},
-            {"unconfirmed": ["field"] * 17},
-            {"unconfirmed": "field"},
+            {"unconfirmed": ["settings-readback"] * 17},
+            {"unconfirmed": "settings-readback"},
             {"unconfirmed": [42]},
             {"extra": "field"},
-        ] + [{"unconfirmed": [name]} for name in ("", "Readback", "tool_scope", "a b", "a" * 65, "a\n")]
+        ] + [{"unconfirmed": [name]} for name in
+             ("", "Readback", "tool_scope", "a b", "a\n", "a" * 65, "tool-scope", "made-up-readback")]
         fields = full_result().to_payload()
         for bad in malformed:
             with self.subTest(evidence=bad), self.assertRaises(BoardError):
                 rc.RunResult.from_payload({**fields, "nativeEvidence": bad})
         maximum = rc.NativeEvidence(unknown_events={
             "countsByType": {str(i): rc.MAX_COUNT for i in range(64)}, "total": rc.MAX_COUNT},
-            unconfirmed=["a" * 64] * 16)
+            unconfirmed=list(rc.UNCONFIRMED_FACTS))
         self.assertEqual(len(maximum.unknown_events.counts_by_type), 64)
-        self.assertEqual(len(maximum.unconfirmed), 16)
+        self.assertEqual(tuple(maximum.unconfirmed), rc.UNCONFIRMED_FACTS)
 
 
 class CodecRoundtripTests(unittest.TestCase):

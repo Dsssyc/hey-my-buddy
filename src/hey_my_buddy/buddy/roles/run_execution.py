@@ -183,6 +183,15 @@ def _base_result(result) -> dict:
         payload["inputFailure"] = result.input_failure.value
     if result.session_record_failure is not None:
         payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
+    requests = result.native_requests
+    if requests is not None and requests.unsupported_requests > 0:
+        payload["unsupportedNativeRequests"] = requests.unsupported_requests
+        if requests.unsupported_methods:
+            payload["unsupportedNativeRequestMethods"] = list(requests.unsupported_methods)
+    if result.buddy.session_model is not None:
+        payload["sessionModel"] = result.buddy.session_model
+    if result.buddy.observed_models:
+        payload["observedModels"] = list(result.buddy.observed_models)
     _merge_native_evidence(result, payload)
     return payload
 
@@ -358,11 +367,8 @@ def _worker_reports(result, payload: dict) -> bool:
                 if key == "nativeCheckpoint" and result.native_identity is not None:
                     payload["nativeTurnId"] = result.native_identity.turn_id
             elif kind == "native-observations":
-                for field in ("sessionModel", "observedModels", "totalCostUsd"):
-                    if field in report:
-                        payload[field] = report[field]
-                if report.get("unsupportedNativeRequests"):
-                    payload["unsupportedNativeRequests"] = report["unsupportedNativeRequests"]
+                if "totalCostUsd" in report:
+                    payload["totalCostUsd"] = report["totalCostUsd"]
                 for field in ("nativeInterruptRequested", "nativeInterruptAcknowledged"):
                     if type(report.get(field)) is bool:
                         payload[field] = report[field]

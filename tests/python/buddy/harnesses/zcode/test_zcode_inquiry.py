@@ -923,10 +923,12 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual([record["method"] for record in records],
                          ["interaction/requestOfficialMcpAuthHeaders", "interaction/browserList"])
         self.assertTrue(all(record["at"] for record in records))
-        observations = json.loads(native_path(Path(next(
-            ref.location for ref in handle.result.evidence_refs
-            if ref.kind == "native-observations"))).read_text(encoding="utf-8"))
-        self.assertEqual(observations, {"unsupportedNativeRequests": 2})
+        # The count and the deduplicated method names travel as the result's
+        # typed native-request facts, and nothing counts as a denial.
+        self.assertEqual(handle.result.native_requests.unsupported_requests, 2)
+        self.assertEqual(handle.result.native_requests.unsupported_methods,
+                         ("interaction/requestOfficialMcpAuthHeaders", "interaction/browserList"))
+        self.assertEqual(handle.result.native_requests.permission_denials, 0)
 
     def test_a_completed_receipt_cannot_hide_a_refused_native_request(self):
         context = self.context("attention-after-finish", timeout=30)

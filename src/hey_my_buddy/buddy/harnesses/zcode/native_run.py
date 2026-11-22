@@ -76,6 +76,7 @@ from ..run_contract import (
     EvidenceRef,
     InterruptEvidence,
     NativeEvidence,
+    NativeRequestsFacts,
     ProviderRejectionPackage,
     UnknownEvents,
     UsagePackage,
@@ -97,6 +98,7 @@ from ..run_contract import (
     StopLayer,
     fold_unknown_events,
     unknown_event_name,
+    unsupported_method_names,
 )
 from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
@@ -166,13 +168,16 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
     # shared permission requests it any more, so only the deliberate mode
     # probe reaches this branch.
     if mode == "plan" or not isinstance(actual, str) or not actual.strip():
-        connection.on_unknown("permission-mode-readback-unconfirmed")
+        connection.on_unconfirmed("permission-mode-readback")
     elif actual != mode:
         raise NativeError("configuration-mismatch", "native ZCode did not retain the requested permission mode")
 
 
 def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
-                      note_unknown: Callable[[str], None] = lambda _label: None) -> dict:
+                      note_unknown: Callable[[str], None] = lambda _label: None,
+                      on_unconfirmed: Callable[[str], None] | None = None) -> dict:
+    if on_unconfirmed is None:
+        on_unconfirmed = connection.on_unconfirmed
     session_id = snapshot["session"]["sessionId"]
     # spec is the frozen request's own selection: blank or non-string values
     # were refused when the RunRequest was built, so nothing is re-checked here.
@@ -207,7 +212,7 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
             or thought is not None and thought != effort):
         raise NativeError("buddy-mismatch", "native ZCode did not retain the requested model and reasoning settings")
     if any(item is None for item in actual.values()) or thought is None:
-        note_unknown("buddy-readback-unconfirmed")
+        on_unconfirmed("buddy-readback")
     if thought != actual["effort"]:
         actual["effort"] = None
     return actual
@@ -475,6 +480,7 @@ class _RunFacts:
     def __init__(self):
         self.model_responded = False
         self.unknown_counts: dict[str, int] = {}
+        self.unconfirmed: list[str] = []
         self.markers = 0
         self.denied: list[dict] = []
         self.unsupported: list[dict] = []
@@ -1138,6 +1144,11 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             facts.note_unknown(label)
             feedback_due[0] = True
 
+        def unconfirmed_sink(name: str) -> None:
+            # An unconfirmed readback is a fact of its own kind, never an
+            # unknown event and never a role-verdict trigger.
+            facts.unconfirmed.append(name)
+
         try:
             notify()
             spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
@@ -1145,6 +1156,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                       owned=owned_spawn)
             connection = spawn.connection
             connection.on_unknown = unknown_sink
+            connection.on_unconfirmed = unconfirmed_sink
             connection.attention = attention_sink
             connection.on_unsupported = unsupported_sink
             connection.after_pump = dispatch_feedback
@@ -1653,12 +1665,10 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         retain("denied-interactions", "denied-interactions.json", {"records": facts.denied})
     if facts.unsupported:
         # Refused requests no Host answer exists for keep each method and time
-        # as their own private evidence; the count alone reaches the receipt
-        # through the native-observations reference the role already reads.
+        # as their own private evidence; the count and the deduplicated method
+        # names reach the receipt as the result's typed native-request facts.
         retain("unsupported-native-requests", "unsupported-native-requests.json",
                {"records": facts.unsupported})
-        retain("native-observations", "native-observations.json",
-               {"unsupportedNativeRequests": len(facts.unsupported)})
     if native_path(stderr_path).is_file():
         raw_stderr = read_bytes(stderr_path)
         refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
@@ -1667,13 +1677,16 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
     return refs
 
 
-def _shared_unknown_events(facts: _RunFacts) -> NativeEvidence | None:
-    """The run's already-bounded unknown-event counts as the shared summary."""
+def _native_evidence_facts(facts: _RunFacts) -> NativeEvidence | None:
+    """The run's bounded unknown-event counts and unconfirmed readbacks."""
     counts = facts.unknown_counts
-    if not counts:
+    unconfirmed = tuple(dict.fromkeys(facts.unconfirmed))
+    if not counts and not unconfirmed:
         return None
-    return NativeEvidence(unknown_events=UnknownEvents(
-        counts_by_type=dict(counts), total=sum(counts.values())))
+    return NativeEvidence(
+        unknown_events=UnknownEvents(counts_by_type=dict(counts), total=sum(counts.values()))
+        if counts else None,
+        unconfirmed=unconfirmed)
 
 
 def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunState,
@@ -1810,12 +1823,17 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         native_request_sent=state.native_request_sent,
         native_admission_error=_native_error_package(state.native_admission_error),
         native_event_count=event_count if event_count else None,
-        native_evidence=_shared_unknown_events(facts),
+        native_evidence=_native_evidence_facts(facts),
+        native_requests=NativeRequestsFacts(
+            permission_denials=len(facts.denied),
+            unsupported_requests=len(facts.unsupported),
+            unsupported_methods=unsupported_method_names(facts.unsupported)),
         buddy=ResultBuddy(
             requested=RunBuddy(provider=request.buddy.provider,
                                model=request.buddy.model,
                                effort=request.buddy.effort),
-            checked=checked),
+            checked=checked,
+            session_model=resolved.get("model") if resolved is not None else None),
         native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_tool_package(tool_package),

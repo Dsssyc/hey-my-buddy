@@ -20,7 +20,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ....protocol.usage import identifier as _identifier
+from ....protocol.usage import (
+    classify_claude_rate_limit_event as _classify_rate_limit_event,
+    classify_provider_rejection_code as _classify_rejection_code,
+    identifier as _identifier,
+)
 from ..native_observations import bound_native_text, native_counter
 from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.activity import native_tool_name
@@ -49,10 +53,13 @@ class ClaudeProtocolError(Exception):
 class ProviderRejected(Exception):
     """A structured native provider rejection; carries only bounded typed facts."""
 
-    def __init__(self, native_code: str, resets_at: object, *, classification: str = "quota-exceeded",
+    _MESSAGES = {"quota-exceeded": "the Claude provider quota rejected this execution",
+                 "rate-limited": "the Claude provider model service is rate limited",
+                 "overloaded": "the Claude provider model service is overloaded"}
+
+    def __init__(self, native_code: str, resets_at: object, *, classification: str,
                  source: str = "claude/stream-json-rate-limit-event"):
-        super().__init__("the Claude provider quota rejected this execution" if classification == "quota-exceeded"
-                         else "the Claude provider model service is overloaded")
+        super().__init__(self._MESSAGES[classification])
         self.native_code = native_code
         self.classification = classification
         self.resets_at = resets_at
@@ -238,15 +245,6 @@ def _bounded_resets_at(value: object):
     return None
 
 
-def result_quota_denial(result: dict) -> bool:
-    """A structured native quota denial in the final result; never prose-based."""
-    status = result.get("api_error_status")
-    if status == 429 or status == "429":
-        return True
-    subtype = result.get("subtype")
-    return isinstance(subtype, str) and any(marker in subtype.lower() for marker in ("quota", "usage_limit"))
-
-
 def model_usage_keys(result: dict) -> list[str]:
     """The observed-model set; never one attested model identity."""
     usage = result.get("modelUsage")
@@ -317,9 +315,13 @@ class TurnEvidence:
             info = frame.get("rate_limit_info")
             if isinstance(info, dict) and info.get("status") == "rejected":
                 # A rejection fails the attempt even when the rate-limit identity
-                # is absent or malformed; the published facts stay sanitized.
+                # is absent or malformed; the published facts stay sanitized. The
+                # shared classifier separates transient rate limiting from the
+                # subscription quota windows.
                 rate_limit_type = _identifier(info.get("rateLimitType")) or "unknown"
-                raise ProviderRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))
+                raise ProviderRejected(
+                    rate_limit_type, _bounded_resets_at(info.get("resetsAt")),
+                    classification=_classify_rate_limit_event(rate_limit_type))
             return None
         # Frames under a subagent's tool call are not root-turn evidence; a
         # subagent result never ends the root turn.
@@ -385,8 +387,8 @@ class TurnEvidence:
             # The CLI's error assistant is infrastructure output, not model work.
             # Only a root structured code can reject this root turn.
             if root_session and frame.get("error") == "overloaded":
-                from ....protocol.usage import classify_provider_rejection_code
-                raise ProviderRejected("overloaded", None, classification=classify_provider_rejection_code("overloaded"),
+                raise ProviderRejected("overloaded", None,
+                                       classification=_classify_rejection_code("overloaded"),
                                        source="claude/stream-json-assistant-error")
             self.model_messages += 1
             self._observe_assistant(frame)

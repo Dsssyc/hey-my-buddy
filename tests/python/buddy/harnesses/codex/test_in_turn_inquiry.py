@@ -139,11 +139,15 @@ class NativeInquiryTests(unittest.TestCase):
         self.assertEqual(facts.denied, [])
         self.connection.on_request({"id": "unknown", "method": "unknown/method", "params": {}})
         self.assertEqual(self.connection.sent[-1]["error"]["code"], -32601)
-        self.assertEqual(len(facts.denied), 1)
+        # Unknown server requests are refused as unsupported evidence only and
+        # never become denied interactions that trigger attention.
+        self.assertEqual(len(facts.unsupported), 1)
+        self.assertEqual(facts.denied, [])
         self.connection.on_request({"id": "foreign-tool", "method": "item/tool/call",
                                     "params": {"tool": "other_tool"}})
         self.assertEqual(self.connection.sent[-1]["error"]["code"], -32601)
-        self.assertEqual(len(facts.denied), 2)
+        self.assertEqual(len(facts.unsupported), 2)
+        self.assertEqual(facts.denied, [])
         self.ask()
         self.native.poll()
         self.evidence.completed = {"id": "turn-1", "status": "completed"}

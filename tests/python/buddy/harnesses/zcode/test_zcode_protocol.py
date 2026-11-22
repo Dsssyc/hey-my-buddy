@@ -735,8 +735,11 @@ class BuddyTests(unittest.TestCase):
         self.assertEqual(connection.call.call_count, 2)
         self.assertEqual(result, {"provider": None, "model": None, "effort": None})
         self.assertEqual(unknown, ["buddy-catalog-unrecognized",
-                                   "buddy-selection-unrecognized",
-                                   "buddy-readback-unconfirmed"])
+                                   "buddy-selection-unrecognized"])
+        # The unconfirmed buddy readback names its closed shared fact, never an
+        # unknown event.
+        self.assertEqual([call.args[0] for call in connection.on_unconfirmed.call_args_list],
+                         ["buddy-readback"])
 
     def test_identified_selection_mismatch_is_rejected_even_with_other_unknown_fields(self):
         requested = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
@@ -772,7 +775,8 @@ class BuddyTests(unittest.TestCase):
                     {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                     note_unknown=unknown.append)
                 self.assertEqual(result, {"provider": "fixture-api", "model": "fixture-model", "effort": None})
-                self.assertIn("buddy-readback-unconfirmed", unknown)
+                self.assertEqual([call.args[0] for call in connection.on_unconfirmed.call_args_list],
+                                 ["buddy-readback"])
 
     def test_catalog_preserves_each_models_real_efforts_and_omits_unconfigurable_models(self):
         def model(identifier, efforts, provider="api"):

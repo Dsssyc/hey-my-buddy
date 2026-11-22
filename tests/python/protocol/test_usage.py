@@ -151,6 +151,44 @@ class ProviderRejectionTests(unittest.TestCase):
                      "contentPolicy", "policyViolation"):
             self.assertEqual(usage.classify_provider_rejection_code(text), "unknown")
 
+    def test_claude_rate_limit_events_split_transient_from_exhaustion(self):
+        for identity in ("rate_limit_reached", "ratelimitexceeded", "model_rate_limited"):
+            with self.subTest(identity=identity):
+                self.assertEqual(usage.classify_claude_rate_limit_event(identity), "rate-limited")
+        # Subscription quota windows, overage and any unreadable identity mean
+        # the account's quota budget is exhausted.
+        for identity in ("five_hour", "seven_day", "overage", None, "primary?x=1"):
+            with self.subTest(identity=identity):
+                self.assertEqual(usage.classify_claude_rate_limit_event(identity), "quota-exceeded")
+
+    def test_claude_result_rejections_keep_their_structured_source(self):
+        self.assertEqual(usage.classify_claude_result_rejection(
+            {"subtype": "error_usage_limit_reached"}), ("quota-exceeded", "error_usage_limit_reached"))
+        # The subtype keeps its own identifier as the native code.
+        self.assertEqual(usage.classify_claude_result_rejection(
+            {"subtype": "ERROR_QUOTA"}), ("quota-exceeded", "ERROR_QUOTA"))
+        self.assertEqual(usage.classify_claude_result_rejection(
+            {"subtype": "error_quota_during_execution"}), ("quota-exceeded", "error_quota_during_execution"))
+        # A subtype whose identifier shape is not publishable keeps the bounded
+        # unknown code instead of free text.
+        self.assertEqual(usage.classify_claude_result_rejection(
+            {"subtype": "ERROR QUOTA!"}), ("quota-exceeded", "unknown"))
+        # A bare HTTP 429 without a quota event or subtype is transient rate
+        # limiting, never the provider cooling an exhaustion triggers.
+        for status in (429, "429"):
+            with self.subTest(status=status):
+                self.assertEqual(usage.classify_claude_result_rejection(
+                    {"api_error_status": status}), ("rate-limited", "http_429"))
+                self.assertEqual(usage.classify_claude_result_rejection(
+                    {"subtype": "error_during_execution", "api_error_status": status}),
+                    ("rate-limited", "http_429"))
+        # Arbitrary prose never infers exhaustion, and other statuses are not
+        # structured provider rejections at all.
+        self.assertIsNone(usage.classify_claude_result_rejection(
+            {"subtype": "error_during_execution", "result": "quota exhausted according to the message"}))
+        self.assertIsNone(usage.classify_claude_result_rejection({"api_error_status": 529}))
+        self.assertIsNone(usage.classify_claude_result_rejection({}))
+
     def test_content_policy_keeps_only_a_valid_bounded_message(self):
         rejection = {"code": "content-policy", "nativeCode": "cyberPolicy", "rejectionPhase": "before-model"}
         message = "提供方拒绝了此请求。"

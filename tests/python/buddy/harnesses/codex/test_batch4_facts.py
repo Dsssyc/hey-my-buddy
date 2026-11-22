@@ -152,7 +152,7 @@ class NativeFactsTests(unittest.TestCase):
                 thread, state = self.configure("review", receipt, {})
                 self.assertEqual(thread, "thread")
                 self.assertEqual(state.policy_checks["selectedModel"]["status"], "unknown")
-                checked = native_run._checked_buddy(self.request, state, "review").checked
+                checked = native_run._checked_buddy(self.request, state).checked
                 self.assertIsNone(checked.model)
                 self.assertIsNone(checked.effort)
 
@@ -208,7 +208,7 @@ class NativeFactsTests(unittest.TestCase):
                         review_request = self.request.model_copy(update={"permission": "read"}) if mode == "review" else self.request
                         thread = getattr(native_run, "_configure_" + mode)(connection, review_request, state)
                     self.assertEqual(thread, "thread")
-                    self.assertIsNone(native_run._checked_buddy(self.request, state, mode).checked.provider)
+                    self.assertIsNone(native_run._checked_buddy(self.request, state).checked.provider)
 
     def test_review_checkout_and_thread_ownership_still_refuse(self):
         for top, nested, reason in (({"cwd": str(self.root / "foreign")}, {}, "readonly-configuration-mismatch"),

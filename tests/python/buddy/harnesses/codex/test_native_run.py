@@ -625,13 +625,17 @@ class FastSeamTests(SeamCase):
         self.assertEqual(facts["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(facts["nativeConfigPolicy"]["web_search"], "enabled")
 
-    def test_unreadable_no_tool_model_continues_with_unknown_checked_model(self):
+    def test_unreadable_no_tool_model_falls_back_to_the_catalog_basis(self):
         for case in ("missing-model", "unreadable-model"):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.model_responded)
-                self.assertIsNone(result.buddy.checked.model)
+                # Without a native readback the on-the-spot catalog's listing is
+                # the checked model's own basis; the session model stays unknown.
+                self.assertEqual(result.buddy.checked.model.value, result.buddy.requested.model)
+                self.assertEqual(result.buddy.checked.model.basis, "catalog-validated")
+                self.assertIsNone(result.buddy.session_model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
     def test_different_no_tool_model_is_refused_before_model_input(self):
@@ -1061,13 +1065,17 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "confirmed")
         self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], False)
 
-    def test_unreadable_review_model_continues_with_unknown_checked_model(self):
+    def test_unreadable_review_model_falls_back_to_the_catalog_basis(self):
         for case in ("readonly-model-missing", "readonly-model-unreadable"):
             with self.subTest(case=case):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.model_responded)
-                self.assertIsNone(result.buddy.checked.model)
+                # Without a native readback the on-the-spot catalog's listing is
+                # the checked model's own basis; the session model stays unknown.
+                self.assertEqual(result.buddy.checked.model.value, result.buddy.requested.model)
+                self.assertEqual(result.buddy.checked.model.basis, "catalog-validated")
+                self.assertIsNone(result.buddy.session_model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
     def test_different_review_model_is_refused_before_model_input(self):

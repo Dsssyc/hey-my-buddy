@@ -67,6 +67,14 @@ EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
+#: The closed unconfirmed-fact vocabulary. Every harness's unconfirmed
+#: readback names one of these; a native label outside this set is an unknown
+#: event, never an unconfirmed fact.
+UNCONFIRMED_FACTS = ("settings-readback", "model-catalog", "thread-receipt", "permission-mode-readback",
+                     "buddy-readback", "model-readback", "effort-readback", "config-options-readback",
+                     "initialize-readback", "agent-info-readback")
+UnconfirmedFact = Literal[*UNCONFIRMED_FACTS]
+CheckedBasis = Literal["native-readback", "catalog-validated"]
 
 #: Bound of each JSON fact envelope. Growing tool-call rows live in a private
 #: digest-bound file; only its bounded reference travels in a tool package.
@@ -82,7 +90,8 @@ MAX_UNKNOWN_EVENT_TYPES = 64
 #: of a real native label can ever collide with it.
 UNLISTED_NATIVE_EVENTS = "(unlisted-native-events)"
 MAX_UNCONFIRMED_ITEMS = 16
-MAX_UNCONFIRMED_NAME_CHARS = 64
+MAX_UNSUPPORTED_METHODS = 16
+MAX_OBSERVED_MODELS = 32
 MAX_EVIDENCE_REFS = 32
 MAX_SESSION_SERVICES = 8
 MAX_SERVICE_TOOL_NAMES = 16
@@ -119,6 +128,22 @@ def fold_unknown_events(counts: dict[str, int], name: str, occurrences: int = 1)
     if name not in counts and len(counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
         name = UNLISTED_NATIVE_EVENTS
     counts[name] = counts.get(name, 0) + occurrences
+
+
+def unsupported_method_names(records) -> tuple[str, ...]:
+    """The refused unsupported requests' method names, deduplicated in order.
+
+    Each record keeps its bounded ``method`` string; one without a usable
+    short string contributes ``unknown``. The retained set stays within
+    ``MAX_UNSUPPORTED_METHODS`` distinct names.
+    """
+    names: list[str] = []
+    for record in records:
+        method = record.get("method") if isinstance(record, dict) else None
+        method = method if isinstance(method, str) and 0 < len(method) <= 128 else "unknown"
+        if len(names) < MAX_UNSUPPORTED_METHODS and method not in names:
+            names.append(method)
+    return tuple(names)
 
 
 class RunBuddy(InternalModel):
@@ -313,9 +338,14 @@ class RunEnd(InternalModel):
 
 
 class CheckedValue(InternalModel):
-    """One buddy identity value actually checked by the native path."""
+    """One buddy identity value actually checked by the native path.
+
+    ``basis`` names what proved the value: a native readback the driver itself
+    observed, or the on-the-spot catalog's validation of the requested value.
+    """
 
     value: Text(128)
+    basis: CheckedBasis = "native-readback"
 
 
 class CheckedBuddy(InternalModel):
@@ -331,10 +361,15 @@ class ResultBuddy(InternalModel):
 
     Native readback is retained as checked values. The role projects a complete
     checked buddy into ``resolved``; it never fills an unknown value from the request.
+    ``session_model`` is the session's own observed model identity and
+    ``observed_models`` the model identities the native stream itself named;
+    neither is ever filled from a requested value.
     """
 
     requested: Optional[RunBuddy] = None
     checked: CheckedBuddy = Field(default_factory=CheckedBuddy)
+    session_model: OptionalText(128) = None
+    observed_models: JsonTuple(Text(128), max_items=MAX_OBSERVED_MODELS) = ()
 
 
 class RunValue(InternalModel):
@@ -555,14 +590,31 @@ class UnknownEvents(InternalModel):
 class NativeEvidence(InternalModel):
     """Native shapes not understood and requested properties not confirmed.
 
-    Names describe observations supplied by each harness; this contract gives
-    them no role verdict and defines no harness-specific vocabulary.
+    ``unconfirmed`` names one of the closed unconfirmed-fact vocabulary — a
+    requested property whose native readback the run could not confirm.
+    ``unknown_events`` carries only genuinely unknown native event or
+    notification types, never an unconfirmed readback.
     """
 
     unknown_events: Optional[UnknownEvents] = None
-    unconfirmed: JsonTuple(Annotated[str, Field(min_length=1, max_length=MAX_UNCONFIRMED_NAME_CHARS,
-                                              pattern=r"^[a-z0-9-]+$")],
-                           max_items=MAX_UNCONFIRMED_ITEMS) = ()
+    unconfirmed: JsonTuple(UnconfirmedFact, max_items=MAX_UNCONFIRMED_ITEMS) = ()
+
+
+class NativeRequestsFacts(InternalModel):
+    """The native reverse requests the run answered, split by consequence.
+
+    ``permission_denials`` counts permission, approval and user-input
+    interaction requests the controller refused — the requests whose refusal
+    triggers attention and blocks a ``completed`` outcome. ``unsupported_requests``
+    counts reverse protocol requests answered with the documented unsupported-
+    method refusal (``-32601``): no Host answer exists for them, so their
+    refusal is evidence only and never attention. ``unsupported_methods``
+    retains the refused method names, deduplicated in first-seen order.
+    """
+
+    permission_denials: NonNegativeInt = 0
+    unsupported_requests: NonNegativeInt = 0
+    unsupported_methods: JsonTuple(Text(128), max_items=MAX_UNSUPPORTED_METHODS) = ()
 
 
 class RunResult(InternalModel):
@@ -589,6 +641,7 @@ class RunResult(InternalModel):
     #: provenance's own.
     native_event_count: Optional[Count] = None
     native_evidence: Optional[NativeEvidence] = None
+    native_requests: Optional[NativeRequestsFacts] = None
     native_request_sent: Optional[bool] = None
     # First root-session model output: text, reasoning, a tool call or positive output tokens.
     model_responded: Optional[bool] = None
@@ -646,14 +699,16 @@ class HarnessRun(Protocol):
 __all__ = [
     "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
     "FORMAT_VERSION",
-    "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_COUNT", "CheckedBuddy", "CheckedValue",
+    "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_COUNT", "CheckedBasis", "CheckedBuddy", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
-    "InterruptEvidence", "NativeIdentity", "NativeEvidence", "UnknownEvents", "PrivateStatePaths",
-    "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
-    "UNLISTED_NATIVE_EVENTS",
+    "InterruptEvidence", "NativeIdentity", "NativeEvidence", "NativeRequestsFacts", "UnknownEvents",
+    "PrivateStatePaths",
+    "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS",
+    "MAX_OBSERVED_MODELS", "MAX_UNSUPPORTED_METHODS",
+    "UNCONFIRMED_FACTS", "UNLISTED_NATIVE_EVENTS", "UnconfirmedFact",
     "ResumeCheckpoint", "RunBudget", "RunBuddy", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "PermissionLevel", "RunRequest", "RunResult", "RunValue", "SessionService", "SnapshotQueryMount",
     "StopEvidence",
     "StopLayer", "canonical_json",
-    "fold_unknown_events", "unknown_event_name",
+    "fold_unknown_events", "unknown_event_name", "unsupported_method_names",
 ]

@@ -16,7 +16,10 @@ from hey_my_buddy.buddy.harnesses.claude.protocol import (
     ProviderRejected,
     TurnEvidence,
     model_usage_keys,
-    result_quota_denial,
+)
+from hey_my_buddy.protocol.usage import (
+    classify_claude_rate_limit_event,
+    classify_claude_result_rejection,
 )
 
 
@@ -52,14 +55,32 @@ class FakeProcess:
 
 
 class QuotaParsingTests(unittest.TestCase):
-    def test_result_quota_denial_uses_structured_fields_only(self):
-        self.assertTrue(result_quota_denial({"api_error_status": 429}))
-        self.assertTrue(result_quota_denial({"api_error_status": "429"}))
-        self.assertTrue(result_quota_denial({"subtype": "error_usage_limit_reached"}))
+    def test_result_rejection_uses_structured_fields_only(self):
+        # A bare HTTP 429 is transient rate limiting; a quota or usage-limit
+        # subtype is exhaustion and keeps its own identifier as the code.
+        self.assertEqual(classify_claude_result_rejection({"api_error_status": 429}),
+                         ("rate-limited", "http_429"))
+        self.assertEqual(classify_claude_result_rejection({"api_error_status": "429"}),
+                         ("rate-limited", "http_429"))
+        self.assertEqual(classify_claude_result_rejection({"subtype": "error_usage_limit_reached"}),
+                         ("quota-exceeded", "error_usage_limit_reached"))
+        self.assertEqual(classify_claude_result_rejection({"subtype": "ERROR_QUOTA"}),
+                         ("quota-exceeded", "ERROR_QUOTA"))
+        self.assertEqual(classify_claude_result_rejection({"subtype": "ERROR QUOTA!"}),
+                         ("quota-exceeded", "unknown"))
         # Arbitrary prose in free-text fields never infers exhaustion.
-        self.assertFalse(result_quota_denial({"subtype": "error_during_execution",
-                                              "result": "quota exhausted according to the message"}))
-        self.assertFalse(result_quota_denial({}))
+        self.assertIsNone(classify_claude_result_rejection(
+            {"subtype": "error_during_execution", "result": "quota exhausted according to the message"}))
+        self.assertIsNone(classify_claude_result_rejection({}))
+
+    def test_rate_limit_event_classification_splits_transient_from_exhaustion(self):
+        self.assertEqual(classify_claude_rate_limit_event("rate_limit_reached"), "rate-limited")
+        self.assertEqual(classify_claude_rate_limit_event("ratelimitexceeded"), "rate-limited")
+        # Subscription quota windows — and any unreadable identity — mean the
+        # account's quota budget is exhausted.
+        for identity in ("five_hour", "seven_day", "overage", None):
+            with self.subTest(identity=identity):
+                self.assertEqual(classify_claude_rate_limit_event(identity), "quota-exceeded")
 
     def test_model_usage_keys_retain_the_observed_set(self):
         result = {"modelUsage": {"claude-opus-5": {}, "claude-haiku-4-5": {}, "zzz-other": {}}}
@@ -137,13 +158,23 @@ class TurnEvidenceTests(unittest.TestCase):
             evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
                 "status": "rejected", "rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"}})
         self.assertEqual(caught.exception.native_code, "five_hour")
+        self.assertEqual(caught.exception.classification, "quota-exceeded")
         self.assertEqual(caught.exception.resets_at, "2026-09-26T12:00:00Z")
+
+    def test_a_transient_rate_limit_identity_classifies_as_rate_limited(self):
+        with self.assertRaises(ProviderRejected) as caught:
+            TurnEvidence("session-1", "/tmp/checkout-a").observe(
+                {"type": "rate_limit_event", "rate_limit_info": {
+                    "status": "rejected", "rateLimitType": "rate_limit_reached"}})
+        self.assertEqual(caught.exception.native_code, "rate_limit_reached")
+        self.assertEqual(caught.exception.classification, "rate-limited")
 
     def test_rejected_rate_limit_fails_even_with_a_malformed_identity(self):
         with self.assertRaises(ProviderRejected) as caught:
             TurnEvidence("session-1", "/tmp/checkout-a").observe(
                 {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
         self.assertEqual(caught.exception.native_code, "unknown")
+        self.assertEqual(caught.exception.classification, "quota-exceeded")
         self.assertIsNone(caught.exception.resets_at)
         with self.assertRaises(ProviderRejected) as malformed:
             TurnEvidence("session-1", "/tmp/checkout-a").observe(

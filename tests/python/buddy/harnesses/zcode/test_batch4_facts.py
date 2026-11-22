@@ -182,7 +182,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
                                              state=native_run._RunState(), facts=facts, record=None)
             ref = next(item for item in refs if item.kind == "native-run-facts")
             retained = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))["unknownEvents"]
-        shared = native_run._shared_unknown_events(facts)
+        shared = native_run._native_evidence_facts(facts)
         self.assertEqual(len(retained["countsByType"]), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(retained["countsByType"], dict(shared.unknown_events.counts_by_type))
         self.assertEqual(retained["total"], shared.unknown_events.total)
@@ -239,7 +239,7 @@ class NativeShapeRoundTests(NativeRunCase):
         self.assertEqual(receipt["discoveries"][0]["reason"],
                          {"code": "catalog.model-shape-unreadable", "params": {}})
 
-    def execute_shape(self, rewrite):
+    def execute_shape(self, rewrite, unconfirmed=()):
         self.fake.write_text(rewrite(self.fake.read_text(encoding="utf-8")), encoding="utf-8", newline="\n")
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         seen = []
@@ -256,14 +256,14 @@ class NativeShapeRoundTests(NativeRunCase):
         shared = result.native_evidence.unknown_events
         self.assertEqual(dict(shared.counts_by_type), retained)
         self.assertEqual(shared.total, sum(retained.values()))
-        self.assertEqual(result.native_evidence.unconfirmed, ())
+        self.assertEqual(result.native_evidence.unconfirmed, unconfirmed)
         self.assertNotIn("evidenceRefs", native_run.native_evidence(result))
         return result, retained
 
     def test_unknown_native_selection_continues_with_result_and_observer_facts(self):
         result, facts = self.execute_shape(lambda source: source.replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
-            "'unrecognized':'secret'"))
+            "'unrecognized':'secret'"), unconfirmed=("buddy-readback",))
         self.assertIn("buddy-selection-unrecognized", facts)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)

@@ -645,6 +645,9 @@ class NativeConnection:
         self.ordinal = 0
         self.observe: Callable[[dict, int], None] = lambda _message, _ordinal: None
         self.on_unknown = on_unknown or (lambda _label: None)
+        #: An unconfirmed readback names a closed unconfirmed fact, never an
+        #: unknown event: the sink receives one of the shared vocabulary names.
+        self.on_unconfirmed: Callable[[str], None] = lambda _name: None
         self.attention: Callable[[dict], None] = lambda _record: None
         self.on_unsupported: Callable[[dict], None] = lambda _record: None
         self.after_pump: Callable[[], None] = lambda: None

@@ -70,6 +70,7 @@ from ..run_contract import (
     InterruptEvidence,
     LastAssistantMessagePackage,
     NativeEvidence,
+    NativeRequestsFacts,
     ProviderRejectionPackage,
     PolicyFact,
     ResultBuddy,
@@ -172,11 +173,13 @@ _END_REASONS = {"end_turn": None, "max_tokens": "native-max-tokens",
 #: the native turn's end is a real unknown, never a completed turn and never a
 #: refusal of the request.
 UNREAD_STOP_REASON = "native-stop-reason-unread"
-#: The fixed stage labels whose unrecognized native shapes this run counts as
-#: unknown events in the shared outlet; the labels are the bounded kind names,
-#: never a native payload, path or credential.
-UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
-                      "modelReadback", "effortReadback")
+#: The fixed stage labels whose unrecognized native shapes this run reports as
+#: the closed unconfirmed-fact names; the labels are the bounded kind names,
+#: never a native payload, path or credential. The shared unknown-event counts
+#: carry only the genuinely unknown notification kinds the update pump counted.
+UNREAD_SHAPE_KINDS = {"initialize": "initialize-readback", "agentInfo": "agent-info-readback",
+                      "configOptions": "config-options-readback", "modelReadback": "model-readback",
+                      "effortReadback": "effort-readback"}
 #: The one shared unconfirmed name this run can produce: the tool rows the
 #: scope declares but the launch patch cannot confirm. Whether the model and
 #: effort readback confirmed the selection is read from the result's own
@@ -1553,25 +1556,25 @@ _activity_package = shape_guard(ActivityPackage)
 
 
 def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
-    """This run's unread shapes and unknown notifications.
+    """This run's unread readbacks and unknown notifications.
 
     Only the run's own recorded facts are projected: every unrecognized shape
-    fact of :func:`_note_native_shape` — the readbacks included — and every
-    unknown notification kind the update pump counted become bounded kind
-    counts. The fold keeps the shared distinct-kind bound through the one rule and
-    loses no event from the total. A run with no fact carries no outlet.
+    fact of :func:`_note_native_shape` — the readbacks included — becomes its
+    closed unconfirmed-fact name, and every genuinely unknown notification kind
+    the update pump counted becomes a bounded kind count. A run with no fact
+    carries no outlet.
     """
-    counts: dict[str, int] = {}
-    for kind in UNREAD_SHAPE_KINDS:
-        fact = state.native_facts.get(kind)
-        if isinstance(fact, dict) and fact.get("status") == "unknown":
-            counts[kind] = fact["count"]
-    for name, count in state.unknown_counts.items():
-        fold_unknown_events(counts, name, count)
-    if not counts:
+    unconfirmed = tuple(
+        name for kind, name in UNREAD_SHAPE_KINDS.items()
+        if isinstance(state.native_facts.get(kind), dict)
+        and state.native_facts[kind].get("status") == "unknown")
+    if not unconfirmed and not state.unknown_counts:
         return None
     return NativeEvidence(
-        unknown_events=UnknownEvents(counts_by_type=counts, total=sum(counts.values())))
+        unknown_events=UnknownEvents(counts_by_type=dict(state.unknown_counts),
+                                     total=sum(state.unknown_counts.values()))
+        if state.unknown_counts else None,
+        unconfirmed=unconfirmed)
 
 
 def _build_result(request: RunRequest, *, state: _RunState,
@@ -1618,12 +1621,16 @@ def _build_result(request: RunRequest, *, state: _RunState,
         requested=True if state.interrupt_requested else None,
         basis=state.interrupt_basis)
     checked_buddy = CheckedBuddy()
+    session_model = None
     if state.configured and state.checked is not None:
         checked = state.checked
         checked_buddy = CheckedBuddy(
             provider=CheckedValue(value=checked["provider"]) if checked["provider"] is not None else None,
             model=CheckedValue(value=checked["model"]) if checked["model"] is not None else None,
             effort=CheckedValue(value=checked["effort"]) if checked["effort"] is not None else None)
+        # The session's own confirmed model readback; an unconfirmed one keeps
+        # the session model unknown instead of echoing the requested value.
+        session_model = checked["model"]
     # The stream is complete on its own evidence: EOF read to the end without a
     # dropped frame or an observer cut, and the opened root turn reached its
     # native end. The business verdict and the group stop are separate facts
@@ -1654,6 +1661,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     rejection_phase = ("unknown" if incomplete else
                        "during-model" if state.root_model_activity or bool(record and record.get("modelActivity"))
                        else "before-model")
+    connection_facts = client.facts() if client is not None else {}
     return RunResult(
         identity=request.identity, harness="dsh",
         end=RunEnd(status=state.status, reason_code=state.reason,
@@ -1673,8 +1681,13 @@ def _build_result(request: RunRequest, *, state: _RunState,
             requested=RunBuddy(provider=request.buddy.provider,
                                model=request.buddy.model,
                                effort=request.buddy.effort),
-            checked=checked_buddy),
+            checked=checked_buddy,
+            session_model=session_model),
         native_identity=native_identity,
+        native_requests=NativeRequestsFacts(
+            permission_denials=connection_facts.get("permissionDecisionCount", 0),
+            unsupported_requests=connection_facts.get("deniedInteractionCount", 0),
+            unsupported_methods=tuple(connection_facts.get("unsupportedMethods") or ())),
         value=value, completion_evidence=completion,
         tool_evidence=_dsh_tool_package(tool_package),
         effective_policy=_effective_policy(request, state),

@@ -105,7 +105,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def test_shared_native_facts_have_one_location_in_all_three_results(self):
         evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future": 2}, "total": 2},
-                                     unconfirmed=["tool-scope", "buddy-readback"])
+                                     unconfirmed=["settings-readback", "buddy-readback"])
         expected = evidence.to_payload()
         for harness in ("codex", "claude", "zcode", "dsh"):
             for payload in self.project(self.result(harness, evidence=evidence)):
@@ -122,19 +122,19 @@ class NativeEvidenceRoleTests(unittest.TestCase):
                     self.assertNotIn("nativeEvidence", payload)
 
     def test_fast_native_projection_merges_with_the_shared_facts(self):
-        evidence = rc.NativeEvidence(unconfirmed=["tool-scope"])
+        evidence = rc.NativeEvidence(unconfirmed=["settings-readback"])
         request = self.request().model_copy(update={"capture_evidence": True})
         module = SimpleNamespace(native_evidence=lambda _result: {"eventCount": 3})
         with mock.patch.dict(RUN_SEAMS, {"zcode": module}):
             payload = run_execution._fast_result(self.result(evidence=evidence), request,
                                                   {"stopReason": None, "elapsedMs": 1})
-        self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["tool-scope"], "eventCount": 3})
+        self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["settings-readback"], "eventCount": 3})
 
     def test_worker_permission_merges_with_the_shared_facts(self):
-        result = self.result(evidence=rc.NativeEvidence(unconfirmed=["tool-scope"]))
+        result = self.result(evidence=rc.NativeEvidence(unconfirmed=["settings-readback"]))
         request = self.request().model_copy(update={"permission": "write"})
         payload = run_execution._worker_facts(result, request)
-        self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["tool-scope"],
+        self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["settings-readback"],
                                                     "permission": {"level": "write",
                                                                    "enforcement": PERMISSION_LEVELS["zcode"]["write"]}})
 
