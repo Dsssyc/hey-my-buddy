@@ -71,8 +71,6 @@
 
 **已验收并回收检出的工作区引用仍会累积。** `refs/hey-my-buddy/` 下的 input、outputs 与 retained 引用保留到宏任务删除，仍会持有 Git 对象。验收与回收之后的读者见 [ADR-032 执行计划](adr032/execution-plan.md)的“验收和回收之后的引用读者”；保留到何时、读者能否改为不依赖 Git 对象，待开发者决定，调整时需核对存储形式。
 
-**四个 harness 报告与判断事实的口径不一致。** 被拒的原生请求在 Codex、Claude Code 与 DSH 的记录方式不同，`unsupportedNativeRequests` 缺少统一的读取与展示；模型身份的核对与未确认事实的命名也不同。Claude Code CLI 的 `rate_limit_event` 仍在 harness 模块里解释，事实报告与冷却判定的边界需核对。建议把参与判断的事实写成 `RunResult` 的类型字段，由角色与黑板统一判定，用各家的假原生端共跑一致性场景；这会改变跨进程的事实格式，应先明确契约。
-
 **DSH CLI 检查点提示具体化后的调用频率待复测。** ZCode app 改为实时送达之后，只剩 DSH CLI 靠 Worker 主动调用检查点取问题；此前近 12 次 DSH CLI 执行的 1,048 次工具调用里只调了 19 次。具体到每个实现步骤后、长检查前与交回结果前的提示词已随 [0.70.0](../acceptance/installs/0.70.0.md) 安装；待日常积累新的 DSH CLI 执行样本后，用同一查询复测调用频率。
 
 **普通文件夹还不能作为固定输入，改动也不封存。** 当前项目可以是普通文件夹，`checkout: none` 的 Worker 直接在 `cwd` 工作，固定的只有交回结果。文档、幻灯片等目录的输入固定与改动封存仍缺设计；实施前先明确内容身份、写入边界与交付方式，写成 ADR。
@@ -91,7 +89,7 @@
 
 **仅在 shell 导出的提供方变量无法传给 Worker。** harness 启动环境仍经白名单过滤；只靠 shell 提供 Claude Code CLI 的 API key、没有写入其配置的用户，可能在 Worker 中用不了原有登录方式。需核对[条款调研](../research/2026-10-13-harness-terms-and-orchestration.md)里“不得限制自带的登录方式”与现有边界的关系，再决定是否调整变量传递；经用户 shell 启动的方案不在当前约定内。
 
-**harness 的声明还没有收成完整的单一来源。** `buddy/harnesses/registry.py` 已提供共用登记表与角色运行声明，仍有其他模块列出 harness 名字，`db.py` 的 CHECK 也写死四个名字，新增 harness 会改存储形式；中断恢复与存储归属的部分规则仍按名字分支。需要清点哪些是事实声明、哪些是两侧的行为边界，补齐能力的明确声明，运行与一致性检查共用；控制台名字与标志的核对也应使用实际前端解析与测试。
+**`harness_health` 存储表的 CHECK 约束仍写死四个 harness 名字。** 0.75.0 已将所有静态 harness 声明收拢到 `protocol/harness_declarations.py`（派生能力、实时问询、适配器声明、环境变量白名单、中断恢复资格、会话存储归属与动态工具承载方式），并把控制台名字与标志核对迁入真实 Vitest 渲染测试（`apps/console/src/buddies/harnesses.test.tsx`）；剩余仅 `blackboard/store/db.py` 的 `harness_health` 表 CHECK 约束把四个名字写进存储形式，留待下一存储迁移批次改为边界校验，异构原生协议边界（如 Codex 账户探针、ZCode 接入类型、中断终止记录解析）按各自协议保留。
 
 **黑板与 buddy 两侧仍有 17 处行为边界引用。** 0.74.1 已将双方共用的格式、位置扫描、选择绑定与能力辅助收拢到 `protocol/` 与根包（`protocol/` 与根包共享模块对两侧均为 0 引用），并由 `tests/python/cli/test_repository_hygiene.py` 的纯 AST 检查按精确集合与计数守住剩余 17 处跨侧引用（`blackboard -> buddy` 12 处：适配器/发现/账户探针/会话记录调用；`buddy -> blackboard` 5 处：`workspace` 模块调用），同时拒绝新增或动态导入；[ADR-025 清点](../acceptance/adr025/step5-cross-imports.tsv) 仅作历史基线留存。剩余 17 处牵涉服务与执行进程的行为归属与工作区边界，待后续架构批次单独处理。
 
