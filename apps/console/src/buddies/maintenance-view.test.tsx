@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { snapshotReadSchema } from "../types";
 import type { Maintenance } from "../types";
+import { setLanguageChoice } from "../i18n";
 import { formatShortDateTime } from "../i18n/format";
 import { fixture, snapshot, openRoles as openRouter, MEDIUM_ID, FLASH_ID } from "./roles.testing";
 
@@ -19,7 +20,7 @@ function state() {
   data.maintenance = { pendingCount: 3, runs: [] };
   return data;
 }
-afterEach(() => { cleanup(); window.location.hash = ""; window.localStorage.clear(); });
+afterEach(() => { cleanup(); setLanguageChoice("browser"); window.location.hash = ""; window.localStorage.clear(); });
 
 function maintenanceRun(state: "running" | "failed"): Maintenance["runs"][number] {
   return { maintenanceRunId: "m1", taskId: "maintain-1", triggerType: "manual", buddyId: MEDIUM_ID,
@@ -65,17 +66,24 @@ describe("maintenance controls", () => {
     expect(screen.queryByRole("button", { name: /立即运行|立即维护/ })).toBeNull();
     expect(f.operations).toEqual([]);
   });
-  it("shows maintenance validation in plain language and keeps the original identifiers on hover", async () => {
+  it.each([
+    ["zh", "维护的回答最终仍不合格。 问题：19 个微任务的任务正文未读全、5 份归纳所需的微任务分节未读全"],
+    ["en", "The maintenance answer remains invalid. Problems: task sections were not read in full for 19 micro tasks and required micro task reading was incomplete for 5 summaries"],
+  ] as const)("summarizes maintenance coverage in %s and keeps every original error in the hint", async (language, summary) => {
+    setLanguageChoice(language);
     const data = state();
     const failed = maintenanceRun("failed");
-    failed.reason = { code: "maintenance-answer-invalid", params: { errors: ["summary-citation-outside-batch", "future-validation-code"] } };
+    const errors = [
+      ...Array.from({ length: 19 }, (_, index) => `classifications[run-${index}]: read the complete task section`),
+      ...Array.from({ length: 5 }, (_, index) => `summaries[kind-${index}]: read all five sections of every unread micro task in this batch`),
+    ];
+    failed.reason = { code: "maintenance-answer-invalid", params: { errors } };
     data.maintenance!.runs = [failed];
     await openRoles(fixture(data));
-    const reason = within(document.querySelector<HTMLElement>('[data-slot="maintenance-record"]')!).getByText(/维护的回答最终仍不合格/);
-    expect(reason.textContent).toContain("摘要引用了本批次之外的微任务");
-    expect(reason.textContent).toContain("维护回答未通过校验");
-    expect(reason.textContent).not.toContain("summary-citation-outside-batch");
-    expect(reason.getAttribute("aria-description")).toBe("summary-citation-outside-batch; future-validation-code");
+    const reason = document.querySelector<HTMLElement>('[data-slot="maintenance-record"] [data-slot="router-failure"]')!;
+    expect(reason.textContent).toBe(summary);
+    expect(reason.tabIndex).toBe(0);
+    expect(reason.getAttribute("aria-description")).toBe(errors.join("; "));
   });
   it("keeps an older failure as history when a newer batch completed", async () => {
     const data = state();

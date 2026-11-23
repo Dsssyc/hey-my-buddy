@@ -9,9 +9,9 @@ function Parameter({ value, name, code }: { value: unknown; name: string; code: 
   const buddies = useBuddies();
   if (isReason(value)) return <ReasonMessage reason={value} />;
   if (Array.isArray(value)) {
-    if (!value.length) return <>{reasonParameterText(value, name, code)}</>;
-    return <MessageList items={value.map(item => name === "errors" && code === "maintenance-answer-invalid"
-      ? reasonParameterText([item], name, code) : <Parameter value={item} name={name} code={code} />)} />;
+    if (!value.length || (name === "errors" && code === "maintenance-answer-invalid"))
+      return <>{reasonParameterText(value, name, code)}</>;
+    return <MessageList items={value.map(item => <Parameter value={item} name={name} code={code} />)} />;
   }
   if (value && typeof value === "object" && "model" in value) {
     const row = value as Record<string, unknown>;
