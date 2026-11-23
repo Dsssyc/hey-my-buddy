@@ -26,7 +26,7 @@ ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
 , exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)
 , profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT);"""
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1

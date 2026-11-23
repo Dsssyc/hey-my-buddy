@@ -207,7 +207,7 @@ class UpgradeChainTests(unittest.TestCase):
         # so no live connection reason, probe flag or Router wait survives.
         attempts = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
         tasks = [dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')]
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         columns = ','.join(['rowid', *(row[1] for row in self.db.execute('PRAGMA table_info(attempts)')
                                       if row[1] != 'session_group_id')])
         self.assertEqual([dict(row) for row in self.db.execute(f'SELECT {columns} FROM attempts ORDER BY rowid')],
@@ -794,4 +794,47 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
                                         " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
         self.assertFalse(any(json.loads(row[0]).get('planId') in deleted for row in self.db.execute('SELECT payload_json FROM events')))
+        self.assert_current_structure()
+
+    def test_schema_42_to_43_reopens_cancelled_workspace_conflict_boundaries(self):
+        with self.db:
+            for version in range(30, 42):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '42')
+        run_id = '00000000-0000-0000-0000-00000000011b'
+        conflict_id = 'wsc-00000000-0000-0000-0000-000000000124'
+        old_request_id = 'req-00000000-0000-0000-0000-000000000125'
+        self.assertEqual(
+            tuple(self.db.execute('SELECT state,active_request_id FROM workflow_runs WHERE run_id=?',
+                                  (run_id,)).fetchone()),
+            ('cancelled', None),
+        )
+        self.assertEqual(
+            self.db.execute('SELECT state FROM workflow_requests WHERE request_id=?', (old_request_id,)).fetchone()[0],
+            'cancelled',
+        )
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 42, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '43')
+        # The historical cancelled request remains immutable; a new open boundary points at the open conflict.
+        self.assertEqual(
+            self.db.execute('SELECT state FROM workflow_requests WHERE request_id=?', (old_request_id,)).fetchone()[0],
+            'cancelled',
+        )
+        run = self.db.execute('SELECT state,active_request_id FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
+        self.assertEqual(run['state'], 'awaiting-host')
+        self.assertIsNotNone(run['active_request_id'])
+        self.assertNotEqual(run['active_request_id'], old_request_id)
+        reopened = self.db.execute(
+            'SELECT run_id,state,reason_code,reason_params_json,response_kind,response_id FROM workflow_requests WHERE request_id=?',
+            (run['active_request_id'],),
+        ).fetchone()
+        self.assertEqual(
+            (reopened['run_id'], reopened['state'], reopened['reason_code'],
+             json.loads(reopened['reason_params_json']), reopened['response_kind'], reopened['response_id']),
+            (run_id, 'open', 'workspace-scope-violation', {'conflictIds': [conflict_id]}, None, None),
+        )
+        self.assertEqual(
+            self.db.execute('SELECT queue_reason FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0],
+            'awaiting-host',
+        )
         self.assert_current_structure()

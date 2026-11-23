@@ -691,6 +691,39 @@ class WorkflowCoordinator:
             (run_id,),
         ).fetchone()
 
+    def _open_conflict_request(self, connection, run_id: str):
+        if self._open_conflict(connection, run_id) is None:
+            return None
+        return connection.execute(
+            "SELECT * FROM workflow_requests WHERE run_id=? AND state='open' AND reason_code='workspace-scope-violation'"
+            " ORDER BY created_at, request_id LIMIT 1",
+            (run_id,),
+        ).fetchone()
+
+    def _run_has_stoppable_work(self, connection, run_id: str) -> bool:
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        if task is not None and (task["state"] == "queued" or not self._stop_proven(connection, task)):
+            return True
+        if connection.execute(
+            "SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued') LIMIT 1",
+            (run_id,),
+        ).fetchone() is not None:
+            return True
+        for route_task in self._routing_tasks(connection, run_id):
+            if route_task["state"] == "queued" or not self._stop_proven(connection, route_task):
+                return True
+        return connection.execute(
+            "SELECT 1 FROM workflow_routes r JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
+            " WHERE r.run_id=? AND r.state='pending' AND d.status IN ('queued','running') LIMIT 1",
+            (run_id,),
+        ).fetchone() is not None
+
+    def _tree_has_stoppable_work(self, connection, run_id: str) -> bool:
+        if self._run_has_stoppable_work(connection, run_id):
+            return True
+        return any(self._run_has_stoppable_work(connection, child["owned_run_id"])
+                   for child in self._owned_micro_tasks(connection, run_id))
+
     def _conflict_view(self, connection, row) -> dict:
         entries = []
         evidence = json.loads(row["evidence_json"])
@@ -1815,7 +1848,7 @@ class WorkflowCoordinator:
             return ["await", "inquire", "cancel", *(["conclude"] if conflict is None else []), "get"]
         if self._open_boundary(connection, run) is not None:
             if conflict is not None:
-                return ["continue", "cancel", "get"]
+                return ["continue", *(["cancel"] if self._tree_has_stoppable_work(connection, run["run_id"]) else []), "get"]
             return ["continue", "cancel", "conclude", "get"]
         if self._queued_lead_wakeup(connection,run):
             return ["continue", "await", "inquire", "cancel", "conclude", "get"]
@@ -2094,9 +2127,10 @@ class WorkflowCoordinator:
             (run_row["run_id"], run_row["active_request_id"]),
         ).fetchone()
 
-    def _sync_boundary(self, connection, run_id, now, *, default_state=None):
+    def _sync_boundary(self, connection, run_id, now, *, default_state=None, allow_terminal_ancestor=False):
         run = self._run_row(connection, run_id)
-        if run["state"] in ("cancelled", "accepted", "concluded") or self._terminal_ancestor(connection, run_id) is not None:
+        if run["state"] in ("cancelled", "accepted", "concluded") or (
+                not allow_terminal_ancestor and self._terminal_ancestor(connection, run_id) is not None):
             return None
         boundary = self._open_boundary(connection, run)
         if boundary is None and default_state is None:
@@ -2495,6 +2529,15 @@ class WorkflowCoordinator:
                     return self._action_view(connection,run,stopEventId=existing["eventId"],alreadyRequested=True)
             if run["state"] in ("accepted","concluded"):
                 raise BoardError("CONFLICT","This micro task is already closed")
+            conflict = self._open_conflict(connection, run_id)
+            if conflict is not None and not self._tree_has_stoppable_work(connection, run_id):
+                raise BoardError(
+                    "CONFLICT",
+                    "Resolve the workspace conflict before cancelling; the micro task is already stopped and "
+                    "cancellation cannot discard an unresolved out-of-scope site",
+                    conflictId=conflict["conflict_id"],
+                    paths=json.loads(conflict["evidence_json"])["blockingPaths"],
+                )
             task=connection.execute("SELECT * FROM tasks WHERE task_id=?",(run_id,)).fetchone()
             self._cancel_in_transaction(connection,run,task,params.get("note"),actor,initiator,self.now())
             recorded=for_run(connection,run_id)
@@ -2718,7 +2761,9 @@ class WorkflowCoordinator:
                         continue
                     raise
                 self._conclude_record(connection, run_row=current, task=task, actor=actor, now=self.now(),
-                    note=request["note"], reason=make_reason("macro-task-ended"), sealed_record=sealed)
+                    note=request["note"],
+                    reason=None if request["note"] is not None else make_reason("macro-task-ended"),
+                    sealed_record=sealed)
                 head = self.board._head_of(connection)
             self.board._notify(head)
             try:
@@ -2805,7 +2850,7 @@ class WorkflowCoordinator:
             payload={"note": note, "actor": actor, "stopInitiator": initiator, "honestShutdown": True, **(stop_facts or {})},
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        if self._stop_proven(connection, task):
+        if self._stop_proven(connection, task) and self._open_conflict(connection, run_id) is None:
             self._release_reservations(connection, run_id, now)
         run_row = self._run_row(connection, run_id)
         return {
@@ -2827,7 +2872,7 @@ class WorkflowCoordinator:
                 )
         for child in reversed(rows):
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["owned_run_id"],)).fetchone()
-            if self._stop_proven(connection, task):
+            if self._stop_proven(connection, task) and self._open_conflict(connection, child["owned_run_id"]) is None:
                 self._release_reservations(connection, child["owned_run_id"], now)
 
     def _owned_micro_tasks(self, connection, run_id: str) -> list:
@@ -2961,19 +3006,38 @@ class WorkflowCoordinator:
                           actor: dict | None = None, initiator: str = "unknown") -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
+        preserved_conflict = self._open_conflict_request(connection, run_id)
         # An already fenced run may need a stop escalation, but has no new
-        # cancellation to record for its owner.
-        cancel_micro_task = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed", "cancelled")
-        connection.execute(
-            "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'", (now, run_id),
+        # cancellation to record for its owner. An open workspace conflict keeps
+        # its boundary request open until resolved so the site never deadlocks.
+        cancel_micro_task = (
+            preserved_conflict is None
+            and (explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed", "cancelled"))
         )
+        if preserved_conflict is not None:
+            connection.execute(
+                "UPDATE workflow_requests SET state='cancelled', updated_at=?"
+                " WHERE run_id=? AND state='open' AND request_id!=?",
+                (now, run_id, preserved_conflict["request_id"]),
+            )
+        else:
+            connection.execute(
+                "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'",
+                (now, run_id),
+            )
         connection.execute(
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
         self._revoke_credentials(connection, run_id)
         self._cancel_routes(connection, run_id, make_reason("micro-task-cancelled"), now, actor=actor,
                             initiator=initiator)
-        if cancel_micro_task:
+        if preserved_conflict is not None:
+            if (run_row["state"], run_row["active_request_id"]) != ("awaiting-host", preserved_conflict["request_id"]):
+                connection.execute(
+                    "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=? WHERE run_id=?",
+                    (preserved_conflict["request_id"], now, run_id),
+                )
+        elif cancel_micro_task:
             connection.execute(
                 "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=? WHERE run_id=?",
                 (now, run_id),
@@ -2985,6 +3049,10 @@ class WorkflowCoordinator:
         stopped = self._stop_proven(connection, task)
         if task["state"] not in ("completed", "concluded", "failed", "cancelled"):
             self.board._transition_task(connection, task, "cancelled" if stopped else "cancelling")
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            queue_reason = "awaiting-host" if preserved_conflict is not None and task["active_attempt_id"] is None else None
+            connection.execute("UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?", (queue_reason, now, run_id))
+        elif cancel_micro_task and task["active_attempt_id"] is None and task["queue_reason"] is not None:
             connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
         if not stopped:
             self._request_attempt_stop(connection, run_id, now, initiator=initiator)
@@ -3574,6 +3642,10 @@ class WorkflowCoordinator:
                 if for_run(connection, target_id) is None:
                     self._cancel_in_transaction(connection, target, task, None, actor, initiator, now,
                                                 stop_facts=stop_facts)
+                else:
+                    self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
+                    self._cancel_owned_micro_tasks(connection, target_id, None, now, actor=actor, initiator=initiator,
+                                                   stop_facts=stop_facts)
             else:
                 # Stopping a failed/delivered execution must preserve its recorded
                 # outcome; only active work receives a new cancellation state.
@@ -4012,7 +4084,7 @@ class WorkflowCoordinator:
         now=self.now()
         with self.db.write() as connection:
             run=self._run_row(connection,run_id)
-            actor,_=self._authorize(connection,run,params,console_authority=console_authority,action="A workspace resolution")
+            actor,initiator=self._authorize(connection,run,params,console_authority=console_authority,action="A workspace resolution")
             request=self._request_row(connection,run_id,request_id)
             replay=self._resolution_replay(connection,run,request,params)
             if replay is not None:
@@ -4026,7 +4098,9 @@ class WorkflowCoordinator:
             artifact_id=(self._pin_artifact(connection,run_id=run_id,kind="abandoned-site" if params["resolution"]=="abandon" else "resolved-output",
                                            manifest=record,attempt_id=current["attempt_id"],turn_id=current["turn_id"],now=now)
                          if isinstance(record,dict) else None)
-            proof=self._resolution_native_completion(connection,run,current) if result["state"] in ("restored","adopted") else None
+            ancestor=self._terminal_ancestor(connection,run_id)
+            proof=(self._resolution_native_completion(connection,run,current)
+                   if ancestor is None and result["state"] in ("restored","adopted") else None)
             delivery={"resolvedFingerprint":result["resolvedFingerprint"],"deliveredAt":now} if proof is not None and proof["disposition"]=="completed" else None
             connection.execute("UPDATE workflow_workspace_conflicts SET state=?,action=?,resolved_paths_json=?,conflicting_paths_json=?,artifact_id=?,actor_role=?,actor_id=?,note=?,delivery_json=?,updated_at=? WHERE conflict_id=? AND state='open'",
                                (result["state"],params["resolution"],canonical_json(result["resolvedPaths"]),canonical_json(result["remainingPaths"]),artifact_id,
@@ -4050,7 +4124,17 @@ class WorkflowCoordinator:
                 elif proof is not None:
                     self._record_request(connection,run,proof["turnRow"],proof["turn"],now)
                 if remaining:
-                    self._record_system_request(connection,self._run_row(connection,run_id),make_reason("workspace-scope-violation",conflictIds=[r[0] for r in remaining]),{},now)
+                    self._record_system_request(
+                        connection, self._run_row(connection, run_id),
+                        make_reason("workspace-scope-violation", conflictIds=[r[0] for r in remaining]),
+                        {}, now, allow_terminal_ancestor=ancestor is not None,
+                    )
+                elif ancestor is not None:
+                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+                    self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
+                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+                    if self._stop_proven(connection, task):
+                        self._release_reservations(connection, run_id, now)
                 elif not delivery:
                     self._sync_boundary(connection,run_id,now,default_state="awaiting-host")
                 response=self._action_view(connection,self._run_row(connection,run_id),requestId=request_id,artifactId=artifact_id,alreadyResponded=False,
@@ -5742,7 +5826,7 @@ class WorkflowCoordinator:
         ).fetchone()
         turn = self.turn_outcome(payload)
         if turn_row is None:
-            if run_row["state"] == "cancelled" and self._stop_proven(connection, task):
+            if run_row["state"] == "cancelled" and self._stop_proven(connection, task) and self._open_conflict(connection, run_row["run_id"]) is None:
                 self._release_reservations(connection, run_row["run_id"], now)
             return None
         accumulate_infrastructure(
@@ -5768,7 +5852,7 @@ class WorkflowCoordinator:
             self._cancel_owned_run(connection, task, now)
             run_row = self._run_row(connection, run_row["run_id"])
         if run_row["state"] in ("accepted", "concluded", "cancelled") or ancestor is not None:
-            if self._stop_proven(connection, task):
+            if self._stop_proven(connection, task) and self._open_conflict(connection, run_row["run_id"]) is None:
                 self._release_reservations(connection, run_row["run_id"], now)
             late = self._late_cancelled_turn(connection, run_row, turn_row, attempt, payload, now, output_record)
             if isinstance(late, dict):
@@ -5875,7 +5959,7 @@ class WorkflowCoordinator:
                     'UPDATE workflow_runs SET state=?, updated_at=? WHERE run_id=?',
                     (terminal, now, run_row["run_id"]),
                 )
-                if terminal == "cancelled" and self._stop_proven(connection, task):
+                if terminal == "cancelled" and self._stop_proven(connection, task) and self._open_conflict(connection, run_row["run_id"]) is None:
                     self._release_reservations(connection, run_row["run_id"], now)
             self.board._append_event(connection, "workflow.turn_failed", task_id=run_row["run_id"],
                                      attempt_id=attempt["attempt_id"], revision=None,
@@ -6110,7 +6194,8 @@ class WorkflowCoordinator:
 
     def _record_system_request(self, connection, run_row, reason: dict | None, payload: dict, now: str, *,
                                turn_row=None, request_id: str | None = None,
-                               decision_id: str | None = None) -> str:
+                               decision_id: str | None = None,
+                               allow_terminal_ancestor: bool = False) -> str:
         """Open a system boundary on this micro task."""
         request_id = request_id or f"req-{uuid.uuid4()}"
         connection.execute(
@@ -6120,7 +6205,7 @@ class WorkflowCoordinator:
         if turn_row is not None:
             connection.execute('UPDATE workflow_runs SET current_turn_id=?, current_attempt_id=NULL WHERE run_id=?',
                                (turn_row["turn_id"], run_row["run_id"]))
-        self._sync_boundary(connection, run_row["run_id"], now)
+        self._sync_boundary(connection, run_row["run_id"], now, allow_terminal_ancestor=allow_terminal_ancestor)
         return request_id
 
     def _record_request(self, connection, run_row, turn_row, turn, now) -> str:
