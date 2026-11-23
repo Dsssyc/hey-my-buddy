@@ -541,6 +541,16 @@ class UpgradeFixtureTests(unittest.TestCase):
                 actual_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
                 keep = [column for column in old_columns[name] if column in actual_columns and column not in changed]
                 expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
+                if name == 'workflow_runs':
+                    reopened_runs = {
+                        row[0] for row in connection.execute(
+                            "SELECT DISTINCT run_id FROM workflow_workspace_conflicts WHERE state='open'"
+                        )
+                    }
+                    self.assertEqual(reopened_runs, {'00000000-0000-0000-0000-00000000011b'})
+                    for row in expected:
+                        if row['run_id'] in reopened_runs and row['state'] == 'cancelled':
+                            row['state'] = 'awaiting-host'
                 self.assertEqual([{column: row[actual_columns.index(column)] for column in keep} for row in actual], expected, name)
             elif name == 'macro_tasks':
                 actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)'))]
@@ -649,6 +659,25 @@ class UpgradeFixtureTests(unittest.TestCase):
                         self.assertEqual(current['state'], request['state'])
                     self.assertIsNone(current['response_kind'])
                     self.assertIsNone(current['response_id'])
+                original_ids = {dict(zip(columns, row))['request_id'] for row in original}
+                added = [
+                    row for row in connection.execute('SELECT * FROM workflow_requests ORDER BY rowid')
+                    if row['request_id'] not in original_ids
+                ]
+                self.assertEqual(len(added), 1)
+                self.assertEqual(
+                    (added[0]['run_id'], added[0]['state'], added[0]['reason_code'],
+                     json.loads(added[0]['reason_params_json'])),
+                    ('00000000-0000-0000-0000-00000000011b', 'open', 'workspace-scope-violation',
+                     {'conflictIds': ['wsc-00000000-0000-0000-0000-000000000124']}),
+                )
+                self.assertEqual(
+                    connection.execute(
+                        'SELECT active_request_id FROM workflow_runs WHERE run_id=?',
+                        ('00000000-0000-0000-0000-00000000011b',),
+                    ).fetchone()[0],
+                    added[0]['request_id'],
+                )
             elif name in ('workflow_routes', 'workflow_scope_versions',
                           'workflow_workspace_conflicts', 'workflow_host_conclusions'):
                 current_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
@@ -1389,7 +1418,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT continuation_id,workspace_id,workspace_manifest_sha256,workspace_facts_role,'
                 'workspace_kind,checkout_root,repository_path,input_commit,staged_commit FROM workflow_continuations')
         }
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         for table, query in (
             ('workflow_turns', 'SELECT * FROM workflow_turns ORDER BY rowid'),
             ('workflow_artifacts', 'SELECT * FROM workflow_artifacts ORDER BY rowid'),
@@ -1415,6 +1444,17 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual(saved['parameters']['resolution'], action)
                 self.assertEqual(saved['result']['state'], 'open')
                 self.assertEqual(saved['result']['artifactId'], case.get('artifactId'))
+                run = db.execute('SELECT state,active_request_id FROM workflow_runs WHERE run_id=?',
+                                 (case['runId'],)).fetchone()
+                self.assertEqual(run['state'], 'awaiting-host')
+                reopened = db.execute(
+                    'SELECT state,reason_code,reason_params_json FROM workflow_requests WHERE request_id=?',
+                    (run['active_request_id'],),
+                ).fetchone()
+                self.assertEqual(
+                    (reopened['state'], reopened['reason_code'], json.loads(reopened['reason_params_json'])),
+                    ('open', 'workspace-scope-violation', {'conflictIds': [case['conflictId']]}),
+                )
 
         case = ids['proxyFamily']
         self.assertEqual(tuple(db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
@@ -1563,7 +1603,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertIsNone(db.execute('SELECT 1 FROM workflow_children WHERE parent_run_id=?',
                                              (case['runId'],)).fetchone())
         self.assert_helper_lead_wakeup(db, ids['leadWakeupOpen'], answered=False)
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         for decision in ('approve', 'decline'):
             with self.subTest(upgraded=decision):
                 case = ids['offline' + decision.title()]
@@ -1597,13 +1637,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.repoint_to_global_service_issue(db, case)
         # The open failure request is a Lead wakeup failure, not a pure proxy,
         # so the offline upgrade keeps it instead of refusing the open request.
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         self.assert_helper_lead_wakeup(db, case, answered=False, migrated=True)
 
         fixture, db = self.helper_stock_board('global-issue-wakeup-answered', load_helper_retirement_stock)
         case = fixture['helperRetirementStock']['scenarios']['leadWakeupAnswered']
         self.repoint_to_global_service_issue(db, case)
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         # The answered request survives and keeps its consumed continuation bound to it.
         self.assert_helper_lead_wakeup(db, case, answered=True, migrated=True)
         continuation = db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
@@ -1649,7 +1689,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_settled_helper_tree_ending_in_a_pure_helper_report_upgrades(self):
         """A proxy chain may legally end in the retired pure helper-report."""
         fixture, db, case = self.pure_report_tree_board('pure-report-tree')
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': 42})
+        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 41, 'targetSchema': SCHEMA_VERSION})
         # The continuation keeps its own run; the retired source is cleared, not
         # mistaken for a proxy/origin disagreement, and the retired rows are gone.
         continuation = db.execute('SELECT kind,state,run_id,request_id FROM workflow_continuations '
