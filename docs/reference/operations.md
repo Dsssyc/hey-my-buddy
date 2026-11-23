@@ -233,7 +233,6 @@ All authoritative state is local SQLite under `HMB_STATE_DIR` (default `~/.local
 | `HMB_RUNTIME` | unset | pin one READY runtime directory; an explicit pin always wins |
 | `HMB_DEV_SOURCE` | unset | suppress automatic materialization; an already selected READY runtime still wins |
 | `HMB_MAX_CONCURRENT` | `8` | machine-wide concurrent-attempt ceiling shared by routing and execution, allowed 1–32 and refused outside that range |
-| `HMB_WAIT_CAPACITY` | `32` | admitted waits on the dedicated wait resource |
 | `HMB_NODE` | unset | development-only Node.js override for a ZCode JavaScript entry file; passed through only with `HMB_DEV_SOURCE=1` |
 | `HMB_ZCODE_CLI` | unset | development-only ZCode CLI override, passed through only with `HMB_DEV_SOURCE=1`; ordinary selection uses recorded harness discovery |
 | `HMB_CLAUDE_CLI` | unset | development-only Claude Code executable override, passed through only with `HMB_DEV_SOURCE=1`; ordinary discovery probes version and login without sending a user message |

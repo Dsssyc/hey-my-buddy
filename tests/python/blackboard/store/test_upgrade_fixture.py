@@ -72,8 +72,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         store = BoardStore(fixture['state'])
         self.addCleanup(store.db.close)
         run_id = fixture['stableIds']['failed']
-        replies = [store.task_wait({'runId': run_id, 'consumeReminders': True,
-                                    'reminderWaitId': f'floor-issue-{index}', 'timeoutMs': 0}) for index in range(2)]
+        replies = [store.task_observe({'runId': run_id,
+                                       'reminderWaitId': f'floor-issue-{index}'}) for index in range(2)]
         self.assertEqual({reply['issue']['kind'] for reply in replies}, {'execution', 'service'})
         self.assertTrue(all(reply['issue']['detail']['message'] == 'current occurrence updated' for reply in replies))
         store.record_service_issue('upgrade-stock', RuntimeError('updated after upgrade'))

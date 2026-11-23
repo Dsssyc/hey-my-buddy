@@ -153,13 +153,16 @@ class ConcludeTests(unittest.TestCase):
         self.assertEqual(attempts, 3)
 
     def test_timeout_error_uses_latest_shutdown_facts(self):
+        observes = 0
         def service(method, params, directory):
+            nonlocal observes
             if method == "conclude":
                 raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True,
                                    unconfirmedRunIds=["stale-child"])
-            if method == "task_get":
+            observes += 1
+            if observes == 1:
                 return self.view()
-            self.clock.advance(params["timeoutMs"] / 1000)
+            self.clock.advance(1)
             return {**self.view(), "workflowShutdown": {"selfConfirmed": True,
                     "descendantsConfirmed": False, "unconfirmedRunIds": ["current-child"]}}
         answer = conclude_run({**self.packet, "waitSeconds": 1}, self.state_dir,
@@ -170,8 +173,9 @@ class ConcludeTests(unittest.TestCase):
     def test_descendant_only_stop_retries_identical_packet_without_consuming_reminders(self):
         calls = []
         attempts = 0
+        observes = 0
         def service(method, params, directory):
-            nonlocal attempts
+            nonlocal attempts, observes
             calls.append((method, dict(params)))
             if method == "conclude":
                 attempts += 1
@@ -180,35 +184,34 @@ class ConcludeTests(unittest.TestCase):
                                        cancellationRecorded=True, conclusionRecorded=False,
                                        unconfirmedRunIds=["child-1"])
                 return {"runId": "lead-1", "conclusionId": "conclusion-1"}
-            if method == "task_get":
-                return self.view()
-            if method == "task_wait":
-                return self.view(confirmed=True)  # same revision; child stop alone wakes it
+            if method == "task_observe":
+                observes += 1
+                return self.view() if observes == 1 else self.view(confirmed=True)
             self.fail(method)
         answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
         self.assertEqual(answer["conclusionId"], "conclusion-1")
         self.assertEqual([method for method, _ in calls],
-                         ["conclude", "task_get", "task_wait", "conclude"])
-        self.assertEqual(calls[2][1]["afterRevision"], 8)
-        self.assertFalse(calls[2][1]["consumeReminders"])
+                         ["conclude", "task_observe", "task_observe", "conclude"])
+        self.assertNotIn("reminderWaitId", calls[1][1])
         self.assertNotIn("reminderWaitId", calls[2][1])
         self.assertEqual(calls[0][1], calls[3][1])
         self.assertNotIn("waitSeconds", calls[0][1])
 
-    def test_timeout_uses_bounded_slices_and_reports_recorded_cancellation(self):
+    def test_timeout_reports_recorded_cancellation(self):
         calls = []
+        observes = 0
         def service(method, params, directory):
+            nonlocal observes
             calls.append((method, dict(params)))
             if method == "conclude":
                 raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
                                    cancellationRecorded=True)
-            if method == "task_get":
-                return self.view()
-            self.clock.advance(params["timeoutMs"] / 1000)
+            observes += 1
+            if observes == 2:
+                self.clock.advance(65)
             return self.view()
         answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual([params["timeoutMs"] for method, params in calls if method == "task_wait"],
-                         [30000, 30000, 5000])
+        self.assertEqual([method for method, _ in calls], ["conclude", "task_observe", "task_observe"])
         self.assertEqual(answer["error"]["code"], "SHUTDOWN_UNCONFIRMED")
         self.assertEqual(answer["waitedSeconds"], 65)
         self.assertTrue(answer["timedOut"])
@@ -221,16 +224,18 @@ class ConcludeTests(unittest.TestCase):
 
     def test_stop_observed_at_the_deadline_is_concluded(self):
         attempts = 0
+        observes = 0
         def service(method, params, directory):
-            nonlocal attempts
+            nonlocal attempts, observes
             if method == "conclude":
                 attempts += 1
                 if attempts == 1:
                     raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping", cancellationRecorded=True)
                 return {"conclusionId": "done"}
-            if method == "task_get":
+            observes += 1
+            if observes == 1:
                 return self.view()
-            self.clock.advance(params["timeoutMs"] / 1000)
+            self.clock.advance(1)
             return self.view(confirmed=True)
         answer = conclude_run({**self.packet, "waitSeconds": 1}, self.state_dir,
                               service=service, clock=self.clock)
@@ -248,7 +253,7 @@ class ConcludeTests(unittest.TestCase):
                 if attempts == 1:
                     raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping", cancellationRecorded=True)
                 return {"conclusionId": "done"}
-            self.assertEqual(method, "task_get")
+            self.assertEqual(method, "task_observe")
             reads += 1
             if reads == 1:
                 raise ServiceError("SERVICE_UNAVAILABLE", "Handover before observation")
@@ -260,11 +265,14 @@ class ConcludeTests(unittest.TestCase):
         self.assertEqual(self.clock(), blocking.UPGRADE_HANDOVER_POLL_SECONDS)
 
     def test_unavailable_service_keeps_cancellation_fact(self):
+        observes = 0
         def service(method, params, directory):
+            nonlocal observes
             if method == "conclude":
                 raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
                                    cancellationRecorded=True)
-            if method == "task_get":
+            observes += 1
+            if observes == 1:
                 return self.view()
             raise ServiceError("SERVICE_UNAVAILABLE", "Daemon is gone")
         answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
@@ -300,33 +308,36 @@ class ConcludeTests(unittest.TestCase):
 
     def test_upgrade_handover_rearms_same_wait(self):
         (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
-        waits = 0
+        observes = 0
         calls = []
         def service(method, params, directory):
-            nonlocal waits
+            nonlocal observes
             calls.append(method)
             if method == "conclude":
                 if calls.count("conclude") == 1:
                     raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
                                        cancellationRecorded=True)
                 return {"conclusionId": "done"}
-            if method == "task_get":
+            observes += 1
+            if observes == 1:
                 return self.view()
-            waits += 1
-            if waits == 1:
+            if observes == 2:
                 raise ServiceError("SERVICE_UNAVAILABLE", "Old daemon detached")
             return self.view(confirmed=True)
         with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
             answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
         self.assertEqual(answer["conclusionId"], "done")
-        self.assertEqual(calls, ["conclude", "task_get", "task_wait", "task_wait", "conclude"])
+        self.assertEqual(calls, ["conclude", "task_observe", "task_observe", "task_observe", "conclude"])
 
     def test_keyboard_interrupt_after_cancellation_keeps_the_stop_fact(self):
+        observes = 0
         def service(method, params, directory):
+            nonlocal observes
             if method == "conclude":
                 raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
                                    cancellationRecorded=True)
-            if method == "task_get":
+            observes += 1
+            if observes == 1:
                 return self.view()
             raise KeyboardInterrupt
         answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
@@ -352,15 +363,17 @@ class ConcludeTests(unittest.TestCase):
     def test_main_routes_conclude_through_wait_and_returns_nonzero_on_timeout(self):
         calls = []
         clock = Clock()
+        observes = 0
         packet = {"runId": "lead-1", "note": "Finish", "waitSeconds": 1}
         def service(method, params, directory):
+            nonlocal observes
             calls.append((method, dict(params)))
             if method == "conclude":
                 raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
                                    cancellationRecorded=True)
-            if method == "task_get":
-                return self.view()
-            clock.advance(params["timeoutMs"] / 1000)
+            observes += 1
+            if observes == 2:
+                clock.advance(1)
             return self.view()
         output = io.StringIO()
         with (contextlib.redirect_stdout(output),
@@ -372,7 +385,7 @@ class ConcludeTests(unittest.TestCase):
         answer = json.loads(output.getvalue())
         self.assertEqual(status, 1)
         self.assertEqual(answer["error"]["code"], "SHUTDOWN_UNCONFIRMED")
-        self.assertEqual([method for method, _ in calls], ["conclude", "task_get", "task_wait"])
+        self.assertEqual([method for method, _ in calls], ["conclude", "task_observe", "task_observe"])
 
 
 if __name__ == "__main__":

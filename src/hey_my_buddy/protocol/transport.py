@@ -18,20 +18,22 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 
 import c_two as cc
 from c_two.error import CCError, CoreError
 
 from . import rpc_config
 from .service_process import independent_service_popen
-from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
+from .contracts import CONTROL_NAME, CONTRACT_VERSION, BuddyControl
 from ..errors import BoardError
 from ..state_root import check_state_root, get_state_dir
 from ..install.entrypoints import ENTRY_MODULES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 PROTOCOL_VERSION = 2
+WAIT_TICK_SECONDS = 0.25
+SUBSCRIPTION_CLOSE_TIMEOUT_SECONDS = 2.0
 
 #: The two locks a board owner holds from admission until its process exits.
 LIFETIME_LOCKS = ("control-daemon.lock", "board-owner.lock")
@@ -44,62 +46,62 @@ def owner_held_message() -> str:
 #: Retained top-level CLI names only. ``await`` is implemented locally over the
 #: separate internal operation registry below. A service operation never becomes
 #: callable from the CLI merely because ``await`` or a role client uses it.
-METHOD_MAP: dict[str, tuple[str, str]] = {
-    "health": ("control", "health"),
-    "harnesses": ("control", "capabilities"),
-    "harness-set": ("control", "harness_set"),
-    "quota-redetect": ("control", "quota_redetect"),
-    "runtime": ("control", "runtime_info"),
-    "storage-plan": ("control", "storage_plan"),
-    "storage-apply": ("control", "storage_apply"),
-    "relocate": ("control", "project_relocate"),
-    "worker-sessions": ("control", "worker_sessions"),
+METHOD_MAP: dict[str, str] = {
+    "health": "health",
+    "harnesses": "capabilities",
+    "harness-set": "harness_set",
+    "quota-redetect": "quota_redetect",
+    "runtime": "runtime_info",
+    "storage-plan": "storage_plan",
+    "storage-apply": "storage_apply",
+    "relocate": "project_relocate",
+    "worker-sessions": "worker_sessions",
     # -- Host lifecycle -------------------------------------------------
-    "create": ("control", "workflow_create"),
-    "amend": ("control", "workflow_amend"),
-    "submit": ("control", "workflow_submit"),
-    "get": ("control", "workflow_get"),
-    "continue": ("control", "workflow_continue"),
-    "cancel": ("control", "workflow_cancel"),
-    "accept": ("control", "workflow_accept"),
-    "conclude": ("control", "workflow_conclude"),
-    "inquire": ("control", "inquiry_observe"),
-    "console": ("control", "console"),
+    "create": "workflow_create",
+    "amend": "workflow_amend",
+    "submit": "workflow_submit",
+    "get": "workflow_get",
+    "continue": "workflow_continue",
+    "cancel": "workflow_cancel",
+    "accept": "workflow_accept",
+    "conclude": "workflow_conclude",
+    "inquire": "inquiry_observe",
+    "console": "console",
     # -- User operations ------------------------------------------------
-    "stop": ("control", "service_control"),
-    "restart": ("control", "service_control"),
+    "stop": "service_control",
+    "restart": "service_control",
     # -- Credential-scoped role commands --------------------------------
-    "suggest": ("control", "workflow_suggest"),
-    "list": ("control", "task_list"),
+    "suggest": "workflow_suggest",
+    "list": "task_list",
 }
 
 #: Private calls used by await, installer, console, and credential-scoped role
 #: clients. These names are absent from the CLI registry and from Host help.
-INTERNAL_METHOD_MAP: dict[str, tuple[str, str]] = {
-    "ping": ("control", "ping"),
-    "capabilities": ("control", "capabilities"),
-    "accounts": ("control", "accounts"),
-    "workflow_get": ("control", "workflow_get"),
-    "task_get": ("control", "task_get"),
-    "task_result": ("control", "task_result"),
-    "task_wait": ("wait", "task_wait"),
-    "events_read": ("control", "events_read"),
-    "events_wait": ("wait", "events_wait"),
-    "artifact_list": ("control", "artifact_list"),
-    "message_get": ("control", "message_get"),
-    "message_list": ("control", "message_list"),
-    "macro_task_list": ("control", "macro_task_list"),
-    "macro_task_timeline": ("control", "macro_task_timeline"),
-    "task_cancel": ("control", "task_cancel"),
-    "selection_get": ("control", "selection_get"),
-    "selection_list": ("control", "selection_list"),
-    "model_catalog_refresh": ("control", "model_catalog_refresh"),
-    "buddy_list": ("control", "buddy_list"),
-    "user_policy_publish": ("control", "user_policy_publish"),
+INTERNAL_METHOD_MAP: dict[str, str] = {
+    "ping": "ping",
+    "capabilities": "capabilities",
+    "accounts": "accounts",
+    "workflow_get": "workflow_get",
+    "task_get": "task_get",
+    "task_result": "task_result",
+    "task_observe": "task_observe",
+    "events_read": "events_read",
+    "artifact_list": "artifact_list",
+    "message_get": "message_get",
+    "message_list": "message_list",
+    "macro_task_list": "macro_task_list",
+    "macro_task_timeline": "macro_task_timeline",
+    "task_cancel": "task_cancel",
+    "selection_get": "selection_get",
+    "selection_list": "selection_list",
+    "model_catalog_refresh": "model_catalog_refresh",
+    "buddy_list": "buddy_list",
+    "user_policy_publish": "user_policy_publish",
 }
 
 UNWRAP_TASK = frozenset({"task_get"})
-DIRECT_TASK_VIEW = frozenset({"task_wait"})
+DIRECT_TASK_VIEW = frozenset({"task_observe"})
+READ_ONLY_OPERATIONS = frozenset({"task_observe"})
 
 
 class ServiceError(BoardError):
@@ -131,12 +133,13 @@ def local_rpc_error(error: CoreError | CCError) -> ServiceError:
 
 
 def is_transient_ipc_error(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
-    """Recognize an unavailable service, withdrawn route or transient IPC failure."""
+    """Recognize an unavailable service, withdrawn route, capacity refusal or transient IPC failure."""
     details = error.details
     if pre_dispatch_only and details.get("transport_phase") == "dispatch_uncertain":
         return False
     if error.code in ("SERVICE_UNAVAILABLE", "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
-                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND"):
+                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND",
+                      "C_TWO_CALL_CAPACITY_EXCEEDED"):
         return True
     phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
     return (error.code in ("C_TWO_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT")
@@ -207,21 +210,22 @@ def _invoke(service, endpoint: dict, operation: str, params: dict) -> dict:
 
 
 @contextmanager
-def _connection(endpoint: dict, resource: str, directory: Path):
-    contract = BuddyControl if resource == "control" else BuddyWait
-    name = CONTROL_NAME if resource == "control" else WAIT_NAME
+def _connection(endpoint: dict, directory: Path, *, timeout: float | None = None):
     # Validate the paths and select the private domain before opening a connection.
     rpc_config.configure_client(directory, create=False)
+    connect_kwargs: dict[str, Any] = {"name": CONTROL_NAME, "address": endpoint["address"]}
+    if timeout is not None:
+        connect_kwargs["timeout"] = max(0.05, min(timeout, rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS))
     with ExitStack() as stack:
         try:
-            service = stack.enter_context(cc.connect(contract, name=name, address=endpoint["address"]))
+            service = stack.enter_context(cc.connect(BuddyControl, **connect_kwargs))
         except (CoreError, CCError) as exc:
             raise local_rpc_error(exc) from exc
         yield service
 
 
-def _request(endpoint: dict, operation: str, params: dict, resource: str = "control", *, state_dir: Path) -> dict:
-    with _connection(endpoint, resource, state_dir) as service:
+def _request(endpoint: dict, operation: str, params: dict, *, state_dir: Path) -> dict:
+    with _connection(endpoint, state_dir) as service:
         return _invoke(service, endpoint, operation, params)
 
 
@@ -286,38 +290,267 @@ def _refuse_without_service(directory: Path, *, under_start_lock: bool = False) 
     raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
 
 
-@contextmanager
-def _event_waiter(directory: Path):
-    """Keep the named wait resource attached across bounded caller timeouts."""
-    endpoint = _attach_read_only(directory)
-    if endpoint is None:
-        _refuse_without_service(directory)
-    with _connection(endpoint, "wait", directory) as service:
-        yield lambda params: _invoke(service, endpoint, "events_wait", params)
+class BoardWaitSession:
+    """One read-only BuddyControl connection multiplexing topic wakes and RPC reads.
+
+    A thin receiver thread drains ``board_changed`` frames from Rust's GIL-free
+    ``block_on`` iterator into a local :class:`threading.Event`, so the calling
+    thread waits with bounded Python signal checks (``Ctrl+C``) and exact local
+    deadlines across POSIX and Windows.
+    """
+
+    def __init__(self, directory: Path, *, timeout: float | None = None):
+        self.directory = directory
+        self._connect_timeout = timeout
+        self._stack: ExitStack | None = None
+        self._endpoint: dict | None = None
+        self._peer: Any = None
+        self._sub: Any = None
+        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+        self._error: ServiceError | None = None
+        self._closed = False
+
+    def __enter__(self) -> BoardWaitSession:
+        try:
+            endpoint = _attach_read_only(self.directory)
+        except ServiceError as error:
+            if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED" or not is_transient_ipc_error(error):
+                raise
+            endpoint = None
+        if endpoint is None:
+            _refuse_without_service(self.directory)
+        self._endpoint = endpoint
+        stack = ExitStack()
+        try:
+            self._peer = stack.enter_context(_connection(endpoint, self.directory, timeout=self._connect_timeout))
+        except ServiceError as error:
+            stack.close()
+            if error.code == "SERVICE_UNAVAILABLE":
+                _refuse_without_service(self.directory)
+            raise
+        self._stack = stack
+        return self
+
+    def call(self, operation: str, params: dict) -> dict:
+        assert self._peer is not None and self._endpoint is not None
+        try:
+            return _invoke(self._peer, self._endpoint, operation, params)
+        except ServiceError as error:
+            if error.code == "SERVICE_UNAVAILABLE":
+                _refuse_without_service(self.directory)
+            raise
+
+    def subscribe(self) -> None:
+        if self._sub is not None:
+            return
+        assert self._peer is not None
+        try:
+            sub = self._peer.board_changed(start="next", on_lag="skip")
+        except (CoreError, CCError) as exc:
+            error = local_rpc_error(exc)
+            if error.code == "SERVICE_UNAVAILABLE":
+                _refuse_without_service(self.directory)
+            raise error from exc
+        self._sub = sub
+        self._wake.clear()
+        self._error = None
+
+        def _drain() -> None:
+            try:
+                for _delivery in sub:
+                    self._wake.set()
+                if not self._closed:
+                    self._error = ServiceError("C_TWO_CALL_CANCELLED", "Board change subscription closed")
+                    self._wake.set()
+            except (CoreError, CCError) as exc:
+                if not self._closed:
+                    self._error = local_rpc_error(exc)
+                    self._wake.set()
+            except Exception as exc:  # noqa: BLE001 - surface unexpected transport error to waiter
+                if not self._closed:
+                    self._error = ServiceError("SERVICE_UNAVAILABLE", str(exc))
+                    self._wake.set()
+
+        thread = threading.Thread(target=_drain, name="hey-my-buddy-topic-wait", daemon=True)
+        self._thread = thread
+        thread.start()
+
+    def prepare_read(self) -> None:
+        """Clear pending wakeups *before* an authoritative read so no concurrent change is lost."""
+        self._wake.clear()
+
+    def wait_wake(self, timeout: float, *, clock: Callable[[], float] = time.monotonic) -> bool:
+        """Block interruptibly until a board_changed delivery, transport error or deadline."""
+        deadline = clock() + max(0.0, timeout)
+        while True:
+            if self._error is not None:
+                raise self._error
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return False
+            if self._wake.wait(min(WAIT_TICK_SECONDS, remaining)):
+                if self._error is not None:
+                    raise self._error
+                return True
+
+    def close(self) -> None:
+        self._closed = True
+        sub, self._sub = self._sub, None
+        thread, self._thread = self._thread, None
+        if sub is not None:
+            try:
+                sub.cancel()
+            except (CoreError, CCError):
+                pass
+            try:
+                sub.close(timeout=SUBSCRIPTION_CLOSE_TIMEOUT_SECONDS)
+            except (CoreError, CCError):
+                pass
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=SUBSCRIPTION_CLOSE_TIMEOUT_SECONDS)
+        stack, self._stack = self._stack, None
+        self._peer = None
+        if stack is not None:
+            stack.close()
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
-def call_board(operation: str, params: dict | None = None, state_dir: str | Path | None = None, *, resource: str = "control", endpoint: dict | None = None) -> dict:
+def _open_wait_session(directory: Path, *, timeout: float | None = None) -> BoardWaitSession:
+    """Open one read-only BuddyControl session using an already selected state root."""
+    return BoardWaitSession(directory, timeout=timeout)
+
+
+def open_wait_session(directory: str | Path | None = None, *, timeout: float | None = None) -> BoardWaitSession:
+    """Open one read-only multiplexed BuddyControl session for blocking waits."""
+    return _open_wait_session(get_state_dir(directory), timeout=timeout)
+
+
+def wait_events(params: dict, state_dir: str | Path | None = None, *,
+                clock: Callable[[], float] = time.monotonic) -> dict:
+    """Wait on committed board events over one read-only topic subscription."""
+    directory = get_state_dir(state_dir)
+    after = params.get("after", 0)
+    limit = params.get("limit", 100)
+    timeout_ms = params.get("timeoutMs", 30000)
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 0:
+        raise ServiceError("INVALID_ARGUMENT", "timeoutMs must be a nonnegative integer")
+    read_params: dict[str, Any] = {"after": after, "limit": limit}
+    for key in ("runId", "credential"):
+        if key in params and params[key] is not None:
+            read_params[key] = params[key]
+    deadline = clock() + timeout_ms / 1000.0
+    with _open_wait_session(directory, timeout=max(0.05, timeout_ms / 1000.0) if timeout_ms else None) as session:
+        page = session.call("events_read", read_params)
+        if page["truncated"] or page["events"] or page["head"] > page["cursor"]:
+            return {**page, "timedOut": False}
+        if timeout_ms == 0:
+            return {**page, "timedOut": True}
+        session.subscribe()
+        while True:
+            session.prepare_read()
+            try:
+                page = session.call("events_read", read_params)
+            except ServiceError as error:
+                if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                    remaining = deadline - clock()
+                    if remaining > 0:
+                        session.wait_wake(min(0.05, remaining), clock=clock)
+                        continue
+                raise
+            if page["truncated"] or page["events"] or page["head"] > page["cursor"]:
+                return {**page, "timedOut": False}
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return {**page, "timedOut": True}
+            session.wait_wake(remaining, clock=clock)
+
+
+def wait_task(params: dict, state_dir: str | Path | None = None, *,
+              clock: Callable[[], float] = time.monotonic) -> dict:
+    """Wait on one task's authoritative observation over one read-only topic subscription."""
+    from .awaiting import message_kind
+
+    directory = get_state_dir(state_dir)
+    run_id = params.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        raise ServiceError("INVALID_ARGUMENT", "runId is required")
+    timeout_ms = params.get("timeoutMs", 30000)
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 0:
+        raise ServiceError("INVALID_ARGUMENT", "timeoutMs must be a nonnegative integer")
+    after_revision = params.get("afterRevision")
+    if after_revision is not None and (
+        isinstance(after_revision, bool) or not isinstance(after_revision, int) or after_revision < 0
+    ):
+        raise ServiceError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
+    consume_reminders = bool(params.get("consumeReminders", False))
+    reminder_wait_id = params.get("reminderWaitId")
+    if consume_reminders:
+        if not isinstance(reminder_wait_id, str) or not reminder_wait_id:
+            raise ServiceError("INVALID_ARGUMENT", "reminderWaitId is required when consumeReminders is true")
+    elif reminder_wait_id is not None:
+        raise ServiceError("INVALID_ARGUMENT", "reminderWaitId requires consumeReminders")
+    observe_params: dict[str, Any] = {"runId": run_id}
+    if consume_reminders:
+        observe_params["reminderWaitId"] = reminder_wait_id
+    if params.get("credential") is not None:
+        observe_params["credential"] = params["credential"]
+
+    def _ready(view: dict) -> bool:
+        return (
+            message_kind(view) is not None
+            or (after_revision is not None and view["revision"] > after_revision)
+        )
+
+    deadline = clock() + timeout_ms / 1000.0
+    with _open_wait_session(directory, timeout=max(0.05, timeout_ms / 1000.0) if timeout_ms else None) as session:
+        view = session.call("task_observe", observe_params)
+        if _ready(view) or timeout_ms == 0:
+            return view
+        session.subscribe()
+        while True:
+            session.prepare_read()
+            try:
+                view = session.call("task_observe", observe_params)
+            except ServiceError as error:
+                if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                    remaining = deadline - clock()
+                    if remaining > 0:
+                        session.wait_wake(min(0.05, remaining), clock=clock)
+                        continue
+                raise
+            if _ready(view):
+                return view
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return view
+            session.wait_wake(remaining, clock=clock)
+
+
+def call_board(operation: str, params: dict | None = None, state_dir: str | Path | None = None, *, endpoint: dict | None = None) -> dict:
     """Call one named C-Two board operation through a healthy, trusted endpoint."""
     directory = get_state_dir(state_dir)
-    return _call_board(operation, params, directory, resource=resource, endpoint=endpoint)
+    return _call_board(operation, params, directory, endpoint=endpoint)
 
 
-def _call_board(operation: str, params: dict | None, directory: Path, *, resource: str = "control", endpoint: dict | None = None) -> dict:
-    endpoint = endpoint or _ensure_service(directory, resource=resource)
-    return _request(endpoint, operation, params or {}, resource, state_dir=directory)
+def _call_board(operation: str, params: dict | None, directory: Path, *, endpoint: dict | None = None) -> dict:
+    endpoint = endpoint or _ensure_service(directory)
+    return _request(endpoint, operation, params or {}, state_dir=directory)
 
 
-def _call_board_read_only(operation: str, params: dict | None, directory: Path, *, resource: str = "control") -> dict:
+def _call_board_read_only(operation: str, params: dict | None, directory: Path) -> dict:
     """Call through an existing service using the already selected state root."""
     try:
         endpoint = _attach_read_only(directory)
     except ServiceError as error:
-        if not is_transient_ipc_error(error):
+        if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED" or not is_transient_ipc_error(error):
             raise
         endpoint = None
     if endpoint is None:
         _refuse_without_service(directory)
-    return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
+    return _request(endpoint, operation, params or {}, state_dir=directory)
 
 
 def _ping_endpoint(directory: Path, endpoint: dict | None) -> dict | None:
@@ -432,12 +665,12 @@ def _retire_stale_endpoint(directory: Path) -> None:
             os.close(fd)
 
 
-def ensure_service(state_dir: str | Path | None = None, *, resource: str = "control") -> dict:
+def ensure_service(state_dir: str | Path | None = None) -> dict:
     """Attach to a healthy daemon or cold-start one, preserving read-only attach."""
-    return _ensure_service(get_state_dir(state_dir), resource=resource)
+    return _ensure_service(get_state_dir(state_dir))
 
 
-def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
+def _ensure_service(directory: Path) -> dict:
     upgrading = (directory / "upgrade.json").exists()
     if upgrading:
         # An installer holds this existing lock until verification and recovery
@@ -451,9 +684,6 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
-        if resource == "wait":
-            # A wait may never cold-start a service: waiting on nothing would be a lie.
-            _refuse_without_service(directory)
         _cold_start_preflight(directory)
         lock_fd = private_dirs.open_regular_fd(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -462,8 +692,6 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
-        if resource == "wait":
-            _refuse_without_service(directory, under_start_lock=True)
         if upgrading:
             _cold_start_preflight(directory)
         _retire_stale_endpoint(directory)
@@ -546,7 +774,7 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
     if params is not None and not isinstance(params, dict):
         raise ServiceError("INVALID_ARGUMENT", "params must be an object")
     params = dict(params or {})
-    resource, operation = (METHOD_MAP.get(method) or INTERNAL_METHOD_MAP[method])
+    operation = (METHOD_MAP.get(method) or INTERNAL_METHOD_MAP[method])
     if method in ("stop", "restart"):
         params.setdefault("action", method)
     # Validate locally before any daemon spawn so an invalid request never starts work.
@@ -560,9 +788,13 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
             if refusal:
                 raise ServiceError("SERVICE_UNAVAILABLE", refusal)
             return {"status": "stopped", "alreadyStopped": True, "stopped": True}
+    elif operation in READ_ONLY_OPERATIONS:
+        endpoint = _attach_read_only(directory)
+        if endpoint is None:
+            _refuse_without_service(directory)
     else:
-        endpoint = _ensure_service(directory, resource=resource)
-    reply = _request(endpoint, operation, params, resource=resource, state_dir=directory)
+        endpoint = _ensure_service(directory)
+    reply = _request(endpoint, operation, params, state_dir=directory)
     if method in UNWRAP_TASK:
         task = reply.get("task")
         if not isinstance(task, dict):

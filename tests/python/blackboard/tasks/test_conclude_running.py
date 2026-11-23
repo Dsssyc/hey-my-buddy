@@ -120,9 +120,8 @@ class RunningConclusionTests(WorkflowTestCase):
         """Use the real private service, retaining the CLI transport's view shape."""
         def service(method, params, directory):
             self.assertEqual(directory, self.directory)
-            if method == "task_wait":
+            if method == "task_observe":
                 on_wait(params)
-                params = {**params, "timeoutMs": 0}
             try:
                 result = board.call("workflow_conclude" if method == "conclude" else method, params)
             except BoardError as error:
@@ -147,7 +146,7 @@ class RunningConclusionTests(WorkflowTestCase):
                               self.directory, service=self.cli_service(board, stop))
         self.assertEqual(answer["state"], "concluded")
         self.assertEqual(len(waited), 1)
-        self.assertFalse(waited[0]["consumeReminders"])
+        self.assertNotIn("reminderWaitId", waited[0])
         self.assertIsNotNone(self.get(board, run_id)["hostConclusion"])
 
     def test_cli_timeout_records_only_cancel_and_later_retry_finishes(self):
@@ -156,7 +155,7 @@ class RunningConclusionTests(WorkflowTestCase):
         claim = self.claim(board)
         clock = Clock()
         packet = {"runId": run_id, "note": "Stop without inventing proof", "waitSeconds": 1}
-        service = self.cli_service(board, lambda params: clock.advance(params["timeoutMs"] / 1000))
+        service = self.cli_service(board, lambda params: clock.advance(1))
         answer = conclude_run(packet, self.directory, service=service, clock=clock)
         self.assertEqual(answer["error"]["code"], "SHUTDOWN_UNCONFIRMED")
         self.assertTrue(answer["timedOut"])

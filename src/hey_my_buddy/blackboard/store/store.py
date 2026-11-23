@@ -7,6 +7,7 @@ vice versa. No transaction here spans RPC, a subprocess, an LLM call or a wait.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -199,8 +200,10 @@ class BoardStore:
         self._clock = clock
         self._condition = threading.Condition()
         self._head = 0
+        self._change_seq = 0
         self._wait_stopped = False
         self.on_change = None
+        self.on_publish: Callable[[int], None] | None = None
         self.persistence_error: str | None = None
         # The board is the single composition root for durable evaluation and
         # decision state: both wrap this same store (one SQLite file, one event
@@ -247,8 +250,17 @@ class BoardStore:
                         "SELECT DISTINCT task_id FROM events WHERE seq>? AND seq<=? AND task_id IS NOT NULL",
                         (self._head, head)))
             self._head = max(self._head, head)
-            self._condition.notify_all()
-        if (changed or changed_tasks) and self.on_change is not None:
+            notified = changed or bool(changed_tasks)
+            if notified:
+                self._change_seq += 1
+                self._condition.notify_all()
+                publish = self.on_publish
+                if publish is not None:
+                    try:
+                        publish(self._change_seq)
+                    except Exception as error:  # noqa: BLE001 - post-commit publish never fails committed writes
+                        logging.warning("board_changed publish failed after commit: %s", error)
+        if notified and self.on_change is not None:
             self.on_change(changed_tasks)
 
     def stop_waiters(self) -> None:
@@ -301,6 +313,26 @@ class BoardStore:
     def head(self) -> int:
         return self._head
 
+    def change_seq(self) -> int:
+        with self._condition:
+            return self._change_seq
+
+    def wait_change(self, after_seq: int, timeout_seconds: float, *, stop: threading.Event | None = None) -> bool:
+        """In-process condition wait for daemon-internal callers (never an RPC)."""
+        deadline = self._monotonic() + max(0.0, timeout_seconds)
+        with self._condition:
+            while True:
+                if self._wait_stopped:
+                    raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
+                if stop is not None and stop.is_set():
+                    raise BoardError("WAIT_ABANDONED", "The wait was abandoned; no task state was changed")
+                if self._change_seq > after_seq:
+                    return True
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining if stop is None else min(remaining, 1.0))
+
     def events_read(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"after", "limit", "runId"}, "events.read")
         after = schemas.optional_int(params, "after", 0, 0, 2**62)
@@ -326,46 +358,18 @@ class BoardStore:
         cursor = events[-1]["seq"] if events else after
         return {"events": events, "cursor": cursor, "head": int(head_row["head"]), "truncated": len(events) == limit}
 
-    def task_wait(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
-        schemas.required_string(params, 'runId', max_length=128)
-        consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
-        if consume_reminders:
+    def task_observe(self, params: dict) -> dict:
+        """Non-blocking authoritative observation for blocking waits and reminder claims."""
+        schemas.reject_unknown(params, {"runId", "reminderWaitId"}, "task.observe")
+        schemas.required_string(params, "runId", max_length=128)
+        reminder_wait_id = params.get("reminderWaitId")
+        if reminder_wait_id is not None:
             schemas.required_string(params, "reminderWaitId", max_length=128)
-        elif "reminderWaitId" in params:
-            raise BoardError("INVALID_ARGUMENT", "reminderWaitId requires consumeReminders")
-        timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
-        after_revision = params.get("afterRevision")
-        if after_revision is not None and (
-            isinstance(after_revision, bool) or not isinstance(after_revision, int) or after_revision < 0
-        ):
-            raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
-        deadline = self._monotonic() + timeout_ms / 1000.0
-        from ...protocol.awaiting import message_kind
-        from ..tasks import messages
-        while True:
-            head = self.head()
-            if consume_reminders:
-                message = messages.consume(self, params)
-                if message:
-                    return {**self._wait_view(params['runId'], message=message), **message}
-            view = self._wait_view(params['runId'])
-            # Re-check after subscribing so a change between read and subscribe is
-            # never lost; the recheck happens inside events_wait.
-            if message_kind(view) is not None or timeout_ms == 0 or (
-                after_revision is not None and view["revision"] > after_revision
-            ):
-                return view
-            remaining = deadline - self._monotonic()
-            if remaining <= 0:
-                return view
-            self.events_wait(
-                {
-                    "after": head,
-                    "timeoutMs": int(max(1, remaining * 1000)),
-                    "limit": 1,
-                }
-            )
+            from ..tasks import messages
+            message = messages.consume(self, {"runId": params["runId"], "reminderWaitId": reminder_wait_id})
+            if message:
+                return {**self._wait_view(params["runId"], message=message), **message}
+        return self._wait_view(params["runId"])
 
     def _wait_view(self, task_id: str, *, message: dict | None = None) -> dict:
         with self.db.read() as connection:
@@ -387,52 +391,6 @@ class BoardStore:
                                       (item['stage'], item.get('attemptId')) !=
                                       (detail['stage'], detail.get('attemptId')))]
             return view
-
-    def events_wait(self, params: dict, *, stop: threading.Event | None = None) -> dict:
-        """Bounded event wait with a check/subscribe/recheck sequence.
-
-        No database transaction and no exclusive resource lock is held while
-        waiting, so unlimited concurrent waiters cannot block cancellation or
-        result commits.
-        """
-        schemas.reject_unknown(params, {"after", "timeoutMs", "limit", "runId"}, "events.wait")
-        after = schemas.optional_int(params, "after", 0, 0, 2**62)
-        timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
-        limit = schemas.optional_int(params, "limit", 100, 1, MAX_EVENT_PAGE)
-        task_id = params.get("runId")
-        with self._condition:
-            if self._wait_stopped:
-                raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
-        page = self.events_read({"after": after, "limit": limit, **({"runId": task_id} if task_id else {})})
-        # Compare against the *filtered* head: an unrelated task's later event must
-        # not make this task's unchanged cursor look satisfied.
-        if page["truncated"] or page["events"] or page["head"] > page["cursor"] or timeout_ms == 0:
-            return {**page, "timedOut": False}
-        deadline = self._monotonic() + timeout_ms / 1000.0
-        with self._condition:
-            while True:
-                if self._wait_stopped:
-                    raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
-                if stop is not None and stop.is_set():
-                    raise BoardError("WAIT_ABANDONED", "The wait was abandoned; no task state was changed")
-                observed = self._filtered_head(task_id)
-                if observed > page["cursor"]:
-                    break
-                remaining = deadline - self._monotonic()
-                if remaining <= 0:
-                    return {**page, "timedOut": True}
-                self._condition.wait(remaining if stop is None else min(remaining, 1.0))
-        page = self.events_read({"after": after, "limit": limit, **({"runId": task_id} if task_id else {})})
-        return {**page, "timedOut": False}
-
-    def _filtered_head(self, task_id: str | None) -> int:
-        if not task_id:
-            return self._head
-        with self.db.read() as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS head FROM events WHERE task_id = ?", (task_id,)
-            ).fetchone()
-        return int(row["head"])
 
     def _monotonic(self) -> float:
         import time

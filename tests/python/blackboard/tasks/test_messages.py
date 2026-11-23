@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
+import time
 import uuid
 from unittest.mock import patch
 
@@ -145,20 +146,30 @@ class MessageTests(WorkflowTestCase):
         self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
         self.assertEqual(len(self.wakeups(board, lead)), 1)
 
-    def service(self, board, credential=None):
+    def service(self, board, credential=None, *, wait_seconds: float = 1.0):
+        deadline = time.monotonic() + wait_seconds
+        last_seq: int | None = None
+
         def call(method, params, directory):
+            nonlocal last_seq
             params = {**params, **({'credential': credential} if credential else {})}
+            if method == 'task_observe':
+                if last_seq is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        board.store.wait_change(last_seq, remaining)
+                last_seq = board.store.change_seq()
             result = board.call(method, params)
             return result['task'] if method == 'task_get' else result
         return call
 
     def observe(self, board, run_id, *, seconds=1, credential=None):
         return await_run({'runId': run_id, 'waitSeconds': seconds}, self.directory,
-                         service=self.service(board, credential))
+                         service=self.service(board, credential, wait_seconds=seconds))
 
     def receipt(self, board, run_id, wait_id=None):
-        return board.store.task_wait({'runId': run_id, 'timeoutMs': 0, 'consumeReminders': True,
-                                      'reminderWaitId': wait_id or uuid.uuid4().hex})
+        return board.store.task_observe({'runId': run_id,
+                                         'reminderWaitId': wait_id or uuid.uuid4().hex})
 
     def test_empty_consume_and_issue_replay_do_not_open_write_transactions(self):
         board = self.board()
@@ -205,7 +216,7 @@ class MessageTests(WorkflowTestCase):
         board = self.board()
         for selector in ({}, {'runId': 1}, {'runId': ''}):
             with self.subTest(selector=selector), self.assertRaises(BoardError) as caught:
-                board.call('task_wait', {**selector, 'timeoutMs': 0})
+                board.call('task_observe', selector)
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
 
     def test_publication_issue_updates_keep_the_same_occurrence(self):
@@ -226,11 +237,11 @@ class MessageTests(WorkflowTestCase):
         claim = self.claim(board, run_id=run['runId'])['claim']
         attempt_id = claim['attempt']['attemptId']
         entered = threading.Event()
-        events_wait = board.store.events_wait
-        def subscribed(params, **kwargs):
+        wait_change = board.store.wait_change
+        def subscribed(seq, timeout):
             entered.set()
-            return events_wait(params, **kwargs)
-        with patch.object(board.store, 'events_wait', side_effect=subscribed), ThreadPoolExecutor(1) as pool:
+            return wait_change(seq, timeout)
+        with patch.object(board.store, 'wait_change', side_effect=subscribed), ThreadPoolExecutor(1) as pool:
             future = pool.submit(self.observe, board, run['runId'], seconds=5)
             self.assertTrue(entered.wait(3))
             board.store.record_execution_issue(attempt_id, 'connection', BoardError('EXECUTION_UNKNOWN', 'No connection'))
@@ -278,11 +289,11 @@ class MessageTests(WorkflowTestCase):
         first = self.submit(board)
         second = self.submit(board, request_id='second', cwd=str(self.workdir('second')))
         entered = threading.Event()
-        events_wait = board.store.events_wait
-        def subscribed(params, **kwargs):
+        wait_change = board.store.wait_change
+        def subscribed(seq, timeout):
             entered.set()
-            return events_wait(params, **kwargs)
-        with patch.object(board.store, 'events_wait', side_effect=subscribed), ThreadPoolExecutor(1) as pool:
+            return wait_change(seq, timeout)
+        with patch.object(board.store, 'wait_change', side_effect=subscribed), ThreadPoolExecutor(1) as pool:
             future = pool.submit(self.observe, board, first['runId'], seconds=5)
             self.assertTrue(entered.wait(3))
             board.store.record_service_issue('scheduler', RuntimeError('private scheduler failed'))
@@ -343,22 +354,23 @@ class MessageTests(WorkflowTestCase):
         board = self.board()
         run_id = self.submit(board)['runId']
         unrelated_id = self.submit(board, request_id='unrelated', cwd=str(self.workdir('unrelated')))['runId']
-        initial_head = board.store.head()
-        events_wait = board.store.events_wait
+        initial_seq = board.store.change_seq()
         subscribed = threading.Barrier(4, timeout=5)
         writer_holds_lock = threading.Event()
 
-        def wait_for_events(params):
-            subscribed.wait()
-            result = events_wait(params)
-            if params['after'] == initial_head:
-                self.assertTrue(writer_holds_lock.wait(5))
-                self.assertEqual(result['events'][0]['taskId'], unrelated_id)
-            return result
+        def wait_for_issue() -> dict:
+            while True:
+                seq = board.store.change_seq()
+                view = board.store.task_observe({'runId': run_id, 'reminderWaitId': 'shared-wait'})
+                if view.get('issue'):
+                    return view
+                subscribed.wait()
+                board.store.wait_change(seq, 15.0)
+                if seq == initial_seq:
+                    self.assertTrue(writer_holds_lock.wait(5))
 
-        params = {'runId': run_id, 'timeoutMs': 15000, 'consumeReminders': True, 'reminderWaitId': 'shared-wait'}
-        with patch.object(board.store, 'events_wait', side_effect=wait_for_events), ThreadPoolExecutor(3) as pool:
-            futures = [pool.submit(board.store.task_wait, params) for _ in range(3)]
+        with ThreadPoolExecutor(3) as pool:
+            futures = [pool.submit(wait_for_issue) for _ in range(3)]
             subscribed.wait()
             with board.store.db.write() as connection:
                 head = board.store._append_event(connection, 'attempt.progress', task_id=unrelated_id)
@@ -378,11 +390,15 @@ class MessageTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         foreign = self.submit(board, request_id='foreign', cwd=str(self.workdir('foreign')))
-        params = {'runId': foreign['runId'], 'timeoutMs': 0, 'credential': claim['agentCredential']}
+        worker_claim = self.claim(board, worker_id='ordinary-worker', run_id=foreign['runId'])['claim']
+        params = {'runId': foreign['runId'], 'credential': claim['agentCredential']}
         with self.assertRaises(BoardError) as caught:
-            board.call('task_wait', params)
+            board.call('task_observe', params)
         self.assertEqual(caught.exception.code, 'FORBIDDEN')
-        self.assertEqual(board.call('task_wait', {**params, 'runId': child['runId']})['runId'], child['runId'])
+        with self.assertRaises(BoardError) as worker_caught:
+            board.call('task_observe', {'runId': foreign['runId'], 'credential': worker_claim['agentCredential']})
+        self.assertEqual(worker_caught.exception.code, 'FORBIDDEN')
+        self.assertEqual(board.call('task_observe', {**params, 'runId': child['runId']})['runId'], child['runId'])
 
     def test_lead_doorbell_follows_issue_occurrences_and_await_reads_the_content(self):
         for kind in ('execution', 'service'):

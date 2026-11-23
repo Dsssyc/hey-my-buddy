@@ -602,7 +602,7 @@ class TestLifecycle(BoardTestCase):
                 if endpoint is None:
                     return False
                 try:
-                    return (observer.health().get("waitAdmission") or {}).get("admitted", 0) >= 1
+                    return (observer.health().get("activeSubscribers") or 0) >= 1
                 except ServiceError:
                     return False
 
@@ -715,42 +715,33 @@ class TestDelivery(BoardTestCase):
         self.assertFalse(page["timedOut"])
         self.assertTrue(page["events"])
 
-    def test_more_waiters_than_capacity_never_blocks_mutations(self):
-        board = self.board(wait_capacity=2)
+    def test_many_concurrent_waiters_never_block_mutations(self):
+        board = self.board()
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(requestId="load", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"],
                                       expectedSeconds=1800)["task"]
-        pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        cursor = board.store.head()
-        results: list[str] = []
+        seq = board.store.change_seq()
+        results: list[bool] = []
         barrier = threading.Barrier(9, timeout=30)
 
         def waiter():
             barrier.wait()
-            try:
-                client.wait_events(after=cursor, timeout_ms=2000)
-                results.append("ok")
-            except BoardError as error:
-                results.append(error.code)
+            results.append(board.store.wait_change(seq, 2.0))
 
         threads = [threading.Thread(target=waiter) for _ in range(8)]
         for thread in threads:
             thread.start()
         barrier.wait()
-        self.assertTrue(wait_for(lambda: board.admission.stats()["admitted"] == 2
-                                 and board.admission.stats()["rejected"] >= 1, 10),
-                        "two waits must occupy capacity and an overflow must be observed")
         # Mutations must stay responsive: renew, cancel and the result commit.
         client.progress(attempt["attemptId"], attempt["generation"], "a" * 32)
         client.cancel(runId=task["runId"], note="race")
         client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         for thread in threads:
             thread.join(timeout=30)
-        self.assertEqual(len(results), 8)
-        self.assertIn("WAIT_OVERLOAD", results, "overflow must be an honest, resumable overload error")
+        self.assertEqual(results, [True] * 8)
         self.assertEqual(client.get(runId=task["runId"])["state"], "completed")
 
     def test_cancellation_race_has_one_legal_outcome(self):
@@ -883,7 +874,8 @@ class TestExtensibility(BoardTestCase):
         self.assertIn("command", report["adapters"])
         self.assertNotIn("external", report["adapters"])
         self.assertNotIn("external", report["localCapabilities"])
-        self.assertIn("wait", report["operations"])
+        self.assertNotIn("wait", report["operations"])
+        self.assertIn("task_observe", report["operations"]["control"])
 
     def test_command_adapter_runs_explicit_argv_without_a_shell(self):
         board = self.board()

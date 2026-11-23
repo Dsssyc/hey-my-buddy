@@ -213,7 +213,7 @@ class UpgradeEnvironmentTests(unittest.TestCase):
         self.assertEqual(environment["HMB_RUNTIME"], str(target))
         self.assertEqual(environment["HMB_RUNTIME_IDENTITY"], "runtime:" + target.name)
         self.assertEqual(environment["HMB_MAX_CONCURRENT"], "7")
-        self.assertEqual(environment["HMB_WAIT_CAPACITY"], "32")
+        self.assertNotIn("HMB_WAIT_CAPACITY", environment)
         self.assertNotIn("HMB_PYTHON", environment)
         self.assertEqual(environment["PATH"], os.pathsep.join(str(FIXTURE_ROOT / part) for part in ("usr/bin", "bin")))
 

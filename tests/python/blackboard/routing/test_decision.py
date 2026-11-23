@@ -901,7 +901,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertIn("selection_get", CONSOLE_OPERATIONS)
         self.assertNotIn("selection-request", METHOD_MAP)
         self.assertNotIn("selection-get", METHOD_MAP)
-        self.assertEqual(INTERNAL_METHOD_MAP["selection_get"], ("control", "selection_get"))
+        self.assertEqual(INTERNAL_METHOD_MAP["selection_get"], "selection_get")
         for method in ("selection-request", "selection-get"):
             self.assertNotIn(method, cli.METHODS)
         board = self.board()

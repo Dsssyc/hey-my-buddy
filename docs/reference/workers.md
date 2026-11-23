@@ -4,7 +4,7 @@ Each attempt runs in an **execution process** that the service starts for it and
 
 ## Harnesses and adapters
 
-`hey-my-buddy harnesses` reports adapters under `adapters`, each with `available`, nullable `{code, params}` `reason` and `capabilities`. It also reports `localCapabilities`, the named operations, wait admission, each adapter's declared `permissionLevels` and harness records under `harnesses`. A new harness, or a behavior that several harnesses share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
+`hey-my-buddy harnesses` reports adapters under `adapters`, each with `available`, nullable `{code, params}` `reason` and `capabilities`. It also reports `localCapabilities`, the named operations, each adapter's declared `permissionLevels` and harness records under `harnesses`. A new harness, or a behavior that several harnesses share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
 
 | Harness or adapter | Capabilities | Requirements |
 | --- | --- | --- |

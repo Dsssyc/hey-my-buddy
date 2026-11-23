@@ -48,8 +48,7 @@ class ReminderFacts(BoardTestCase):
                 if event['kind'] == 'attempt.reminder']
 
     def consume(self):
-        return self.store.task_wait({'runId': self.task['runId'], 'timeoutMs': 0,
-                                     'consumeReminders': True, 'reminderWaitId': str(uuid.uuid4())})
+        return self.store.task_observe({'runId': self.task['runId'], 'reminderWaitId': str(uuid.uuid4())})
 
     def test_idle_has_no_deadline_and_deadlines_follow_expected_duration(self):
         self.assertIsNone(reminders.collect(self.store))
@@ -145,18 +144,18 @@ class ReminderFacts(BoardTestCase):
         self.assertEqual([record['expectedMultiple'] for record in self.records()], [1, 2, 3])
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 1)
         # Waiting reads the durable reminder cursor from this store.
-        next_view = self.store.task_wait({'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True,
-                                            'reminderWaitId': str(uuid.uuid4())})
+        next_view = self.store.task_observe({'runId': self.task['runId'],
+                                             'reminderWaitId': str(uuid.uuid4())})
         self.assertEqual(next_view['reminder']['expectedMultiple'], 2)
 
     def test_wait_receipt_replays_after_lost_reply_without_consuming_the_next_reminder(self):
         self.claim()
         self.clock.advance(20)
         reminders.collect(self.store)
-        params = {'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True, 'reminderWaitId': 'lost-reply'}
-        first = self.store.task_wait(params)['reminder']
+        params = {'runId': self.task['runId'], 'reminderWaitId': 'lost-reply'}
+        first = self.store.task_observe(params)['reminder']
         with patch.object(self.store.db, 'write', side_effect=AssertionError('unexpected writer')):
-            self.assertEqual(self.store.task_wait(params)['reminder'], first)
+            self.assertEqual(self.store.task_observe(params)['reminder'], first)
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 2)
 
     def test_prompt_observation_does_not_reset_silence_or_invent_a_native_event(self):

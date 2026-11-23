@@ -72,7 +72,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         fixture_modules = lambda path: {**original_modules(path),
                                         "daemon": "hey_my_buddy._upgrade_fixture_daemon"}
         environment = self.child_environment({"HMB_RUNTIME_ROOT": str(target.parent),
-                                              "HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "4",
+                                              "HMB_MAX_CONCURRENT": "1",
                                               **(overrides or {})})
         environment.pop("PYTHONPATH", None)
         environment.pop("HMB_DEV_SOURCE", None)
@@ -141,32 +141,26 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             self.start(first)
             run_id, release, original = self.command("two-installs")
             identity = original["processIdentity"]
-            entered = threading.Event()
-
-            def waiting_service(method, params, state_dir):
-                if method == "task_wait":
-                    entered.set()
-                return _call_service(method, params, state_dir)
-
             def wait_command_result():
-                view = waiting_service("task_get", {"runId": run_id}, self.directory)
+                from hey_my_buddy.protocol.transport import wait_task
+                view = _call_service("task_get", {"runId": run_id}, self.directory)
                 deadline = time.monotonic() + 90
                 while not view["resultAvailable"]:
                     self.assertLess(time.monotonic(), deadline, view)
                     try:
-                        view = waiting_service("task_wait", {"runId": run_id,
-                            "afterRevision": view["revision"], "timeoutMs": 30000}, self.directory)
+                        view = wait_task({"runId": run_id, "afterRevision": view["revision"],
+                                          "timeoutMs": 30000}, self.directory)
                     except ServiceError:
                         if not (self.directory / "upgrade.json").exists():
                             raise
                         time.sleep(.2)
-                        view = waiting_service("task_get", {"runId": run_id}, self.directory)
+                        view = _call_service("task_get", {"runId": run_id}, self.directory)
                 return view
 
             with ThreadPoolExecutor(max_workers=1) as pool:
                 waiter = pool.submit(wait_command_result)
                 try:
-                    self.assertTrue(entered.wait(15))
+                    self.assertTrue(wait_for(lambda: self.client().call("health", {})["activeSubscribers"] == 1, timeout=15))
                     first_install = upgrade.upgrade(self.directory)
                     self.assertTrue(first_install["upgraded"], first_install)
                     self.assertNotIn("backup", first_install)

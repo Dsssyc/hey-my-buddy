@@ -37,9 +37,10 @@ class SurfaceTests(unittest.TestCase):
                 self.assertNotIn(retired, transport.METHOD_MAP)
 
     def test_private_observation_routes_do_not_become_cli_methods(self):
-        self.assertEqual(transport.INTERNAL_METHOD_MAP["task_wait"], ("wait", "task_wait"))
-        self.assertEqual(transport.INTERNAL_METHOD_MAP["events_wait"], ("wait", "events_wait"))
-        for name in ("task_get", "task_result", "task_wait", "events_read", "events_wait", "workflow_get"):
+        self.assertEqual(transport.INTERNAL_METHOD_MAP["task_observe"], "task_observe")
+        self.assertNotIn("task_wait", transport.INTERNAL_METHOD_MAP)
+        self.assertNotIn("events_wait", transport.INTERNAL_METHOD_MAP)
+        for name in ("task_get", "task_result", "task_observe", "task_wait", "events_read", "events_wait", "workflow_get"):
             self.assertNotIn(name, cli.METHODS)
 
     def test_role_only_names_require_an_execution_credential_before_rpc(self):
@@ -52,7 +53,7 @@ class SurfaceTests(unittest.TestCase):
         self.assertIn("relocate", OPERATIONS_REQUESTS)
         self.assertNotIn("relocate", HOST_REQUESTS)
         self.assertNotIn("relocate", ROLE_REQUESTS)
-        self.assertEqual(transport.METHOD_MAP["relocate"], ("control", "project_relocate"))
+        self.assertEqual(transport.METHOD_MAP["relocate"], "project_relocate")
         document = {"token": "private", "stateDir": "/private/board", "taskId": "worker"}
         with mock.patch.object(cli, "_call_service", side_effect=AssertionError("must not call")):
             status, result = invoke("relocate", {"cwd": "/new/location"}, document=document)

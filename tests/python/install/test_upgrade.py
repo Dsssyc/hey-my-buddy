@@ -153,19 +153,19 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(environment['HMB_RUNTIME_ROOT'], str(target.parent))
         self.assertEqual(environment['HMB_RUNTIME_IDENTITY'], 'runtime:' + target.name)
         self.assertEqual(environment['HMB_MAX_CONCURRENT'], '99')
-        self.assertEqual(environment['HMB_WAIT_CAPACITY'], '99')
+        self.assertNotIn('HMB_WAIT_CAPACITY', environment)
         self.assertNotIn('HMB_DEV_SOURCE', environment)
 
     def test_runtime_switch_preserves_current_launch_settings(self):
         state = self.directory / 'state'
         state.mkdir()
         target = self.directory / 'runtimes' / ('a' * 32)
-        settings = {'HMB_MAX_CONCURRENT': '3', 'HMB_WAIT_CAPACITY': '48'}
+        settings = {'HMB_MAX_CONCURRENT': '3'}
         launcher.write_active_runtime(state, target, settings)
         with mock.patch('hey_my_buddy.install.launcher.service_environment', return_value={}):
             environment = upgrade._environment(state, target)
         self.assertEqual(environment['HMB_MAX_CONCURRENT'], '3')
-        self.assertEqual(environment['HMB_WAIT_CAPACITY'], '48')
+        self.assertNotIn('HMB_WAIT_CAPACITY', environment)
         self.assertEqual(json.loads((state / 'launch-settings.json').read_text(encoding="utf-8"))['environment'], settings)
 
     def test_upgrade_environment_rejects_invalid_persisted_launch_capacity(self):
@@ -803,3 +803,43 @@ class UpgradeTests(BoardTestCase):
         with board.store.db.connect() as connection:
             after=backup.database_snapshot(connection,event_head=before['eventHead'])
         self.assertNotEqual(before['fingerprints']['events'],after['fingerprints']['events'])
+
+    def test_legacy_wait_capacity_is_stripped_on_upgrade_and_restored_on_rollback(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        previous = self.directory / 'runtimes' / ('a' * 32)
+        target = self.directory / 'runtimes' / ('b' * 32)
+        for path in (previous, target):
+            (path / 'src' / 'hey_my_buddy').mkdir(parents=True)
+        launcher.write_private(state / 'launch-settings.json',
+                               {'environment': {'HMB_MAX_CONCURRENT': '5', 'HMB_WAIT_CAPACITY': '32'}})
+        previous_settings = upgrade._read_upgrade_launch_defaults(state)
+        self.assertEqual(previous_settings, {'HMB_MAX_CONCURRENT': '5', 'HMB_WAIT_CAPACITY': '32'})
+        target_settings = {k: v for k, v in previous_settings.items() if k in launcher.LAUNCH_KEYS}
+        self.assertEqual(target_settings, {'HMB_MAX_CONCURRENT': '5'})
+        journal = {
+            'previous': str(previous),
+            'target': str(target),
+            'phase': 'preflight',
+            'environment': target_settings,
+            'previousEnvironment': previous_settings,
+            'before': {'schema': SCHEMA_VERSION},
+            'contractChanged': True,
+        }
+        launcher.write_private(state / 'upgrade.json', journal)
+        with mock.patch.object(upgrade.runtime, 'read_ready', return_value={'sourceCommit': 'f' * 40}):
+            target_env = upgrade._environment(state, target)
+            prev_env = upgrade._environment(state, previous)
+        self.assertEqual(target_env['HMB_MAX_CONCURRENT'], '5')
+        self.assertNotIn('HMB_WAIT_CAPACITY', target_env)
+        self.assertEqual(prev_env['HMB_MAX_CONCURRENT'], '5')
+        self.assertEqual(prev_env['HMB_WAIT_CAPACITY'], '32')
+        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade, 'probe', side_effect=[None, None]), \
+             mock.patch.object(upgrade, 'start', return_value={'runtimeContentId': previous.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}) as start, \
+             mock.patch.object(upgrade, 'verify_started'):
+            recovered = upgrade.recover(state, (self.directory / 'runtimes').resolve())
+        self.assertTrue(recovered['recoveredJournal'])
+        start.assert_called_once_with(state, previous)
+        restored = json.loads((state / 'launch-settings.json').read_text(encoding='utf-8'))['environment']
+        self.assertEqual(restored, previous_settings)

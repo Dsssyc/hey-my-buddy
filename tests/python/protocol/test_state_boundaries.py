@@ -37,7 +37,7 @@ class StateBoundaryTests(unittest.TestCase):
         from hey_my_buddy.cli.console_cli import run
         from hey_my_buddy.blackboard.catalog.catalog import discover
         for function, argument in ((transport._request, "state_dir"), (transport._healthy, "directory"),
-                (transport._call_board_read_only, "directory"),
+                (transport._call_board_read_only, "directory"), (transport._open_wait_session, "directory"),
                 (transport._attach_read_only, "directory"), (transport._cold_start_preflight, "directory"),
                 (rpc_config.configure_local_endpoint, "state_dir"), (rpc_config.configure_client, "state_dir"),
                 (rpc_config.configure_server, "state_dir"), (rpc_config._apply, "state_dir"),
@@ -109,20 +109,29 @@ class StateBoundaryTests(unittest.TestCase):
                     self.assertTrue(node.args or node.keywords, (name, node.lineno))
 
     def test_internal_cli_defaults_share_selected_path_without_public_resolution(self):
+        from contextlib import nullcontext
         from hey_my_buddy.cli import blocking, console_cli
         lifecycle = {"running": True, "consoleId": "0123456789abcdef01234567",
                      "url": "http://127.0.0.1:8123/"}
-        run = {"runId": "fixture", "state": "failed", "revision": 1,"actions":["get"]}
+        run = {"runId": "fixture", "state": "failed", "revision": 1, "actions": ["get"]}
 
-        def request(endpoint, operation, params, resource="control", *, state_dir):
+        def request(endpoint, operation, params, *, state_dir):
             self.assertIs(state_dir, self.state)
-            if operation == 'task_wait':
-                return run
             return (lifecycle if params.get("action") == "open" else {"running": False}) if operation == "console" else {"task": run}
+
+        def connect(endpoint, state_dir, *, timeout=None):
+            self.assertIs(state_dir, self.state)
+            return nullcontext(object())
+
+        def invoke(_peer, _endpoint, operation, params):
+            self.assertEqual(operation, "task_observe")
+            return run
 
         with patch.object(transport, "get_state_dir", side_effect=AssertionError("internal CLI reselected state")), \
                 patch.object(transport, "_ensure_service", return_value=self.endpoint) as ensure, \
                 patch.object(transport, "_attach_read_only", return_value=self.endpoint) as attach, \
+                patch.object(transport, "_connection", side_effect=connect), \
+                patch.object(transport, "_invoke", side_effect=invoke), \
                 patch.object(transport, "_request", side_effect=request):
             console = console_cli.run({"browser": False, "wait": True}, state_dir=self.state)
             self.assertEqual(console["wait"], {"status": "closed"})

@@ -32,8 +32,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         other = self.closed(board, 'retained-receipt', macro_task='Retained receipts', project='other')
         board.store.record_service_issue('scheduler', RuntimeError('private failure'))
         for index, item in enumerate((run, other)):
-            board.call('task_wait', {'runId': item['runId'], 'timeoutMs': 0, 'consumeReminders': True,
-                                     'reminderWaitId': f'wait-{index}'})
+            board.call('task_observe', {'runId': item['runId'], 'reminderWaitId': f'wait-{index}'})
         with self.without_physical_io()[0]:
             macro_task_deletion.delete(board.store, run['macroTaskId'], 1)
         with board.store.db.read() as connection:

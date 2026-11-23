@@ -42,9 +42,9 @@ class AwaitTests(unittest.TestCase):
                 return {"state": "awaiting-host", "actions": ["continue", "cancel", "get"],
                         "activeRequest": {"requestId": "req-7"},
                         "finalArtifactId": None}
-            return active if method == "task_get" else boundary
+            return active if len(calls) == 1 else boundary
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual(calls, ["task_get", "task_wait", "workflow_get"])
+        self.assertEqual(calls, ["task_observe", "task_observe", "workflow_get"])
         self.assertEqual(answer["requestId"], "req-7")
         self.assertNotIn("requestKind", answer)
         self.assertEqual(answer["actions"], ["continue", "cancel", "get"])
@@ -62,10 +62,8 @@ class AwaitTests(unittest.TestCase):
                      "artifactId": "artifact-1", "actions": ["accept", "continue", "conclude", "get"]}
         def service(method, params, directory):
             calls.append((method, dict(params)))
-            if method == "task_get":
-                return unconfirmed
-            if method == 'task_wait':
-                return confirmed
+            if method == "task_observe":
+                return unconfirmed if sum(1 for m, _ in calls if m == "task_observe") == 1 else confirmed
             if method == "workflow_get":
                 return {"state": "delivered", "actions": ["accept", "continue", "conclude", "get"],
                         "finalArtifactId": "artifact-1", "activeRequest": None}
@@ -73,8 +71,9 @@ class AwaitTests(unittest.TestCase):
                 return {"result": {"status": "completed"}}
             self.fail(f"unexpected call {method}")
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual([name for name, _ in calls], ["task_get", "task_wait", "workflow_get", "task_result"])
+        self.assertEqual([name for name, _ in calls], ["task_observe", "task_observe", "workflow_get", "task_result"])
         self.assertEqual(calls[1][1]["runId"], "run-1")
+        self.assertEqual(calls[0][1]["reminderWaitId"], calls[1][1]["reminderWaitId"])
         self.assertEqual(answer["artifactId"], "artifact-1")
         self.assertTrue(answer["shutdownConfirmed"])
         self.assertEqual(answer["actions"], ["accept", "continue", "conclude", "get"])
@@ -90,10 +89,8 @@ class AwaitTests(unittest.TestCase):
         calls = []
         def service(method, params, directory):
             calls.append((method, dict(params)))
-            if method == "task_get":
-                return unconfirmed
-            if method == 'task_wait':
-                return confirmed
+            if method == "task_observe":
+                return unconfirmed if sum(1 for m, _ in calls if m == "task_observe") == 1 else confirmed
             if method == "workflow_get":
                 return {"state": "delivered", "actions": confirmed["actions"],
                         "activeRequest": None, "finalArtifactId": "art-1"}
@@ -103,7 +100,7 @@ class AwaitTests(unittest.TestCase):
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service,
                            clock=self.clock)
         self.assertEqual([name for name, _ in calls],
-                         ["task_get", "task_wait", "workflow_get", "task_result"])
+                         ["task_observe", "task_observe", "workflow_get", "task_result"])
         self.assertEqual(calls[1][1]["runId"], "run-1")
         self.assertEqual(answer["artifactId"], "art-1")
         self.assertTrue(answer["shutdownConfirmed"])
@@ -117,7 +114,7 @@ class AwaitTests(unittest.TestCase):
             calls.append(method)
             return run
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual(calls, ["task_get"])
+        self.assertEqual(calls, ["task_observe"])
         self.assertEqual(answer["reminder"], reminder)
         self.assertEqual(answer["outcome"], "review-reminder")
         self.assertEqual(answer["actions"], run["actions"])
@@ -151,10 +148,10 @@ class AwaitTests(unittest.TestCase):
         calls = []
         def service(method, params, directory):
             calls.append(method)
-            return active if method == 'task_get' else delivered
+            return active if len(calls) == 1 else delivered
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service,
                            clock=self.clock)
-        self.assertEqual(calls, ['task_get', 'task_wait'])
+        self.assertEqual(calls, ['task_observe', 'task_observe'])
         self.assertEqual(answer['outcome'], 'paused')
         self.assertEqual(answer['queueReason'], 'paused')
         self.assertEqual(answer['pause'], delivered['pause'])
@@ -168,16 +165,18 @@ class AwaitTests(unittest.TestCase):
         boundary = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
                     "revision": 2, "resultAvailable": False, "actions": ["continue", "cancel", "get"],
                     "workflow": {"activeRequestId": "req-1"}}
-        waits = 0
+        observes = 0
         calls = []
+        wait_ids = []
         def service(method, params, directory):
-            nonlocal waits
+            nonlocal observes
             calls.append(method)
-            if method == "task_get":
-                return active
-            if method == "task_wait":
-                waits += 1
-                if waits == 1:
+            if method == "task_observe":
+                observes += 1
+                wait_ids.append(params.get("reminderWaitId"))
+                if observes == 1:
+                    return active
+                if observes == 2:
                     raise ServiceError("SERVICE_UNAVAILABLE", "old daemon detached")
                 return boundary
             if method == "workflow_get":
@@ -188,7 +187,8 @@ class AwaitTests(unittest.TestCase):
         with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
             answer = await_run({"runId": "run-1", "waitSeconds": 2}, self.state_dir,
                                service=service, clock=self.clock)
-        self.assertEqual(calls, ["task_get", "task_wait", "task_wait", "workflow_get"])
+        self.assertEqual(calls, ["task_observe", "task_observe", "task_observe", "workflow_get"])
+        self.assertEqual(len(set(wait_ids)), 1)
         self.assertEqual(answer["requestId"], "req-1")
         self.assertNotIn("error", answer)
 
@@ -200,7 +200,7 @@ class AwaitTests(unittest.TestCase):
         calls = []
         def service(method, params, directory):
             calls.append(method)
-            if method == "task_wait":
+            if len(calls) == 2:
                 self.clock.advance(1)
                 return {**active, "activity": {**activity, "eventSeq": 2}}
             return active
@@ -210,7 +210,7 @@ class AwaitTests(unittest.TestCase):
         self.assertTrue(answer["timedOut"])
         self.assertEqual(answer["activity"], activity)
         self.assertEqual(answer["selectedAttempt"]["issues"], [{"code": "native-permission-denied"}])
-        self.assertEqual(calls, ["task_get", "task_wait"])
+        self.assertEqual(calls, ["task_observe", "task_observe"])
         self.assertNotIn("cancel", calls)
 
     def test_failed_await_exposes_provider_rejection_and_omits_activity(self):
@@ -220,8 +220,7 @@ class AwaitTests(unittest.TestCase):
                "activity": {"phase": "finishing", "observedAt": "2026-11-11T00:00:00Z"},
                "providerRejection": rejection}
         responses = {
-            "task_get": run,
-            "task_wait": run,
+            "task_observe": run,
             "workflow_get": {"state": "failed", "actions": ["get"]},
             "task_result": {"result": {"status": "failed", "providerRejection": rejection}},
         }
@@ -243,7 +242,7 @@ class AwaitTests(unittest.TestCase):
         run = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
                "actions": ["continue", "get"]}
         def service(method, params, directory):
-            if method in ("task_get", "task_wait"):
+            if method == "task_observe":
                 return run
             raise ServiceError("CONFLICT", "View changed", revision=9)
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)

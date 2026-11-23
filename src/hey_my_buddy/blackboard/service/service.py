@@ -1,9 +1,9 @@
-"""The C-Two resource implementations behind the named board operations.
+"""The C-Two resource implementation behind the named board operations.
 
-``BoardService`` owns the control resource (mutations, reads, lifecycle) and
-``WaitService`` owns the dedicated wait resource. Both validate their request
-schema, translate :class:`BoardError` into structured JSON errors, and never expose
-a generic ``dispatch(method, JSON)`` entry point.
+``BoardService`` owns the control resource (mutations, reads, observation and
+lifecycle). Every method validates its request schema, translates
+:class:`BoardError` into structured JSON errors, and never exposes a generic
+``dispatch(method, JSON)`` entry point.
 """
 from __future__ import annotations
 
@@ -28,9 +28,8 @@ from ..store.store import BoardStore
 from .live_registry import LiveRegistry
 
 PROTOCOL_VERSION = 2
-WAIT_CAPACITY_DEFAULT = 32
 
-#: Operations each resource exposes. Used for health/capability reporting and to
+#: Operations exposed on ``BuddyControl``. Used for capability reporting and to
 #: reject a typo loudly instead of silently ignoring it.
 CONTROL_OPERATIONS = (
     "ping",
@@ -57,6 +56,7 @@ CONTROL_OPERATIONS = (
     "task_list",
     "task_result",
     "task_cancel",
+    "task_observe",
     "execution_progress",
     "execution_result",
     "execution_maintenance",
@@ -90,39 +90,18 @@ CONTROL_OPERATIONS = (
     "macro_task_deletion_preview",
     "macro_task_delete",
 )
-WAIT_OPERATIONS = ("events_wait", "task_wait")
 
-
-class WaitAdmission:
-    """Bounded admission for waits, separate from the control resource.
-
-    A wait never holds a database transaction or an exclusive resource lock, and
-    when every admitted slot is busy the caller gets a resumable overload error
-    carrying the cursor, instead of consuming control capacity.
-    """
-
-    def __init__(self, capacity: int = WAIT_CAPACITY_DEFAULT):
-        self.capacity = max(1, int(capacity))
-        self.admitted = 0
-        self.rejected = 0
-        self._lock = threading.Lock()
-
-    def acquire(self) -> bool:
-        with self._lock:
-            if self.admitted >= self.capacity:
-                self.rejected += 1
-                return False
-            self.admitted += 1
-        return True
-
-    def release(self) -> None:
-        with self._lock:
-            self.admitted -= 1
-
-    def stats(self) -> dict:
-        with self._lock:
-            return {"capacity": self.capacity, "admitted": self.admitted,
-                    "rejected": self.rejected, "available": self.capacity - self.admitted}
+#: Pure read/observation operations that never consult harness discovery.
+PURE_OBSERVATION_OPERATIONS = frozenset({
+    "ping",
+    "events.read",
+    "task.observe",
+    "task.get",
+    "task.result",
+    "message.get",
+    "message.list",
+    "artifact.list",
+})
 
 
 class _BaseResource:
@@ -159,7 +138,12 @@ class _BaseResource:
                         raise BoardError("UPGRADE_IN_PROGRESS", "Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity")
                 from ...harness_selection import bound
                 health = getattr(self, 'harnesses', None)
-                with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
+                bind_harnesses = (
+                    health is not None
+                    and getattr(self, 'automatic_discovery', False)
+                    and operation not in PURE_OBSERVATION_OPERATIONS
+                )
+                with bound(health.all()) if bind_harnesses else nullcontext():
                     result = handler(params)
             finally:
                 workflow_module.clear_request_scope()
@@ -294,8 +278,10 @@ class BoardService(_BaseResource):
                 "maxConcurrent": self.store.max_concurrent,
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
-                "waitCapacity": self.control.get("wait_capacity"),
-                "waitAdmission": self.control["wait_admission"].stats() if self.control.get("wait_admission") else None,
+                "activeSubscribers": (
+                    int(self.control["active_subscribers"]())
+                    if callable(self.control.get("active_subscribers")) else 0
+                ),
                 "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
                 "serviceIssues": self.store.service_issues(),
@@ -326,10 +312,7 @@ class BoardService(_BaseResource):
                 "adapters": report,
                 "localCapabilities": capabilities,
                 "harnesses": records,
-                "operations": {"control": list(CONTROL_OPERATIONS), "wait": list(WAIT_OPERATIONS)},
-                "waitAdmission": self.control.get("wait_admission").stats()
-                if self.control.get("wait_admission")
-                else None,
+                "operations": {"control": list(CONTROL_OPERATIONS)},
             }
 
         return self._guard("capabilities", request_json, handler)
@@ -826,6 +809,9 @@ class BoardService(_BaseResource):
     def task_cancel(self, request_json: str) -> str:
         return self._guard("task.cancel", request_json, self.store.task_cancel)
 
+    def task_observe(self, request_json: str) -> str:
+        return self._guard("task.observe", request_json, self.store.task_observe)
+
 
 
 
@@ -888,37 +874,6 @@ class BoardService(_BaseResource):
     # -- events -------------------------------------------------------------
     def events_read(self, request_json: str) -> str:
         return self._guard("events.read", request_json, self.store.events_read)
-
-
-class WaitService(_BaseResource):
-    """Dedicated bounded wait resource."""
-
-    def __init__(self, store: BoardStore, admission: WaitAdmission, token: str = ""):
-        super().__init__(store, token)
-        self.admission = admission
-
-    def _bounded(self, operation: str, request_json: str, handler: Callable[[dict], dict]) -> str:
-        def admitted(params: dict) -> dict:
-            if not self.admission.acquire():
-                raise BoardError(
-                    "WAIT_OVERLOAD",
-                    "Every admitted wait slot is busy; no task state changed. Retry with the same cursor.",
-                    cursor=params.get("after", self.store.head()), retryAfterMs=250,
-                    capacity=self.admission.capacity,
-                )
-            try:
-                return handler(params)
-            finally:
-                self.admission.release()
-
-        return self._guard(operation, request_json, admitted)
-
-    def events_wait(self, request_json: str) -> str:
-        return self._bounded("events.wait", request_json, self.store.events_wait)
-
-    def task_wait(self, request_json: str) -> str:
-        return self._bounded("task.wait", request_json, self.store.task_wait)
-
 
 
 def call_operation(service: Any, operation: str, params: dict) -> dict:

@@ -23,13 +23,13 @@ class BoardClient:
         self.autostart = autostart
 
     # -- plumbing -----------------------------------------------------------
-    def call(self, operation: str, params: dict | None = None, *, resource: str = "control") -> dict:
+    def call(self, operation: str, params: dict | None = None) -> dict:
         if self._call is not None:
             return self._call(operation, params or {})
         directory = get_state_dir(self.state_dir)
         if not self.autostart:
-            return transport._call_board_read_only(operation, params, directory, resource=resource)
-        return transport._call_board(operation, params or {}, directory, resource=resource)
+            return transport._call_board_read_only(operation, params, directory)
+        return transport._call_board(operation, params or {}, directory)
 
     # -- service ------------------------------------------------------------
     def ping(self) -> dict:
@@ -57,10 +57,15 @@ class BoardClient:
     def cancel(self, **selector: Any) -> dict:
         return self.call("task_cancel", selector)["task"]
 
-
+    def observe_task(self, **selector: Any) -> dict:
+        return self.call("task_observe", selector)
 
     def wait_task(self, timeout_ms: int = 30000, **selector: Any) -> dict:
-        return self.call("task_wait", {**selector, "timeoutMs": timeout_ms}, resource="wait")
+        params = {**selector, "timeoutMs": timeout_ms}
+        if self._call is not None:
+            observe = {key: value for key, value in selector.items() if key in ("runId", "reminderWaitId", "credential")}
+            return self._call("task_observe", observe)
+        return transport.wait_task(params, self.state_dir)
 
     # -- executions ---------------------------------------------------------
     def progress(
@@ -118,9 +123,12 @@ class BoardClient:
         return self.call("events_read", {**selector, "after": after, "limit": limit})
 
     def wait_events(self, after: int = 0, timeout_ms: int = 30000, limit: int = 100, **selector: Any) -> dict:
-        return self.call(
-            "events_wait", {**selector, "after": after, "timeoutMs": timeout_ms, "limit": limit}, resource="wait"
-        )
+        params = {**selector, "after": after, "timeoutMs": timeout_ms, "limit": limit}
+        if self._call is not None:
+            page = self._call("events_read", {**selector, "after": after, "limit": limit})
+            has_data = bool(page["truncated"] or page["events"] or page["head"] > page["cursor"])
+            return {**page, "timedOut": not has_data}
+        return transport.wait_events(params, self.state_dir)
 
     def artifacts(self, **selector: Any) -> dict:
         return self.call("artifact_list", selector)

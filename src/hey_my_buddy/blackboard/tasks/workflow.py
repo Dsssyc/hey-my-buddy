@@ -113,7 +113,7 @@ AGENT_RUN_BOUND_OPERATIONS = frozenset(
 #: Additional Host operations for a granted run's execution credential only.
 LEAD_OPERATIONS = frozenset({
     "workflow_submit", "workflow_continue", "workflow_cancel",
-    "workflow_accept", "workflow_conclude", "task_list", "task_wait",
+    "workflow_accept", "workflow_conclude", "task_list", "task_observe",
 })
 LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
     AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest"}
@@ -2717,13 +2717,13 @@ class WorkflowCoordinator:
         self.board._notify(head)
         deadline = time.monotonic() + self.END_WAIT_SECONDS
         while True:
+            change_seq = self.board.change_seq()
             with self.db.read() as connection:
                 pending = [run["run_id"] for run in scope if not all(
                     self.shutdown_summary(connection, run["run_id"])[key] for key in ("selfConfirmed", "descendantsConfirmed"))]
             if not pending or time.monotonic() >= deadline:
                 break
-            head = self.board.head()
-            self.board.events_wait({"after": head, "timeoutMs": max(1, int(min(1, deadline-time.monotonic())*1000)), "limit": 1})
+            self.board.wait_change(change_seq, min(1.0, deadline - time.monotonic()))
         for original in reversed(scope):
             run_id = original["run_id"]
             with self.db.read() as connection:

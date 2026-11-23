@@ -54,7 +54,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         endpoint = {"address": "ipc://private-api-test", "token": "test-token"}
         with patch.object(transport, "_ensure_service", return_value=endpoint), patch.object(
             transport, "_request",
-            side_effect=lambda _endpoint, operation, values, resource="control", **kwargs: board.call(operation, values),
+            side_effect=lambda _endpoint, operation, values, **kwargs: board.call(operation, values),
         ), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
             code = cli.main([method, json.dumps(params)])
         return code, json.loads(output.getvalue())
@@ -67,7 +67,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
     def test_host_surfaces_and_worker_authority(self):
         for name, operation in HOST_WORKSPACE_OPERATIONS.items():
             with self.subTest(operation=operation):
-                self.assertEqual(transport.METHOD_MAP[name], ("control", operation))
+                self.assertEqual(transport.METHOD_MAP[name], operation)
                 self.assertIn(name, cli.METHODS)
                 self.assertIn(operation, CONTROL_OPERATIONS)
                 self.assertNotIn(operation, CONSOLE_OPERATIONS)

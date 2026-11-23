@@ -46,8 +46,8 @@ class HarnessServiceTests(BoardTestCase):
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': router_wait, 'waitingReasonSeq': 3}))
             self.assertEqual(self.board.head(), head)
-            waiting = [event for event in self.board.events_wait({'after': 0, 'runId': task['runId'],
-                         'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting']
+            waiting = [event for event in self.board.events_read({'after': 0, 'runId': task['runId']})['events']
+                       if event['kind'] == 'attempt.waiting']
             self.assertEqual(waiting[-1]['payload']['reason'], router_wait)
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': None, 'waitingReasonSeq': 4}))
@@ -91,8 +91,8 @@ class HarnessServiceTests(BoardTestCase):
             self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
 
         def waiting_count():
-            return sum(1 for event in self.board.events_wait(
-                {'after': 0, 'runId': task['runId'], 'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting')
+            return sum(1 for event in self.board.events_read(
+                {'after': 0, 'runId': task['runId']})['events'] if event['kind'] == 'attempt.waiting')
 
         # 1. A Router wait recorded before an unknown probe stays the visible
         # reason; replaying it must not duplicate attempt.waiting or bump revision.

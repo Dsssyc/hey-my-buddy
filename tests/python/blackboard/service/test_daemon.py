@@ -68,7 +68,7 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertTrue(daemon.stopping.is_set())
 
     def test_invalid_environment_values_are_refused_instead_of_defaulted_or_clamped(self):
-        for name in ("HMB_MAX_CONCURRENT", "HMB_WAIT_CAPACITY"):
+        for name in ("HMB_MAX_CONCURRENT",):
             with self.subTest(name=name), patch.dict(os.environ, {name: "invalid"}):
                 with self.assertRaises(BoardError) as caught:
                     _env_int(name, 8)
