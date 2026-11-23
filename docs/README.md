@@ -95,6 +95,7 @@ Each ADR records the decision at its own point in time, with its dated amendment
 | [033](decisions/033-macro-task-pause-resume-end.md) | Pausing, resuming and ending macro tasks from the console |
 | [034](decisions/034-retire-helpers.md) | Worker attention, Host continuation and workspace resolution, historical session bindings |
 | [035](decisions/035-router-snapshot-queries-and-correction.md) | Router and maintenance frozen-snapshot paged queries, unified correction and skip window |
+| [036](decisions/036-topic-wait-and-retire-buddy-wait.md) | Topic-driven waits on BuddyControl via c-two `@cc.topic`, retiring BuddyWait and WaitAdmission |
 
 ## Acceptance records
 
