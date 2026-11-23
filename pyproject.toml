@@ -70,7 +70,7 @@ include = ["/LICENSE", "/README.md", "/pyproject.toml", "/uv.lock", "/packaging/
 exclude = ["**/__pycache__", "**/*.pyc", "**/node_modules", "**/.venv", "**/_distribution"]
 
 [tool.hey-my-buddy]
-published-version = "0.72.1"
+published-version = "0.77.0"
 
 [tool.hatch.build.hooks.custom]
 path = "packaging/hatch_build.py"
