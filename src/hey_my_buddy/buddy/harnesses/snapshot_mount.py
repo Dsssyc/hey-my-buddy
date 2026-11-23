@@ -68,6 +68,11 @@ def mounted_snapshot(mount: SnapshotQueryMount) -> SnapshotService:
     return SnapshotService.from_file(Path(mount.config_path))
 
 
+def mounted_micro_task_coverage(mount: SnapshotQueryMount) -> list[dict]:
+    """Sample the mounted invocation's issued pages for maintenance correction."""
+    return SnapshotService.issued_micro_task_coverage(Path(mount.config_path).parent)
+
+
 def stdio_tool_names(mount: SnapshotQueryMount) -> tuple[str, ...]:
     """The qualified names a stdio MCP harness sees for the mounted tools."""
     return tuple(f"mcp__{SNAPSHOT_MCP_SERVER_NAME}__{name}" for name in mount.tool_names)
@@ -166,6 +171,6 @@ def snapshot_coverage_refs(invocation_root: Path, coverage: list[dict] | None) -
 
 __all__ = [
     "SNAPSHOT_CONFIG_NAME", "ObservedSnapshotCalls", "SnapshotQueryMount",
-    "claude_mcp_config", "mounted_snapshot", "prepare_snapshot_mount",
+    "claude_mcp_config", "mounted_micro_task_coverage", "mounted_snapshot", "prepare_snapshot_mount",
     "stdio_mcp_entry", "stdio_tool_names", "verify_mounted_calls",
 ]

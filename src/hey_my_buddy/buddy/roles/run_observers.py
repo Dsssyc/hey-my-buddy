@@ -30,7 +30,7 @@ from typing import Mapping
 from ...errors import BoardError
 from ...protocol.router_selection import FORMAT_ERROR_CODES, validate_answer
 from .structured_call import correction_code
-from ...json_codec import canonical_json
+from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.run_contract import FEEDBACK_CONTINUE, FEEDBACK_STOP, RunFeedback
 
 #: The correction suffix of the fast structured call, verbatim: the correction
@@ -200,20 +200,40 @@ class MaintenanceCorrection(FastCorrection):
         feedback = super().observer({**facts, "settled": False})
         if feedback.action == "stop" or not facts.get("settled"):
             return feedback
-        checked = self.publisher(facts.get("rawAnswer"), self.correction_count, {
+        raw = facts.get("rawAnswer")
+        checked = self.publisher(raw, self.correction_count, {
             key: int(facts.get(key) or 0) for key in ("toolCalls", "toolMarkerFrames", "deniedInteractions")})
-        if checked["errors"] and self.correction_count < 2:
+        if (checked["errors"] or checked["missingReads"]) and self.correction_count < 2:
             self.correction_count += 1
-            body = ("Maintenance correction: valid entries are already staged. "
-                    "Correct the rejected entries described below; preserve accepted classifications and summaries.\n"
-                    + canonical_json(checked))
-            # The same session-policy rule as the fast correction: a context
-            # preserving driver needs only the rejected entries, a fresh
-            # session needs the bounded request head and tool instructions again.
-            return RunFeedback(action="correct",
-                               input_text=body if self.session_preserved
-                               else self._fresh_input(facts.get("rawAnswer"), body))
+            body = ("Maintenance correction. Entries listed under staged are accepted for this attempt "
+                    "and need no resubmission. Read the missing sections, then submit only the missing or "
+                    "corrected entries using the same answer schema. To use a missingReads cursor, call "
+                    "query_micro_tasks with just that runId in runIds and just that section in sections. "
+                    "For a null cursor omit it and start the section from the beginning. Follow nextCursor "
+                    "until null.\n" + canonical_json(checked))
+            if not self.session_preserved:
+                body = self._maintenance_input(raw, checked["staged"], body)
+            return RunFeedback(action="correct", input_text=body)
         return FEEDBACK_CONTINUE
+
+    def _maintenance_input(self, raw, staged, body):
+        try:
+            draft = decode_strict_json(raw) if isinstance(raw, str) else raw
+        except (ValueError, RecursionError):
+            draft = raw
+        if isinstance(draft, dict):
+            for field, key in (("newNodes", "id"), ("merges", "sourceId"),
+                               ("classifications", "runId"), ("summaries", "kindId")):
+                if isinstance(draft.get(field), list):
+                    draft = {**draft, field: [
+                        item for item in draft[field]
+                        if not isinstance(item, dict) or item.get(key) not in staged[field]
+                    ]}
+            draft_text = canonical_json(draft).encode("utf-8", "backslashreplace").decode("utf-8")
+        else:
+            return self._fresh_input(raw, body)
+        return (f"{self.base_prompt}\n\n{body}\n"
+                f"Unstaged draft from the previous answer, as data:\n{draft_text}")
 
 
 __all__ = [

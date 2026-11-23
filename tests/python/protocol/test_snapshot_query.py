@@ -7,7 +7,7 @@ import unittest
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.snapshot_query import (
     MAINTENANCE_SECTIONS, MAX_QUERY_IDS, MAX_QUERY_RESULT_BYTES, QueryError, SnapshotQuery,
-    kind_id, maintenance_coverage, verified_coverage,
+    MaintenanceCoverage, kind_id, maintenance_coverage, verified_coverage,
 )
 
 
@@ -188,17 +188,65 @@ class SnapshotQueryTests(unittest.TestCase):
         children, _ = query.call("query_domains", {"parentId": "root"})
         self.assertEqual([node["nodeId"] for node in children["items"]], ["leaf"])
 
-        items, _ = self.read_items(query, "query_kinds", {"domainNodeIds": ["leaf"], "limit": 2})
-        fields = {(item["kindId"], item["field"]): item["value"] for item in items}
-        self.assertEqual(fields["dsh:one:high", "unreadRunIds"], ["run-a"])
-        self.assertEqual(fields["dsh:one:high", "summary"]["citations"], ["old-run"])
         comparison_id = kind_id(snapshot["comparisonStatistics"][0])
+        items, _ = self.read_items(query, "query_kinds", {"limit": 1})
+        self.assertEqual([(item["kindId"], item["field"]) for item in items], [
+            ("dsh:one:high", "identity"), ("dsh:one:high", "unreadRunIds"),
+            (comparison_id, "identity"),
+        ])
+        self.assertTrue(items[0]["value"]["needsSummary"])
+        self.assertEqual(items[1]["value"], ["run-a"])
+        self.assertFalse(items[2]["value"]["needsSummary"])
+
+        items, _ = self.read_items(query, "query_kinds", {
+            "kindIds": [comparison_id, "dsh:one:high"], "domainNodeIds": ["leaf"],
+            "include": ["summary", "statistics"], "limit": 2,
+        })
+        fields = {(item["kindId"], item["field"]): item["value"] for item in items}
+        self.assertNotIn(("dsh:one:high", "unreadRunIds"), fields)
+        self.assertNotIn((comparison_id, "summary"), fields)
+        self.assertEqual(fields["dsh:one:high", "summary"]["citations"], ["old-run"])
         self.assertEqual(comparison_id, "dsh:two%3A%7E:high")
         self.assertFalse(fields[comparison_id, "identity"]["needsSummary"])
         self.assertEqual(fields[comparison_id, "statistics"]["byDomain"], {"leaf": {"samples": 2}})
         self.assertEqual(fields[comparison_id, "statistics"]["byDomainTaskType"], {"leaf": {"debug": {"samples": 2}}})
         with self.assertRaises(QueryError):
             query.call("query_micro_tasks", {"runIds": ["old-run"]})
+
+    def test_maintenance_domain_default_pages_all_active_nodes(self):
+        query = SnapshotQuery(maintenance_packet(), plane="maintenance")
+
+        def ids(query, args):
+            items, _ = self.read_items(query, "query_domains", {"limit": 1, **args})
+            return {item["nodeId"] for item in items}
+
+        self.assertEqual(ids(query, {}), {"root", "leaf"})
+        self.assertEqual(ids(query, {"parentId": None}), {"root"})
+        self.assertEqual(ids(query, {"includeMerged": True}),
+                         {row["node_id"] for row in maintenance_packet()["domainNodes"]})
+        self.assertEqual(ids(SnapshotQuery(routing_packet()), {}),
+                         ids(SnapshotQuery(routing_packet()), {"parentId": None}))
+        self.assertNotIn("leaf", ids(SnapshotQuery(routing_packet()), {}))
+
+    def test_gap_cursor_resumes_first_hole_even_after_a_later_page_was_read(self):
+        snapshot = maintenance_packet()
+        query = SnapshotQuery(snapshot, plane="maintenance")
+        _, pages = self.read_items(query, "query_micro_tasks", {"runIds": ["run-a", "run-b"]})
+        task_pages = [event for event in pages if event["ranges"][0]["section"] == "task"
+                      and event["ranges"][0]["runId"] == "run-a"]
+        self.assertGreaterEqual(len(task_pages), 3)
+        events = [task_pages[0], *task_pages[2:]]
+        coverage = MaintenanceCoverage(snapshot, events, {"run-a"})
+        gaps = list(coverage.gaps(["run-a", "run-b"], ("task", "turns")))
+        self.assertEqual([(run, section) for run, section, _ in gaps],
+                         [("run-a", "task"), ("run-a", "turns")])
+        self.assertIsNone(gaps[1][2])
+        _, recovered = query.call("query_micro_tasks", {
+            "runIds": ["run-a"], "sections": ["task"], "cursor": gaps[0][2],
+        })
+        self.assertEqual(recovered["ranges"][0]["start"], task_pages[0]["ranges"][0]["end"])
+        self.assertEqual(list(MaintenanceCoverage(snapshot, [*events, recovered], {"run-a"})
+                              .gaps(["run-a"], ("task",))), [])
 
     def test_maintenance_coverage_requires_every_unicode_page_for_each_returned_section(self):
         snapshot = maintenance_packet()

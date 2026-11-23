@@ -135,7 +135,8 @@ class Maintenance:
                     "request": {"maintenanceRunId": run_id, "classificationCount": len(packet["classificationRunIds"]),
                                 "summaryKindCount": len(packet["kinds"]), "domainNodeCount": len(packet["domainNodes"]),
                                 "taskTypes": packet["taskTypes"],
-                                "batchLimits": {"microTasks": maintenance_data.MAX_MICRO_TASKS,
+                                "batchLimits": {"microTasksMaxBytes": maintenance_data.MICRO_TASKS_MAX_BYTES,
+                                                "microTasks": maintenance_data.MAX_MICRO_TASKS,
                                                 "summaryKinds": maintenance_data.MAX_SUMMARY_KINDS}}}
         task_id = self.store.decisions._create_task(
             connection, decision_id=run_id, request_id=run_id,
@@ -186,18 +187,24 @@ class Maintenance:
             run_id = run["maintenance_run_id"]
             material = files.read(self.store.directory, run_id, params.get("answer"))
             observations = material.get("observations") if isinstance(material, dict) else None
-            if (not isinstance(observations, dict) or set(material) != {"answer", "observations"}
+            if (not isinstance(observations, dict) or set(material) != {"answer", "observations", "coverage"}
                     or set(observations) != {"toolCalls", "toolMarkerFrames", "deniedInteractions"}
                     or any(type(value) is not int or value < 0 for value in observations.values())):
-                raise BoardError("INVALID_ARGUMENT", "Maintenance answer requires native observation counts")
+                raise BoardError("INVALID_ARGUMENT", "Maintenance answer requires answer, observations and coverage")
+            if not isinstance(material["coverage"], list):
+                raise BoardError("INVALID_ARGUMENT", "Maintenance coverage must be a list of issued deliveries")
             task = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             document = json.loads(task[0])["decision"]["document"]
             packet = files.read(self.store.directory, run_id, document["snapshot"]["reference"])
             bound = [json.loads(row[0]) for row in history]
             previous = (files.read(self.store.directory, run_id, bound[-1]["staged"]) if bound
                         else {"tree": [], "classifications": {}, "summaries": {}})
-            staged, feedback = maintenance_data.stage_answer(connection, packet=packet,
-                                                            answer=material["answer"], previous=previous)
+            try:
+                staged, feedback = maintenance_data.stage_answer(
+                    connection, packet=packet, answer=material["answer"], previous=previous,
+                    issued_events=material["coverage"])
+            except QueryError as exc:
+                raise BoardError("INVALID_ARGUMENT", str(exc)) from exc
 
             def retain(reference):
                 pinned = {"retainedAnswer", "feedback", "staged"}
@@ -302,14 +309,13 @@ class Maintenance:
                     else:
                         run_id = run["maintenance_run_id"]
                         checked = json.loads(event[0])
-                        feedback = files.read(self.store.directory, run_id, checked["feedback"])
+                        retained = files.read(self.store.directory, run_id, checked["retainedAnswer"])
                         staged = files.read(self.store.directory, run_id, checked["staged"])
                         packet = files.read(self.store.directory, run_id, document["snapshot"]["reference"])
                         try:
-                            correction_errors = feedback["errors"][:len(feedback["errors"]) - len(feedback["missing"])]
                             counts, errors = maintenance_data.commit_staged(
-                                connection, packet=packet, staged=staged, verified_events=verified,
-                                maintenance_run_id=run_id, prior_errors=correction_errors)
+                                connection, packet=packet, answer=retained["material"]["answer"], staged=staged,
+                                verified_events=verified, maintenance_run_id=run_id)
                         except QueryError:
                             code = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
                         else:

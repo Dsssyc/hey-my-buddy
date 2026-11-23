@@ -1,6 +1,6 @@
 [project]
 name = "hey-my-buddy"
-version = "0.77.1"
+version = "0.78.0"
 description = "A local blackboard where a Host buddy delegates micro tasks to Worker buddies in other coding harnesses and accepts every result itself."
 requires-python = ">=3.12,<3.13"
 dynamic = ["readme"]
@@ -70,7 +70,7 @@ include = ["/LICENSE", "/README.md", "/pyproject.toml", "/uv.lock", "/packaging/
 exclude = ["**/__pycache__", "**/*.pyc", "**/node_modules", "**/.venv", "**/_distribution"]
 
 [tool.hey-my-buddy]
-published-version = "0.77.1"
+published-version = "0.78.0"
 
 [tool.hatch.build.hooks.custom]
 path = "packaging/hatch_build.py"

@@ -14,7 +14,7 @@ connection, so waiting clients occupy no server callback threads.
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.77.0"
+CONTRACT_VERSION = "0.78.0"
 CONTROL_NAME = "hey-my-buddy-control"
 
 
