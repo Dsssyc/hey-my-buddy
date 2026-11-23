@@ -26,6 +26,7 @@ from ...protocol import usage
 from ...protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 from ...protocol.workspace_manifest import turn_manifest
 from ...protocol.capabilities import PERMISSION_LEVELS
+from ...protocol.harness_declarations import harness_declaration
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ...protocol.turn_output import TURN_OUTPUT_VERSION, validate_outcome
 from ..harnesses.base import AdapterOutcome, ExecutionContext
@@ -182,6 +183,15 @@ def _base_result(result) -> dict:
         payload["inputFailure"] = result.input_failure.value
     if result.session_record_failure is not None:
         payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
+    requests = result.native_requests
+    if requests is not None and requests.unsupported_requests > 0:
+        payload["unsupportedNativeRequests"] = requests.unsupported_requests
+        if requests.unsupported_methods:
+            payload["unsupportedNativeRequestMethods"] = list(requests.unsupported_methods)
+    if result.buddy.session_model is not None:
+        payload["sessionModel"] = result.buddy.session_model
+    if result.buddy.observed_models:
+        payload["observedModels"] = list(result.buddy.observed_models)
     _merge_native_evidence(result, payload)
     return payload
 
@@ -357,11 +367,8 @@ def _worker_reports(result, payload: dict) -> bool:
                 if key == "nativeCheckpoint" and result.native_identity is not None:
                     payload["nativeTurnId"] = result.native_identity.turn_id
             elif kind == "native-observations":
-                for field in ("sessionModel", "observedModels", "totalCostUsd"):
-                    if field in report:
-                        payload[field] = report[field]
-                if report.get("unsupportedNativeRequests"):
-                    payload["unsupportedNativeRequests"] = report["unsupportedNativeRequests"]
+                if "totalCostUsd" in report:
+                    payload["totalCostUsd"] = report["totalCostUsd"]
                 for field in ("nativeInterruptRequested", "nativeInterruptAcknowledged"):
                     if type(report.get(field)) is bool:
                         payload[field] = report[field]
@@ -430,6 +437,7 @@ def worker_request(control: dict, module):
     task_text = read_text(Path(control["taskFile"]))
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
+    declaration = harness_declaration(control["harness"])
     workspace = turn_manifest(Path(control["stateDir"]), turn_input)
     prompt_input = {**turn_input, "executionWorkspace": workspace}
     permission = workspace["access"]
@@ -438,7 +446,7 @@ def worker_request(control: dict, module):
     if not isinstance(prior_sessions, list):
         prior_sessions = []
     mount_prior = (mode == "reconstructed-new-session" and bool(prior_sessions)
-                   and not (control["harness"] == "claude" and permission == "web"))
+                   and not (permission == "web" and not declaration.web_allows_mcp))
     if format is None:
         from ...protocol.live import EXISTING_CAPABILITIES
         checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
@@ -467,14 +475,14 @@ def worker_request(control: dict, module):
         format = format.for_turn(turn_input)
         prompt, schema = format.prompt(task_text, prompt_input, credential_file=credential_file), format.schema
         inquiry_services = None
-        codex = control["harness"] == "codex"
-        carry_codex_prior = codex and mode == "native-session" and bool(prior_sessions)
+        dynamic_tools = declaration.session_tool_carrier == "dynamic-tools"
+        carry_codex_prior = dynamic_tools and mode == "native-session" and bool(prior_sessions)
         if inquiry is not None or mount_prior or carry_codex_prior:
             inquiry_services = module.prepare_inquiry_services(
                 invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
                 attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA,
                 prior_sessions=prior_sessions if mount_prior or carry_codex_prior else None,
-                **({"mount_prior_tools": mount_prior} if codex else {}))
+                **({"mount_prior_tools": mount_prior} if dynamic_tools else {}))
             if inquiry_services.answer_tool:
                 prompt = prompt.appended("delivery", "\nHost questions may arrive as inputs during this running turn. Answer each with "
                            f"{inquiry_services.answer_tool}, using its exact "

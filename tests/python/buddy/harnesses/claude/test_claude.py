@@ -421,13 +421,21 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertTrue(self.fixture_state()["interrupted"], "quota rejection interrupts the native child")
 
     def test_structured_result_quota_denial_is_classified_without_copying_errors(self):
-        for index, case in enumerate(("result-quota", "api-429"), 1):
+        # A quota subtype is exhaustion; a bare HTTP 429 without any quota
+        # event or subtype is transient rate limiting and never the 30-minute
+        # provider cooling an exhaustion triggers.
+        for index, (case, code, native, message) in enumerate((
+                ("result-quota", "quota-exceeded", "error_quota_during_execution",
+                 "the Claude provider quota rejected this execution"),
+                ("api-429", "rate-limited", "http_429",
+                 "the Claude provider model service is rate limited")), 1):
             with self.subTest(case=case):
                 outcome = self.execute(self.context(case, index=index))
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "harness-error")
-                self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
-                self.assertEqual(outcome.result["providerRejection"]["nativeCode"], "unknown")
+                self.assertEqual(outcome.error, message)
+                self.assertEqual(outcome.result["providerRejection"]["code"], code)
+                self.assertEqual(outcome.result["providerRejection"]["nativeCode"], native)
                 self.assertEqual(outcome.result["providerRejection"]["rejectionPhase"], "during-model")
                 self.assertIsNone(outcome.result["providerRejection"]["resetsAt"])
                 self.assertNotIn("turn", outcome.result)

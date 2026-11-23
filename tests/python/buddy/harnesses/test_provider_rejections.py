@@ -177,7 +177,8 @@ class NativeProviderRejectionTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.claude.protocol import ProviderRejected
         # The native failure boundary raises the same exported rejection that
         # the stream collector raises; no native child or service is started.
-        with patch.object(native_run, "_prepare", side_effect=ProviderRejected("five_hour", None)):
+        with patch.object(native_run, "_prepare",
+                          side_effect=ProviderRejected("five_hour", None, classification="quota-exceeded")):
             result = native_run.run(self.request("claude"), observer=lambda _: FEEDBACK_CONTINUE,
                                     services=None, cancelled=lambda: False)
         self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")

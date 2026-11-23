@@ -211,7 +211,7 @@ def complete_turn():
             return
         completed = True
     content, _error = finish("attention" if case == "needs-help" else "completed")
-    if content is None and case in ("attention", "live"):
+    if content is None and case in ("attention", "live", "permission-denial"):
         # The finish tool refuses completed while a native interactive request is
         # refused or a queued Host question is unanswered; a compliant root
         # retries with the softer outcome in the same turn.
@@ -519,7 +519,7 @@ def handle_message(message):
                   root="foreign-session", turn="foreign-turn")
             event("model.streaming", {"kind": "reasoning_delta", "assistantMessageId": "msg-child",
                                       "delta": "child secret", "done": False, "source": "sub-agent"})
-        if case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-quiet"):
+        if case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-rate-limit", "turn-failed-quiet"):
             # The exported native turn.failed shape: error.type plus, for the
             # quota case, error.code and the strict attribution object. The raw
             # message is deliberately secret-shaped so a test can prove the
@@ -527,11 +527,12 @@ def handle_message(message):
             error = {"type": "AiSdkModelAdapterError",
                      "message": "stream failed for https://models.example.com/v1 key sk-fixture-never-public"}
             if case != "turn-failed-quiet":
-                error.update({"code": "model_rate_limited", "retryable": False, "attribution": {
+                retryable = case == "turn-failed-rate-limit"
+                error.update({"code": "model_rate_limited", "retryable": retryable, "attribution": {
                     "source": "provider", "reason": "rate_limited", "errorPhase": "stream",
                     "exceptionKind": "provider_business", "providerId": "fixture-api",
                     "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
-                    "statusCode": 429, "providerErrorCode": "1308", "retryable": False}})
+                    "statusCode": 429, "providerErrorCode": "1308", "retryable": retryable}})
             if case == "turn-failed-quota-after-output":
                 event("model.streaming", {"kind": "text_delta", "assistantMessageId": "msg-quota-output",
                                           "delta": "partial answer", "done": False})
@@ -581,6 +582,12 @@ def handle_message(message):
                 native_path(log_dir / "interaction-responses.json").write_text(json.dumps(answers), encoding="utf-8", newline="\n")
             except OSError:
                 pass
+        if case == "permission-denial":
+            reply = request_client("server-input-1", "interaction/requestUserInput",
+                                   {"sessionId": session_id, "interactionId": "fixture-question"})
+            assert reply["result"]["action"] == "decline"
+        if case == "unknown-event":
+            event("future.event", {})
         if case in ("attention", "attention-after-finish"):
             accepted = finish("completed")[0] if case == "attention-after-finish" else None
             answers = interactive_attention()
@@ -604,7 +611,7 @@ def handle_message(message):
         return
     elif method.startswith("v4/") and inquiry_queue.handle(method, params, request_id):
         return
-    elif method == "session/messages" and case in ("turn-failed-quota", "turn-failed-quota-after-output"):
+    elif method == "session/messages" and case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-rate-limit"):
         result = {"messages": []}
     elif method == "session/close":
         result = {"closed": case != "close-failed"}

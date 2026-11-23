@@ -720,11 +720,12 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(activity["counts"]["modelTurns"], 1)
         observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
                                             if ref.kind == "native-observations"))).read_bytes())
-        # The observed model set is a bounded observation, never an identity.
-        self.assertEqual(observations["observedModels"],
-                         ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
+        # The observed model set is a bounded observation, never an identity;
+        # the session model and the model set are the result's typed facts.
         self.assertEqual(observations["totalCostUsd"], 0.01)
-        self.assertEqual(observations["sessionModel"], BUDDY["model"])
+        self.assertEqual(result.buddy.session_model, BUDDY["model"])
+        self.assertEqual(result.buddy.observed_models,
+                         ("claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"))
         turn_facts = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
                                           if ref.kind == "native-turn-facts"))).read_bytes())
         self.assertEqual(turn_facts["structuredOutputSource"], "json-schema")
@@ -751,7 +752,7 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(result.last_assistant_message.value["sourceId"], "msg-fixture-0002")
         observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
                                             if ref.kind == "native-observations"))).read_bytes())
-        self.assertEqual(observations["observedModels"], ["claude-fixture-5"])
+        self.assertEqual(result.buddy.observed_models, ("claude-fixture-5",))
         self.assertNotIn("quota", observations)
         self.assertNotIn("rateLimitObservations", observations)
 
@@ -766,6 +767,11 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(len(records), 1)
         self.assertEqual((records[0]["toolName"], records[0]["requestId"]),
                          ("WebFetch", "perm-1"))
+        # One refused control request plus the one denial the result frame
+        # itself reported — the total of both sources.
+        self.assertEqual(result.native_requests.permission_denials, 2)
+        self.assertEqual(result.native_requests.unsupported_requests, 0)
+        self.assertEqual(result.native_requests.unsupported_methods, ())
         # The outcome rewrite is the role's assembly; the delivered value keeps
         # its own completed fact for the role to judge.
         self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")

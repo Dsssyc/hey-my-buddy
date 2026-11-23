@@ -15,6 +15,7 @@ from .internal_models import (
     check_text,
     fail,
 )
+from .harness_declarations import HARNESS_DECLARATIONS, DeliveryMode as InquiryDeliveryMode
 from .inquiry import MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS
 from .run_identity import RunIdentity
 from .schemas import MAX_ANSWER_BYTES, MAX_INQUIRIES_PER_RUN, MAX_QUESTION_BYTES
@@ -30,7 +31,6 @@ MAX_OBSERVE_LIMIT = 256
 MAX_CLOSE_REASON_BYTES = 200
 
 LiveKind = Literal["inquiry"]
-InquiryDeliveryMode = Literal["realtime", "cooperative-checkpoint", "unsupported"]
 LiveReplyStatus = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unsupported"]
 ReplyState = Literal["queued", "delivered", "answered", "discarded"]
 InquiryStateValue = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unknown"]
@@ -54,10 +54,8 @@ class LiveCapabilities(InternalModel):
 #: Codex, Claude Code and ZCode CLI accept input during the active turn;
 #: DSH delivers at its session's cooperative checkpoint.
 EXISTING_CAPABILITIES = {
-    "codex": LiveCapabilities(inquiry_delivery="realtime"),
-    "claude": LiveCapabilities(inquiry_delivery="realtime"),
-    "zcode": LiveCapabilities(inquiry_delivery="realtime"),
-    "dsh": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
+    name: LiveCapabilities(inquiry_delivery=declaration.inquiry_delivery)
+    for name, declaration in HARNESS_DECLARATIONS.items()
 }
 
 

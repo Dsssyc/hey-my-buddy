@@ -140,8 +140,8 @@ class RefusalFactsTests(NativeRunCase):
                 fact = self.native_facts(result)["configOptions"]
                 self.assertEqual(fact["status"], "unknown")
                 self.assertNotIn("secret", json.dumps(fact))
-                self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
-                                 (("configOptions", 1),))
+                self.assertEqual(result.native_evidence.unconfirmed, ("config-options-readback",))
+                self.assertIsNone(result.native_evidence.unknown_events)
                 self.assertIn("session/new", self.methods)
                 self.assertNotIn("session/set_config_option", self.methods)
                 self.assertNotIn("session/prompt", self.methods)
@@ -286,16 +286,16 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(caught.exception.code, "native-shutdown-failed")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
 
-    def test_unread_shapes_reach_the_shared_outlet_as_unknown_events(self):
+    def test_unread_shapes_reach_the_shared_outlet_as_unconfirmed_readbacks(self):
         self.initialize_value = []
         self.echoes["model"] = {"configOptions": []}
         result = self.run_final()
         self.assert_continued(result)
         evidence = result.native_evidence
-        self.assertEqual(evidence.unknown_events.counts_by_type,
-                         (("initialize", 1), ("modelReadback", 1)))
-        self.assertEqual(evidence.unknown_events.total, 2)
-        self.assertEqual(evidence.unconfirmed, ())
+        # An unread stage readback is an unconfirmed fact of its own kind, never
+        # an unknown event; the stream reported nothing unknown here.
+        self.assertIsNone(evidence.unknown_events)
+        self.assertEqual(evidence.unconfirmed, ("initialize-readback", "model-readback"))
 
     def test_a_turn_with_only_unknown_notifications_carries_their_count(self):
         # The stream's own unknown kinds are part of the final result, not only
@@ -319,20 +319,22 @@ class RefusalFactsTests(NativeRunCase):
         self.assert_continued(result)
         evidence = result.native_evidence
         counts = evidence.unknown_events.counts_by_type
-        self.assertEqual(evidence.unknown_events.total, 66)
+        # The shared bound covers the stream's own unknown kinds alone now; the
+        # unread handshake readback travels as its own unconfirmed fact.
+        self.assertEqual(evidence.unknown_events.total, 65)
         self.assertLessEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
-        self.assertEqual(dict(counts)["initialize"], 1)
+        self.assertEqual(evidence.unconfirmed, ("initialize-readback",))
 
-    def test_unread_configuration_readback_stays_an_unknown_event(self):
+    def test_unread_configuration_readback_is_an_unconfirmed_fact(self):
         self.echoes["model"] = {"configOptions": []}
         result = self.run_final()
         self.assert_continued(result)
         evidence = result.native_evidence
-        self.assertEqual(evidence.unknown_events.counts_by_type, (("modelReadback", 1),))
+        self.assertIsNone(evidence.unknown_events)
         self.assertIsNone(result.buddy.checked.model,
                           "the unread readback confirms nothing")
-        self.assertEqual(evidence.unconfirmed, (),
-                         "a readback that confirmed nothing is not an unconfirmed request fact")
+        self.assertIsNone(result.buddy.session_model)
+        self.assertEqual(evidence.unconfirmed, ("model-readback",))
 
     def test_the_three_role_results_carry_the_shared_native_facts(self):
         from hey_my_buddy.buddy.roles import run_execution
@@ -345,13 +347,15 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         facts = result.native_evidence.to_payload()
         self.assertEqual(facts["unknownEvents"],
-                         {"countsByType": {"initialize": 1, "hey_my_buddy_probe_unknown": 1}, "total": 2})
+                         {"countsByType": {"hey_my_buddy_probe_unknown": 1}, "total": 1})
+        self.assertEqual(facts["unconfirmed"], ["initialize-readback"])
         verdict = {"stopReason": None, "elapsedMs": 1}
         payloads = (run_execution._fast_result(result, request, verdict),
                     run_execution._review_result(result, request, verdict),
                     run_execution._worker_facts(result))
         for payload in payloads:
             self.assertEqual(payload["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
+            self.assertEqual(payload["nativeEvidence"]["unconfirmed"], facts["unconfirmed"])
 
     def test_discovery_keeps_unknown_handshake_fact_without_prompt(self):
         self.initialize_value = []

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .....paths import native_path
 from .....private_dirs import ensure_private_dir
+from ...run_contract import MAX_UNSUPPORTED_METHODS
 
 #: A single stdout line larger than this is a broken-frame fact, not a message.
 MAX_LINE_BYTES = 1024 * 1024
@@ -145,6 +146,9 @@ class AcpConnection:
         self.unmatched_count = 0
         self.permission_decision_count = 0
         self.denied_interaction_count = 0
+        #: The agent request method names this connection answered with the
+        #: unsupported-method refusal, deduplicated in first-seen order.
+        self.unsupported_methods: list[str] = []
         self.notification_counts: dict = {}
         self._observers: list = []
         self.stderr_tail = b""
@@ -188,6 +192,7 @@ class AcpConnection:
             "unclaimedReplyCount": self.unmatched_count,
             "permissionDecisionCount": self.permission_decision_count,
             "deniedInteractionCount": self.denied_interaction_count,
+            "unsupportedMethods": list(self.unsupported_methods),
             "notificationCounts": dict(self.notification_counts),
             "pendingRequestCount": pending,
             "writeFailureCount": self.write_failure_count,
@@ -557,6 +562,12 @@ class AcpConnection:
             self._submit_reply({"jsonrpc": "2.0", "id": request_id, "result": {"outcome": outcome}})
             return
         self.denied_interaction_count += 1
+        # The unsupported-method refusal below is evidence only: no Host answer
+        # exists for this method, so its name is retained deduplicated in
+        # first-seen order beside the count.
+        method_name = method if isinstance(method, str) and 0 < len(method) <= 128 else "unknown"
+        if len(self.unsupported_methods) < MAX_UNSUPPORTED_METHODS and method_name not in self.unsupported_methods:
+            self.unsupported_methods.append(method_name)
         self._record_fact("denied-interaction", {
             "ts": now(), "requestId": bounded_id(request_id),
             "method": brief(str(method), 200),

@@ -92,6 +92,7 @@ from ..run_contract import (
     MAX_SCHEMA_BYTES,
     MAX_VALUE_BYTES,
     NativeEvidence,
+    NativeRequestsFacts,
     ProviderRejectionPackage,
     NativeErrorRecord,
     OptionalFrozenJsonAt,
@@ -112,6 +113,7 @@ from ..run_contract import (
     UsagePackage,
     fold_unknown_events,
     unknown_event_name,
+    unsupported_method_names,
 )
 from .config import (
     CodexUnavailable,
@@ -146,6 +148,15 @@ _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
 _BOUND_NOTIFICATIONS = 128
+#: Native server requests whose refusal is a permission or user-input denial —
+#: the interactive requests whose denied answer triggers attention and blocks
+#: a ``completed`` outcome. Every other reverse request is answered with the
+#: documented unsupported-method refusal as evidence only.
+_APPROVAL_REQUEST_METHODS = frozenset({
+    "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
+    "item/permissions/requestApproval", "execCommandApproval", "applyPatchApproval",
+    "item/tool/requestUserInput", "mcpServer/elicitation/request",
+})
 
 
 def _mode(request: RunRequest) -> str:
@@ -181,6 +192,7 @@ class _RunFacts:
         self.markers = 0
         self.unexplained_markers = 0
         self.denied: list[dict] = []
+        self.unsupported: list[dict] = []
         self.dirty = False
 
     def note_unknown(self, label: object) -> None:
@@ -1473,9 +1485,18 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
                           response={"code": -32601, "denied": True})
             if len(state.capture["deniedRequests"]) < 32:
                 state.capture["deniedRequests"].append(record)
-        facts.denied.append(record)
         connection.send({"id": message["id"], "error": {"code": -32601, "message": _REFUSAL_MESSAGE}})
-        facts.dirty = True
+        if isinstance(method, str) and method in _APPROVAL_REQUEST_METHODS:
+            # A permission, approval or user-input interaction request: the
+            # refusal is the attention fact that blocks a completed outcome.
+            facts.denied.append(record)
+            facts.dirty = True
+        else:
+            # Any other reverse request — an unknown method, an undeclared
+            # tool call, a credential refresh: no Host answer exists for it,
+            # so the documented unsupported-method refusal is evidence only
+            # and never becomes attention.
+            facts.unsupported.append(record)
 
     connection.on_request = on_request
 
@@ -1935,27 +1956,36 @@ def _collect_provider_rejection(state: _RunState, *, stream_truncated: bool) -> 
             state.provider_rejection["message"] = error_record["error"].get("message")
 
 
-def _checked_buddy(request: RunRequest, state: _RunState, mode: str) -> ResultBuddy:
+def _checked_buddy(request: RunRequest, state: _RunState) -> ResultBuddy:
+    """One checked-buddy rule for every carrier, on each value's own basis.
+
+    The provider is always the native thread receipt's readback. The model is
+    the real readback when the carrier produced one, and only without one does
+    the on-the-spot catalog's listing stand in for it. The effort has no native
+    readback at all, so it is proven only by the catalog — and only while the
+    model the turn actually ran is the selected one.
+    """
     checked = CheckedBuddy()
     if state.configured:
-        catalog_model = CheckedValue(value=request.buddy.model)
-        catalog_effort = CheckedValue(value=request.buddy.effort)
-        if mode == "worker":
-            checked = CheckedBuddy(
-                provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
-                model=catalog_model if state.selected_model_listed is True else None,
-                effort=catalog_effort if state.selected_model_listed is True else None)
-        else:
-            checked = CheckedBuddy(
-                provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
-                model=CheckedValue(value=state.native_model) if state.native_model else None,
-                effort=catalog_effort if state.selected_model_listed is True
-                and state.native_model == request.buddy.model else None)
+        model = None
+        if state.native_model:
+            model = CheckedValue(value=state.native_model, basis="native-readback")
+        elif state.selected_model_listed is True:
+            model = CheckedValue(value=request.buddy.model, basis="catalog-validated")
+        effort = None
+        if state.selected_model_listed is True and (state.native_model is None
+                                                    or state.native_model == request.buddy.model):
+            effort = CheckedValue(value=request.buddy.effort, basis="catalog-validated")
+        checked = CheckedBuddy(
+            provider=CheckedValue(value=state.native_provider, basis="native-readback")
+            if isinstance(state.native_provider, str) else None,
+            model=model, effort=effort)
     return ResultBuddy(
         requested=RunBuddy(provider=request.buddy.provider,
-                                   model=request.buddy.model,
-                                   effort=request.buddy.effort),
-        checked=checked)
+                           model=request.buddy.model,
+                           effort=request.buddy.effort),
+        checked=checked,
+        session_model=state.native_model or None)
 
 
 def _effective_policy(state: _RunState, mode: str) -> EffectivePolicy:
@@ -2017,6 +2047,12 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
     if facts.denied:
         retain("denied-interactions", invocation_root / "denied-interactions.json",
                {"records": facts.denied})
+    if facts.unsupported:
+        # Refused reverse requests no Host answer exists for keep their full
+        # records as their own private evidence; the count and the deduplicated
+        # method names travel as the result's typed native-request facts.
+        retain("unsupported-native-requests", invocation_root / "unsupported-native-requests.json",
+               {"records": facts.unsupported})
     if state.capture is not None:
         retain("review-captured-events", invocation_root / "review-captured-events.json", state.capture)
     if state.selected_model_listed is False:
@@ -2113,12 +2149,16 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                         and not state.stream_truncated) else None),
         native_request_sent=state.native_request_sent,
         native_admission_error=_native_error_package(state.native_admission_error),
-        buddy=_checked_buddy(request, state, mode),
+        buddy=_checked_buddy(request, state),
         native_identity=native_identity,
         native_evidence=NativeEvidence(
             unknown_events={"countsByType": facts.unknown_counts, "total": sum(facts.unknown_counts.values())}
             if facts.unknown_counts else None,
             unconfirmed=unconfirmed),
+        native_requests=NativeRequestsFacts(
+            permission_denials=len(facts.denied),
+            unsupported_requests=len(facts.unsupported),
+            unsupported_methods=unsupported_method_names(facts.unsupported)),
         value=value, completion_evidence=completion,
         tool_evidence=_tool_evidence_package(tool_package),
         effective_policy=_effective_policy(state, mode),

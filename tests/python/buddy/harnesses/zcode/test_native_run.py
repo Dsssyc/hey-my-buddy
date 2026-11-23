@@ -816,7 +816,10 @@ class WorkerSeamTests(MockNativeCase):
     def test_unrecognized_resume_mode_is_a_fact_and_the_turn_can_complete(self):
         _first, second, _calls, _readbacks = self.resume_with_levels("read", "write", case="mode-unrecognized")
         self.assertEqual(second.end.status, "ok", second.end.message)
-        self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)["permission-mode-readback-unconfirmed"], 1)
+        # The unread mode readback is the closed unconfirmed fact, never an
+        # unknown event, and the turn still completes.
+        self.assertEqual(second.native_evidence.unconfirmed, ("permission-mode-readback",))
+        self.assertIsNone(second.native_evidence.unknown_events)
         self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
 
     def test_resume_mode_readback_from_another_session_is_refused(self):

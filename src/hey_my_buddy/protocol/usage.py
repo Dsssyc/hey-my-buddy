@@ -273,6 +273,35 @@ def classify_provider_rejection_code(native_code: str) -> str:
     return "unknown"
 
 
+def classify_claude_rate_limit_event(rate_limit_type: str | None) -> str:
+    """Classify one Claude ``rate_limit_event(status="rejected")`` observation.
+
+    A rate-limit identity the shared code classifies as transient rate limiting
+    is exactly that; every other identity — the subscription quota windows
+    (``five_hour``/``seven_day``/``overage``) or an unreadable identity
+    sanitized to ``unknown`` — means the account's quota budget is exhausted.
+    """
+    if rate_limit_type is not None and classify_provider_rejection_code(rate_limit_type) == "rate-limited":
+        return "rate-limited"
+    return "quota-exceeded"
+
+
+def classify_claude_result_rejection(result: dict) -> tuple[str, str] | None:
+    """Classify one Claude final result's structured provider rejection.
+
+    A result subtype naming a quota or usage limit is a quota exhaustion and
+    keeps its own identifier as the native code. A bare HTTP 429 without any
+    quota event or subtype is transient rate limiting (``http_429``), never an
+    exhausted budget. Anything else is not a structured provider rejection.
+    """
+    subtype = result.get("subtype")
+    if isinstance(subtype, str) and any(marker in subtype.lower() for marker in ("quota", "usage_limit")):
+        return ("quota-exceeded", identifier(subtype) or "unknown")
+    if result.get("api_error_status") in (429, "429"):
+        return ("rate-limited", "http_429")
+    return None
+
+
 def normalize_provider_rejection(value: Any) -> dict | None:
     """One native provider rejection, keeping its structured native code.
 
@@ -394,6 +423,8 @@ __all__ = [
     "MAX_REJECTION_MESSAGE_BYTES",
     "PROVIDER_REJECTION_CODES",
     "TOKEN_USAGE_VERSION",
+    "classify_claude_rate_limit_event",
+    "classify_claude_result_rejection",
     "classify_provider_rejection_code",
     "identifier",
     "normalize_last_assistant_message",

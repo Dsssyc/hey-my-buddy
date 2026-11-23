@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ....protocol.capabilities import adapter_capabilities
+from ....protocol.harness_declarations import harness_declaration
 from . import native_run
 from .config import CodexUnavailable, cli_command
 
@@ -12,13 +13,14 @@ class CodexAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "codex"
-    native_resume = True
-    interrupted_resume = True
-    native_resume_permission_change = True
-    # A correction is a new turn on the same thread, so the model keeps the
-    # root context and the correction input carries only the error locations.
-    same_session_corrections = True
-    model_discovery = True
+    # The shared static facts are read from the one protocol declaration, so
+    # this description carries no second copy that can drift.
+    declaration = harness_declaration(name)
+    native_resume = declaration.native_resume
+    interrupted_resume = declaration.interrupted_resume
+    native_resume_permission_change = declaration.native_resume_permission_change
+    same_session_corrections = declaration.same_session_corrections
+    model_discovery = declaration.model_discovery
 
     @property
     def capabilities(self):

@@ -226,6 +226,11 @@ def run_turn(case):
     if case == "unknown-response":
         send({"type": "control_response", "response": {"subtype": "success", "request_id": "hey-my-buddy-999", "response": {}}})
         return
+    if case == "unsupported-request":
+        send({"type": "control_request", "request_id": "future-1",
+              "request": {"subtype": "future_callback"}})
+        reply = json.loads(sys.stdin.readline())["response"]
+        assert reply["request_id"] == "future-1" and reply["subtype"] == "error"
     if case in ("permission", "permission-command", "permission-path", "permission-long-command"):
         tool, inputs = {
             "permission": ("WebFetch", {"url": "https://example.com"}),
@@ -242,7 +247,7 @@ def run_turn(case):
                                          "behavior": (response.get("response") or {}).get("behavior")}})
         if (response.get("response") or {}).get("behavior") != "deny":
             raise RuntimeError("the controller unexpectedly approved the native tool request")
-    if case in ("hang", "quota-rejected", "quota-bad-type", "quota-free-text-type", "warning-then-rejected",
+    if case in ("hang", "quota-rejected", "rate-limited", "quota-bad-type", "quota-free-text-type", "warning-then-rejected",
                 "interrupt-quota"):
         if case == "warning-then-rejected":
             send({"type": "rate_limit_event", "rate_limit_info": {
@@ -250,6 +255,9 @@ def run_turn(case):
         if case in ("quota-rejected", "warning-then-rejected"):
             send({"type": "rate_limit_event", "rate_limit_info": {
                 "status": "rejected", "rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"}})
+        if case == "rate-limited":
+            send({"type": "rate_limit_event", "rate_limit_info": {
+                "status": "rejected", "rateLimitType": "rate_limit_reached"}})
         if case == "quota-bad-type":
             send({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
         if case == "quota-free-text-type":
@@ -269,6 +277,8 @@ def run_turn(case):
     if case == "permission-mode-missing":
         del init["permissionMode"]
     send(init)
+    if case == "unknown-event":
+        send({"type": "future_event", "session_id": session_id})
     if case in ("overload-before", "overload-during"):
         if case == "overload-during":
             send({"type": "assistant", "session_id": session_id, "message": {
