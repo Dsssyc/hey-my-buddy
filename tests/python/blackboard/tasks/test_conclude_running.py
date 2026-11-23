@@ -133,17 +133,19 @@ class RunningConclusionTests(WorkflowTestCase):
         board = self.board()
         run_id = self.submit(board)["runId"]
         claim = self.claim(board)
+        clock = Clock()
         waited = []
 
         def stop(params):
             waited.append(params)
+            clock.advance(0.1)
             current = self.get(board, run_id)
             self.assertEqual(current["state"], "cancelled")
             self.assertIsNone(current["hostConclusion"])
             self.finish_turn(board, claim, runner_status="cancelled", seal=False)
 
         answer = conclude_run({"runId": run_id, "note": "Finish this work", "waitSeconds": 1},
-                              self.directory, service=self.cli_service(board, stop))
+                              self.directory, service=self.cli_service(board, stop), clock=clock)
         self.assertEqual(answer["state"], "concluded")
         self.assertEqual(len(waited), 1)
         self.assertNotIn("reminderWaitId", waited[0])
@@ -180,18 +182,20 @@ class RunningConclusionTests(WorkflowTestCase):
             connection.execute("UPDATE model_services SET concurrency_limit=4")
         child_claim = self.claim(board, claim_request_id="child", run_id=child["runId"])
         self.assertIsNotNone(child_claim["claim"])
+        clock = Clock()
         stops = [(lead["runId"], {"claim": lead_claim}), (child["runId"], child_claim)]
 
         def stop(params):
             self.assertEqual(params["runId"], lead["runId"])
             self.assertIsNone(self.get(board, lead["runId"])["hostConclusion"])
             self.assertIsNone(self.get(board, child["runId"])["hostConclusion"])
+            clock.advance(0.1)
             run_id, claim = stops.pop(0)
             self.assertEqual(self.get(board, run_id)["state"], "cancelled")
             self.finish_turn(board, claim, runner_status="cancelled", seal=False)
 
         answer = conclude_run({"runId": lead["runId"], "note": "End the entire Lead tree", "waitSeconds": 1},
-                              self.directory, service=self.cli_service(board, stop))
+                              self.directory, service=self.cli_service(board, stop), clock=clock)
         self.assertEqual(answer["state"], "concluded")
         self.assertEqual(stops, [])
         self.assertEqual(self.get(board, child["runId"])["state"], "concluded")
