@@ -17,7 +17,7 @@ from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
-from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination
+from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination, validate_claim_turn
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity
@@ -96,6 +96,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def claim_maintenance(self, task_id):
         claimed = admit_board(self.board_, {"nonce": NONCE, "taskId": task_id})
         self.assertIsNotNone(claimed["claim"], claimed)
+        validate_claim_turn(claimed["claim"])
         return claimed["claim"]
 
     def packet(self, claim):

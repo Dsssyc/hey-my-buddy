@@ -21,6 +21,7 @@ from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.catalog import buddy_state
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.buddy.runtime.execution import validate_claim_turn
 from hey_my_buddy.json_codec import canonical_json
 
 A = "dsh:fixture:alpha:max"
@@ -71,7 +72,10 @@ class RouterDispatchTestCase(BoardTestCase):
         return self.board_.call("selection_get", {"decisionId": decision_id})["decision"]
 
     def claim(self, suffix="1", *, task_id=None):
-        return admit_execution(self.client, NONCE + suffix, task_id=task_id)
+        claimed = admit_execution(self.client, NONCE + suffix, task_id=task_id)
+        if claimed.get("claim") is not None:
+            validate_claim_turn(claimed["claim"])
+        return claimed
 
     def snapshot_of(self, decision_id):
         with self.board_.store.db.read() as db:

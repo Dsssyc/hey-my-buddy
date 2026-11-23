@@ -266,9 +266,19 @@ def validate_claim_turn(claim: dict) -> None:
                 or not decision["buddy"]["harness"]):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
         if task["spec"].get("decision", {}).get("kind") == "maintain":
+            snapshot = decision.get("snapshot")
+            reference = snapshot.get("reference") if isinstance(snapshot, dict) else None
+            request = decision.get("request")
             if (decision.get("kind") != "maintain" or decision["routingMode"] != "fast"
                     or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
-                    or not isinstance(decision.get("input"), dict)):
+                    or not isinstance(snapshot, dict)
+                    or snapshot.get("namespace") != "maintenance"
+                    or snapshot.get("owner") != decision["maintenanceRunId"]
+                    or not isinstance(reference, dict)
+                    or not isinstance(reference.get("sha256"), str) or not reference["sha256"]
+                    or not isinstance(request, dict)
+                    or request.get("maintenanceRunId") != decision["maintenanceRunId"]
+                    or not isinstance(decision.get("outputSchema"), dict)):
                 raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
         elif task["spec"].get("decision", {}).get("kind") == "profile":
             if (decision.get("kind") != "profile" or decision["routingMode"] != "profile"

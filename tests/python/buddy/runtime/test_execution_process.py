@@ -921,9 +921,21 @@ class ExecutionEndpointTests(unittest.TestCase):
                 "decision": {"decisionId": "maint-1", "kind": "maintain"}}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
         document = {"kind": "maintain", "maintenanceRunId": "maint-1", "routingMode": "fast",
-                    "buddy": {"harness": "dsh"}, "input": {"sha256": "a" * 64}}
+                    "buddy": {"harness": "dsh"},
+                    "snapshot": {"namespace": "maintenance", "owner": "maint-1", "reference": {"sha256": "a" * 64}},
+                    "request": {"maintenanceRunId": "maint-1"},
+                    "outputSchema": {"type": "object"}}
         validate_claim_turn({**base, "decisionInput": document})
-        for change in ({"maintenanceRunId": "wrong"}, {"routingMode": "review"}, {"input": None}):
+        for change in (
+            {"maintenanceRunId": "wrong"},
+            {"routingMode": "review"},
+            {"snapshot": None},
+            {"snapshot": {"namespace": "routing", "owner": "maint-1", "reference": {"sha256": "a" * 64}}},
+            {"snapshot": {"namespace": "maintenance", "owner": "other", "reference": {"sha256": "a" * 64}}},
+            {"snapshot": {"namespace": "maintenance", "owner": "maint-1", "reference": {"sha256": ""}}},
+            {"request": {"maintenanceRunId": "other"}},
+            {"outputSchema": None},
+        ):
             with self.subTest(change=change), self.assertRaises(BoardError):
                 validate_claim_turn({**base, "decisionInput": {**document, **change}})
 

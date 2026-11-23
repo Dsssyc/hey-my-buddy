@@ -10,6 +10,7 @@ from support import BoardTestCase, FakeClock, seed_buddy
 
 from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.runtime.execution import validate_claim_turn
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import profile as files
@@ -48,6 +49,7 @@ class ProfileExecutionTests(BoardTestCase):
     def claim(self, started):
         admitted = admit_board(self.board_, {"nonce": NONCE, "taskId": started["runId"]})
         self.assertIsNotNone(admitted["claim"], admitted)
+        validate_claim_turn(admitted["claim"])
         return admitted["claim"]
 
     def packet(self, claim):
