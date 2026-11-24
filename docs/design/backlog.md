@@ -41,8 +41,6 @@
 
 **黑板进程在系统工具里仍显示为 Python。** 开发者希望能辨认为 `hey-my-buddy`，源码尚未设置进程标题。macOS 上仅改启动参数或解释器链接名不能改变内核进程名，Linux 与 Windows 的做法也尚未核实。实现前先评估跨平台的进程命名库或启动方式，并守住存储回收与检查运行器所需的命令行目录参数。
 
-**一项真实守护进程的等待测试偶尔失败。** 2026-10-18 在批次二上跑完整检查（`--jobs 2`，同时另一个会话在跑浏览器检查）时，`tests/python/protocol/test_rpc_config.py` 的 `test_admitted_waits_do_not_starve_control_or_command_completion` 以 admitted 0 != 6 失败；单独重跑两次都通过。原因没有复现，再出现时在负载下复现再定。
-
 **满负载下的个别测试失败还缺稳定复现。** 2026-11-02 的完整检查中，`apps/console/src/buddies/english.test.tsx` 曾超时，`test_discovery_stop_timing.py` 的停止确认与非零退出投影也曾失败，单独重跑均通过。相关测试仍在；后续发生时应保存负载、进程与原生证据，在相同条件下复现再定原因，不能把一次重跑通过当作解决。
 
 **日常服务能读哪些文件夹，可能跟着启动它的 app 走。**（2026-11-02，推断，没有验证） macOS 按 app 分别授权受保护的文件夹：Host 实测，运行它的 Claude app 里的进程能列出 `~/Desktop` 与 `~/Downloads`，列 `~/Documents` 得到 `Operation not permitted`；0.59.0 第一次安装时，升级就是在 `~/Documents` 下一个 Codex app 会话建的仓库上读不了。日常服务由安装进程重启，大概继承同样的限制，于是另一个 Host app 有权限的文件夹，服务未必读得了；按 ADR-002 2026-11-02 那一段，这种情形会失败并点名位置，不会被当成仓库不在。要核对：服务进程实际的权限从哪里来，用户换着用几个 Host app 时会不会撞到。
