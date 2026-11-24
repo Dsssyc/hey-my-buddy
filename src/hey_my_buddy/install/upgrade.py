@@ -102,23 +102,47 @@ def preflight(state: Path, *, contract_changed: bool) -> dict:
     return {'schema': SCHEMA_VERSION}
 
 
+RETIRED_LAUNCH_KEYS = {'HMB_WAIT_CAPACITY': (1, 1024)}
+
+
+def _read_upgrade_launch_defaults(state: Path) -> dict[str, str]:
+    """Read persisted launch settings during upgrade, tolerating retired pre-0.77 keys."""
+    from .launcher import LAUNCH_KEYS, read_private
+    value = read_private(state / 'launch-settings.json') or {}
+    settings = value.get('environment', {})
+    allowed = {**LAUNCH_KEYS, **RETIRED_LAUNCH_KEYS}
+    if not isinstance(settings, dict) or set(settings) - allowed.keys():
+        raise BoardError('LAUNCH_SETTINGS_INVALID', 'Unknown persisted launch setting')
+    result = {}
+    for key, raw in settings.items():
+        lower, upper = allowed[key]
+        if not isinstance(raw, str) or not raw.isdecimal() or not lower <= int(raw) <= upper:
+            raise BoardError('LAUNCH_SETTINGS_INVALID', 'Invalid persisted launch setting', field=key)
+        result[key] = raw
+    return result
+
+
 def _environment(state: Path, target: Path) -> dict:
-    from .launcher import service_environment
+    from .launcher import LAUNCH_KEYS, service_environment
     # A service started by the upgrade coordinator inherits only the explicit
     # service allowlist; the journal carries forward the operator's launch settings.
     env = service_environment()
-    for key in ('HMB_DEV_SOURCE',):
+    for key in ('HMB_DEV_SOURCE', *RETIRED_LAUNCH_KEYS):
         env.pop(key, None)
     marker = state / 'upgrade.json'
     if marker.exists():
-        preserved = _read_json(marker).get('environment', {})
-        for key in ('HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY'):
+        journal = _read_json(marker)
+        for_previous = str(target) == journal.get('previous')
+        preserved = (journal.get('previousEnvironment', journal.get('environment', {}))
+                     if for_previous else journal.get('environment', {}))
+        keys = (*LAUNCH_KEYS, *RETIRED_LAUNCH_KEYS) if for_previous else tuple(LAUNCH_KEYS)
+        for key in keys:
             if key in preserved:
                 env[key] = str(preserved[key])
     else:
-        from .launcher import launch_defaults
-        for key, value in launch_defaults(state).items():
-            env.setdefault(key, value)
+        for key, value in _read_upgrade_launch_defaults(state).items():
+            if key in LAUNCH_KEYS:
+                env.setdefault(key, value)
     env.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(target.parent),
                HMB_RUNTIME=str(target), HMB_RUNTIME_IDENTITY='runtime:' + target.name)
     return env
@@ -515,12 +539,17 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
     health_before = probe(state, previous)
     if health_before is None or health_before.get('serviceId') != endpoint.get('serviceId') or health_before.get('pid') != endpoint.get('pid'):
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
-    preserved = {'HMB_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'HMB_WAIT_CAPACITY':str(health_before['waitCapacity'])}
-    runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
+    target_env = {'HMB_MAX_CONCURRENT': str(health_before['maxConcurrent'])}
+    previous_env = dict(target_env)
+    previous_settings = {'maxConcurrent': health_before['maxConcurrent']}
+    if health_before.get('waitCapacity') is not None:
+        previous_env['HMB_WAIT_CAPACITY'] = str(health_before['waitCapacity'])
+        previous_settings['waitCapacity'] = health_before['waitCapacity']
+    target_settings = {'maxConcurrent': health_before['maxConcurrent']}
     contract_version = endpoint['contractVersion']
     contract_changed = contract_version != CONTRACT_VERSION
     before = preflight(state, contract_changed=contract_changed)
-    before['runtimeSettings'] = runtime_settings
+    before['runtimeSettings'] = previous_settings
     with ExitStack() as preparation:
         # Keep the old daemon serving work, excluding its storage reclaimer while
         # preparing the runtime, before taking the short service ownership fence.
@@ -553,7 +582,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 write_runtime_hint(skill_stage, target)
                 skill_paths = skill_target, skill_stage, skill_previous
             journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
-                       'contractChanged': contract_changed, 'before':before, 'environment':preserved}
+                       'contractChanged': contract_changed, 'before': before,
+                       'environment': target_env, 'previousEnvironment': previous_env}
             if skill_stage is not None:
                 from .skill_install import _link_facts
                 journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
@@ -570,16 +600,16 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
                     if contract_changed:
                         before = idle_snapshot(state)
-                        before['runtimeSettings'] = runtime_settings
+                        before['runtimeSettings'] = previous_settings
                         journal['before'] = before
                         _checkpoint_stopped_wal(state)
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
-                    expected = before
+                    expected = {**before, 'runtimeSettings': target_settings}
                     if contract_changed and before['schema'] < SCHEMA_VERSION:
                         migration = upgrade_state(state)
-                        expected = {**idle_snapshot(state), 'runtimeSettings': runtime_settings}
+                        expected = {**idle_snapshot(state), 'runtimeSettings': target_settings}
                         journal['schemaUpgrade'] = migration
                     journal.update(phase='prepared', expected=expected)
                     write_journal(marker, journal)
@@ -593,7 +623,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 write_journal(marker, journal)
                 _publish_skill(journal, skill_paths)
                 write_journal(marker, journal)
-                write_active_runtime(state, target, preserved)
+                write_active_runtime(state, target, target_env)
                 journal.update(phase='verified', verification=evidence)
                 write_journal(marker, journal)
             except Exception as failure:
@@ -603,7 +633,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     if active == previous and not detached:
                         surviving = probe(state, previous)
                         if surviving is not None:
-                            write_active_runtime(state, previous, preserved)
+                            write_active_runtime(state, previous, previous_env)
                             journal.update(phase='not-switched', failure=reason)
                             write_journal(state / 'upgrade-last.json', journal)
                             clear_journal(marker)
@@ -624,7 +654,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     recovered = start(state, previous)
                     evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed)
                                 if backed_up is not None or not contract_changed else {'runtimeContentId':previous.name, 'workPreserved':True})
-                    write_active_runtime(state, previous, preserved)
+                    write_active_runtime(state, previous, previous_env)
                     journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                     write_journal(state / 'upgrade-last.json', journal)
                     clear_journal(marker)
@@ -707,7 +737,7 @@ def recover(state: Path, root: Path) -> dict:
             evidence = verify_started(state, previous, previous_health, journal['before'], contract_changed=False)
         else:
             evidence = {'runtimeContentId':previous.name,'workPreserved':True}
-        write_active_runtime(state, previous, journal.get('environment'))
+        write_active_runtime(state, previous, journal.get('previousEnvironment', journal.get('environment')))
         _restore_skill(journal, skill_paths)
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':evidence}
@@ -733,7 +763,7 @@ def recover(state: Path, root: Path) -> dict:
             before = journal['before']
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before, contract_changed=contract_changed)
-    write_active_runtime(state, previous, journal.get('environment'))
+    write_active_runtime(state, previous, journal.get('previousEnvironment', journal.get('environment')))
     _restore_skill(journal, skill_paths)
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)

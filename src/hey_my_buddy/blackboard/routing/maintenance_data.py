@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import json
-from ...json_codec import decode_strict_json
+from ...json_codec import canonical_json, decode_strict_json
 
 from ...protocol.structured_schema import schema_issues
 from ...protocol.task_types import TASK_TYPES
-from ...protocol.snapshot_query import kind_id, maintenance_coverage
+from ...protocol.snapshot_query import MAINTENANCE_SECTIONS, MaintenanceCoverage, kind_id
 from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
 from .evidence import kind_domain_statistics
@@ -16,8 +16,9 @@ from .statistics import NEITHER, NON_ABILITY_PROVIDER_REJECTIONS, accumulate_cel
 
 
 
-MAX_MICRO_TASKS = 50
-MAX_SUMMARY_KINDS = 6
+MICRO_TASKS_MAX_BYTES = 128 * 1024
+MAX_MICRO_TASKS = 16
+MAX_SUMMARY_KINDS = 3
 MAX_SUMMARY_TEXT_BYTES = 4096
 MAX_SUMMARY_CITATIONS = 32
 
@@ -103,7 +104,7 @@ def _comparison_statistics(statistics, summary_kinds, comparison_kinds):
 
 
 def build_packet(connection) -> dict | None:
-    """The oldest 50 tasks still needing classification or a kind's reading."""
+    """Take an ordered prefix of pending tasks without truncating any task."""
     runs = list(connection.execute(
         "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,r.buddy_revision,"
         " t.spec_json,t.accepted_at,t.acceptance_note,r.macro_task_id,c.note AS conclusion_note,"
@@ -117,15 +118,11 @@ def build_packet(connection) -> dict | None:
         " LEFT JOIN micro_task_classifications x ON x.run_id=r.run_id"
         " WHERE " + PENDING_WHERE +
         " ORDER BY COALESCE(t.accepted_at,c.created_at),r.run_id LIMIT ?", (MAX_MICRO_TASKS,)))
-    classification_ids = [row["run_id"] for row in runs if row["domain_node_id"] is None]
     if not runs:
         return None
     run_ids = [row["run_id"] for row in runs]
     placeholders = ",".join("?" for _ in run_ids)
     turns = defaultdict(list)
-    kinds = {}
-    unread = defaultdict(set)
-    participating = defaultdict(set)
     read = {(_kind(row), row["run_id"]) for row in connection.execute(
         f"SELECT harness,model_id,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", run_ids)}
     for row in connection.execute(
@@ -138,12 +135,6 @@ def build_packet(connection) -> dict | None:
                 if buddy is not None and row["model_id"] is not None else None)
         receipt = json.loads(row["result_json"]) if row["result_json"] else None
         category = round_classification(receipt) if row["state"] in _ENDED_TURNS else None
-        if kind is not None and category == "ability":
-            participating[_kind(kind)].add(row["run_id"])
-            key = _kind(kind)
-            if (key, row["run_id"]) not in read and (key in kinds or len(kinds) < MAX_SUMMARY_KINDS):
-                kinds[key] = kind
-                unread[key].add(row["run_id"])
         result = (receipt or {}).get("result") or {}
         turns[row["run_id"]].append({
             "turnIndex": row["turn_index"], "state": row["state"], "kind": kind,
@@ -179,11 +170,12 @@ def build_packet(connection) -> dict | None:
     projects = {identifier: macro_project(connection, identifier)
                 for identifier in {row["macro_task_id"] for row in runs if row["macro_task_id"] is not None}}
     micro_tasks = []
+    micro_task_bytes = 2  # JSON array brackets
     for row in runs:
         spec = json.loads(row["spec_json"])
         project = (projects[row["macro_task_id"]] if row["macro_task_id"] is not None
                    else {"id": None, "path": spec["cwd"]})
-        micro_tasks.append({
+        task = {
             "runId": row["run_id"], "title": row["title"], "task": spec.get("task"),
             "project": {"id": project["id"], "path": project["path"]},
             "classification": ({"domainNodeId": row["domain_node_id"], "taskType": row["task_type"]}
@@ -201,7 +193,29 @@ def build_packet(connection) -> dict | None:
                        "createdAt": row["created_at"],
                        "finishedAt": row["accepted_at"] or row["concluded_at"],
                        "turns": turns[row["run_id"]]},
-        })
+        }
+        comma_bytes = 1 if micro_tasks else 0
+        next_size = micro_task_bytes + comma_bytes + len(canonical_json(task).encode("utf-8"))
+        if micro_tasks and next_size > MICRO_TASKS_MAX_BYTES:
+            break
+        micro_tasks.append(task)
+        micro_task_bytes = next_size
+        if micro_task_bytes >= MICRO_TASKS_MAX_BYTES:
+            break
+    kinds = {}
+    unread = defaultdict(dict)
+    participating = defaultdict(dict)
+    for task in micro_tasks:
+        run_id = task["runId"]
+        for turn in task["result"]["turns"]:
+            kind = turn["kind"]
+            if kind is None or turn["failureCategory"] != "ability":
+                continue
+            key = _kind(kind)
+            participating[key][run_id] = None
+            if (key, run_id) not in read and (key in kinds or len(kinds) < MAX_SUMMARY_KINDS):
+                kinds[key] = kind
+                unread[key][run_id] = None
     summaries = {}
     for row in connection.execute("SELECT harness,model_id,effort,text FROM kind_summaries"):
         key = _kind(row)
@@ -220,12 +234,12 @@ def build_packet(connection) -> dict | None:
     statistics = kind_domain_statistics(connection, comparison_kinds + list(kinds.values()))
     return {
         "microTasks": micro_tasks,
-        "classificationRunIds": classification_ids,
+        "classificationRunIds": [task["runId"] for task in micro_tasks if task["classification"] is None],
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
         "comparisonStatistics": _comparison_statistics(statistics, kinds, comparison_kinds),
-        "kinds": [{**kind, "kindId": kind_id(kind), "unreadRunIds": sorted(unread[key]),
-                   "citationRunIds": sorted(participating[key]), "summary": summaries.get(key),
+        "kinds": [{**kind, "kindId": kind_id(kind), "unreadRunIds": list(unread[key]),
+                   "citationRunIds": list(participating[key]), "summary": summaries.get(key),
                    "statistics": statistics[key]}
                   for key, kind in kinds.items()],
     }
@@ -460,31 +474,11 @@ def _tree_edit(batch, field, identifier, item, staged, errors):
         staged.append([field, identifier, item])
 
 
-def _stage_targets(items, field, key, allowed, remaining, prior, problem, errors):
-    staged = {}
-    for identifier, item in _unique(items, field, key, errors).items():
-        if identifier not in allowed:
-            errors.append(f"{field}[{identifier}]: unknown {key}")
-        elif identifier in remaining:
-            issue = problem(item)
-            if issue:
-                errors.append(f"{field}[{identifier}]: {issue}")
-            elif identifier in prior and prior[identifier] != item:
-                errors.append(f"{field}[{identifier}]: conflicts with staged entry")
-            else:
-                staged[identifier] = item
-    return staged
-
-
-def stage_answer(connection, *, packet, answer, previous):
-    """Validate one round against live rows and its attempt's earlier staging."""
-    batch = _Batch(connection, packet)
-    errors = []
-    items = _items(answer, errors)
+def _checked_tree(batch, items, previous, errors):
     tree = []
-    for field, identifier, item in previous["tree"]:
+    for field, identifier, item in previous:
         _tree_edit(batch, field, identifier, item, tree, errors)
-    existing = {(field, identifier): item for field, identifier, item in tree}
+    existing = {(field, identifier): item for field, identifier, item in previous}
     for field, key in (("newNodes", "id"), ("merges", "sourceId")):
         pending = _unique(items[field], field, key, errors)
         while pending:
@@ -500,48 +494,92 @@ def stage_answer(connection, *, packet, answer, previous):
                     _tree_edit(batch, field, identifier, item, tree, errors)
                 elif earlier != item:
                     errors.append(f"{field}[{identifier}]: conflicts with staged entry")
-    staged = {"tree": tree}
-    missing = []
-    for field, key, allowed, remaining, problem in (
-        ("classifications", "runId", batch.classifications, batch.unclassified, batch.classification_problem),
-        ("summaries", "kindId", batch.kinds, {key for key, ids in batch.unread.items() if ids}, batch.summary_problem),
+    return tree
+
+
+def _check_answer(batch, answer, previous, coverage, *, final=False):
+    errors = []
+    items = _items(answer, errors)
+    tree = _checked_tree(batch, items, previous["tree"], errors)
+    checked = {"tree": tree}
+    missing_reads = defaultdict(dict)
+    for field, key, allowed, targets, problem, sections, read_ids in (
+        ("classifications", "runId", batch.classifications, batch.unclassified,
+         batch.classification_problem, ("task",), lambda run_id: [run_id]),
+        ("summaries", "kindId", batch.kinds, {key for key, ids in batch.unread.items() if ids},
+         batch.summary_problem, MAINTENANCE_SECTIONS, batch.unread.__getitem__),
     ):
-        prior = {}
-        for identifier, item in previous[field].items():
-            if identifier in remaining and problem(item) is None:
-                prior[identifier] = item
-        staged[field] = {**prior, **_stage_targets(items[field], field, key, allowed, remaining, prior, problem, errors)}
-        missing.extend(_missing(field, key, remaining - staged[field].keys()))
-    return staged, {"errors": errors + missing, "missing": missing, "staged": {
-        "newNodes": [identifier for field, identifier, _ in tree if field == "newNodes"],
-        "merges": [identifier for field, identifier, _ in tree if field == "merges"],
+        prior = previous[field]
+        # Known targets already settled or deleted have no remaining answer obligation.
+        active = [item for item in items[field] if item[key] in targets or item[key] not in allowed]
+        submitted = _unique(active, field, key, errors)
+        for identifier in submitted:
+            if identifier in allowed:
+                continue
+            errors.append(f"{field}[{identifier}]: unknown {key}")
+        accepted = {}
+        for identifier in sorted(targets):
+            earlier = prior.get(identifier)
+            proposed = submitted.get(identifier)
+            label = f"{field}[{identifier}]"
+            if earlier is not None and not final and problem(earlier) is not None:
+                if proposed is None:
+                    errors.append(f"{label}: {problem(earlier)}")
+                    continue
+                earlier = None
+            if earlier is not None and proposed is not None and earlier != proposed:
+                errors.append(f"{label}: conflicts with staged entry")
+            item = earlier if earlier is not None else proposed
+            if item is None:
+                errors.append(f"{label}: missing {key}")
+                continue
+            issue = problem(item)
+            if issue:
+                errors.append(f"{label}: {issue}")
+                continue
+            if earlier is not None and not final:
+                accepted[identifier] = earlier
+                continue
+            gaps = list(coverage.gaps(read_ids(identifier), sections))
+            if gaps:
+                if final:
+                    requirement = ("the complete task section" if field == "classifications"
+                                   else "all five sections of every unread micro task in this batch")
+                    errors.append(f"{label}: read {requirement}")
+                else:
+                    for run_id, section, cursor in gaps:
+                        missing_reads[run_id][section] = cursor
+            else:
+                accepted[identifier] = item
+        checked[field] = accepted
+    reads = [{"runId": run_id, "sections": [
+        {"section": section, "cursor": missing_reads[run_id][section]}
+        for section in MAINTENANCE_SECTIONS if section in missing_reads[run_id]
+    ]} for run_id in sorted(missing_reads)]
+    return checked, errors, reads
+
+
+def stage_answer(connection, *, packet, answer, previous, issued_events):
+    """Stage only valid entries whose required pages have already been issued."""
+    batch = _Batch(connection, packet)
+    coverage = MaintenanceCoverage(packet, issued_events, batch.surviving, issued_only=True)
+    staged, errors, reads = _check_answer(batch, answer, previous, coverage)
+    return staged, {"errors": errors, "missingReads": reads, "staged": {
+        "newNodes": [identifier for field, identifier, _ in staged["tree"] if field == "newNodes"],
+        "merges": [identifier for field, identifier, _ in staged["tree"] if field == "merges"],
         "classifications": sorted(staged["classifications"]),
         "summaries": sorted(staged["summaries"]),
     }}
 
 
-def _missing(field, key, identifiers):
-    return [f"{field}[{identifier}]: missing {key}" for identifier in sorted(identifiers)]
-
-
-def commit_staged(connection, *, packet, staged, verified_events, maintenance_run_id, prior_errors=()):
-    """Recheck staging against live state and publish covered entries atomically."""
+def commit_staged(connection, *, packet, answer, staged, verified_events, maintenance_run_id):
+    """Recheck staging and the latest answer against live state and verified delivery."""
     batch = _Batch(connection, packet)
-    covered_runs, covered_kinds = maintenance_coverage(packet, verified_events, surviving_run_ids=batch.surviving)
-    exempt_prefixes = (
-        *(f"classifications[{run_id}]: " for run_id in batch.classifications - batch.surviving),
-        *(f"summaries[{kind_id}]: " for kind_id, unread in batch.unread.items() if not unread),
-    )
-    errors = [entry for entry in prior_errors if not entry.startswith(exempt_prefixes)]
-    errors.extend(_missing("classifications", "runId", batch.unclassified - staged["classifications"].keys()))
-    errors.extend(_missing("summaries", "kindId",
-                           {key for key, unread in batch.unread.items() if unread} - staged["summaries"].keys()))
+    coverage = MaintenanceCoverage(packet, verified_events, batch.surviving)
+    checked, errors, _ = _check_answer(batch, answer, staged, coverage, final=True)
     counts = {"nodes": 0, "merges": 0, "classifications": 0, "summaries": 0}
-    tree = []
     if batch.surviving:
-        for field, identifier, item in staged["tree"]:
-            _tree_edit(batch, field, identifier, item, tree, errors)
-        for field, identifier, item in tree:
+        for field, identifier, item in checked["tree"]:
             if field == "newNodes":
                 connection.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,NULL,?)",
                                    (identifier, item["name"].strip(), item["definition"], item["parentId"], maintenance_run_id))
@@ -549,28 +587,14 @@ def commit_staged(connection, *, packet, staged, verified_events, maintenance_ru
             else:
                 _write_merge(connection, identifier, item["targetId"])
                 counts["merges"] += 1
-    for run_id, item in staged["classifications"].items():
-        if run_id not in batch.unclassified:
-            continue
-        issue = (batch.classification_problem(item) if run_id in covered_runs
-                 else "read the complete task section")
-        if issue:
-            errors.append(f"classifications[{run_id}]: {issue}")
-            continue
+    for run_id, item in checked["classifications"].items():
         node_id, task_type = item["domainNodeId"], item["taskType"]
         connection.execute("INSERT INTO micro_task_classifications VALUES(?,?,?,?)",
                            (run_id, node_id, task_type, maintenance_run_id))
         accumulate_cell(connection, run_id, node_id, task_type)
         counts["classifications"] += 1
-    for kind_id, item in staged["summaries"].items():
+    for kind_id, item in checked["summaries"].items():
         unread = batch.unread[kind_id]
-        if not unread:
-            continue
-        issue = (batch.summary_problem(item) if kind_id in covered_kinds
-                 else "read all five sections of every unread micro task in this batch")
-        if issue:
-            errors.append(f"summaries[{kind_id}]: {issue}")
-            continue
         key = _kind(batch.kinds[kind_id])
         cited = set(item["citations"])
         connection.execute(

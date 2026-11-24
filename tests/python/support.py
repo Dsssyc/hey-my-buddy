@@ -38,7 +38,7 @@ from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noq
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION  # noqa: E402
 from hey_my_buddy.protocol.owned_process import owned_popen  # noqa: E402
 from hey_my_buddy.protocol.process_handle import ProcessHandle  # noqa: E402
-from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, call_operation  # noqa: E402
+from hey_my_buddy.blackboard.service.service import BoardService, call_operation  # noqa: E402
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
@@ -555,8 +555,7 @@ class InProcessBoard:
             for name in ('dsh', 'zcode', 'codex', 'claude'):
                 db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
                            (name, json.dumps({"reason": None})))
-        self.admission = WaitAdmission(options.get("wait_capacity", 4))
-        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION,
+        self.control: dict = {"contract_version": CONTRACT_VERSION,
                               "runtime": options.get("runtime_identity", "source:in-process-test")}
         self.stopped: list[dict] = []
         self.restarted: list[dict] = []
@@ -577,7 +576,6 @@ class InProcessBoard:
         # Native startup validation shares this synthetic health boundary. The
         # real service/discovery suites construct BoardService independently.
         self.service.harnesses.refresh = lambda name, **kwargs: self.service.harnesses.get(name)
-        self.wait_service = WaitService(self.store, self.admission, token="test-token")
         self.console = Console(
             self.store,
             self.service,
@@ -597,12 +595,11 @@ class InProcessBoard:
         return self.console.start()
 
     def call(self, operation: str, params: dict) -> dict:
-        service = self.wait_service if operation in ('events_wait', 'task_wait', 'wait_capacity') else self.service
         if operation == "execution_result" and "receipt" not in params:
             params = publish_result_receipt(self.directory, params)
-            call_operation(service, operation, params)
+            call_operation(self.service, operation, params)
             return settle_fixture_receipt(self, params["attemptId"])
-        return call_operation(service, operation, params)
+        return call_operation(self.service, operation, params)
 
     def console_call(self, operation: str, params: dict) -> dict:
         """Exercise an authenticated private console session in process."""

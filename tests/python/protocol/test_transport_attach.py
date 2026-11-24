@@ -288,11 +288,11 @@ class EndpointlessObservationTests(unittest.TestCase):
                     transport._call_board_read_only("ping", None, self.directory)
                 messages.append(refused.exception.message)
                 with self.assertRaises(ServiceError) as refused:
-                    with transport._event_waiter(self.directory):
+                    with transport.open_wait_session(self.directory):
                         pass
                 messages.append(refused.exception.message)
                 with self.assertRaises(ServiceError) as refused:
-                    transport.ensure_service(self.directory, resource="wait")
+                    transport.call_service("task_observe", {"runId": "run-1"}, self.directory)
                 messages.append(refused.exception.message)
             self.assertTrue(all("lifetime locks" in message for message in messages), messages)
             recorder.assert_no_mutation()
@@ -309,11 +309,11 @@ class EndpointlessObservationTests(unittest.TestCase):
                     transport._call_board_read_only("ping", None, self.directory)
                 messages.append(refused.exception.message)
                 with self.assertRaises(ServiceError) as refused:
-                    with transport._event_waiter(self.directory):
+                    with transport.open_wait_session(self.directory):
                         pass
                 messages.append(refused.exception.message)
                 with self.assertRaises(ServiceError) as refused:
-                    transport.ensure_service(self.directory, resource="wait")
+                    transport.call_service("task_observe", {"runId": "run-1"}, self.directory)
                 messages.append(refused.exception.message)
             self.assertEqual(len(set(messages)), 1, "one observation must give every entry the same refusal")
             self.assertIn("A board service start is in progress", messages[0])
@@ -330,34 +330,13 @@ class EndpointlessObservationTests(unittest.TestCase):
                 transport._call_board_read_only("ping", None, self.directory)
             messages.append(refused.exception.message)
             with self.assertRaises(ServiceError) as refused:
-                with transport._event_waiter(self.directory):
+                with transport.open_wait_session(self.directory):
                     pass
             messages.append(refused.exception.message)
             with self.assertRaises(ServiceError) as refused:
-                transport.ensure_service(self.directory, resource="wait")
+                transport.call_service("task_observe", {"runId": "run-1"}, self.directory)
             messages.append(refused.exception.message)
         self.assertTrue(all("No board service is running" in message for message in messages), messages)
-
-    def test_wait_refusal_under_the_start_lock_observes_without_reacquiring_the_fence(self):
-        # The upgrade branch holds the start lock itself; observing lifetime locks
-        # from inside that fence must not take the same lock a second time.
-        self.idle_locks()
-        (self.directory / "control-start.lock").touch(mode=0o600)
-        marker = self.directory / "upgrade.json"
-        marker.write_text("{}", encoding="utf-8", newline="\n")
-        original_lock = locking.lock
-
-        def finish_while_fencing(fd, *args, **options):
-            original_lock(fd, *args, **options)
-            if not options.get("shared"):
-                marker.unlink()
-
-        with patch.object(transport, "_attach_read_only", return_value=None), \
-             patch.object(transport.locking, "lock", side_effect=finish_while_fencing):
-            with self.assertRaises(ServiceError) as refused:
-                transport.ensure_service(self.directory, resource="wait")
-        self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
-        self.assertIn("No board service is running", refused.exception.message)
 
 
 class TrustBoundaryTests(AttachFixture):
@@ -650,16 +629,15 @@ class ColdStartTests(unittest.TestCase):
         self.spawn.assert_not_called()
         self.assertFalse((self.directory / "control-start.lock").exists(), "an orphan journal must not create a lock")
 
-    def test_upgrade_journal_with_orphan_lock_refuses_control_and_wait_without_preflight(self):
+    def test_upgrade_journal_with_orphan_lock_refuses_without_preflight(self):
         self.directory.mkdir(mode=private_dirs.directory_mode())
         (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         (self.directory / "control-start.lock").touch(mode=0o600)
         with patch.object(transport, '_attach_read_only') as attach, \
              patch.object(transport, '_cold_start_preflight') as preflight:
-            for resource in ("control", "wait"):
-                with self.subTest(resource=resource), self.assertRaises(ServiceError) as refused:
-                    ensure_service(self.directory, resource=resource)
-                self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
+            with self.assertRaises(ServiceError) as refused:
+                ensure_service(self.directory)
+            self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
         attach.assert_not_called()
         preflight.assert_not_called()
         self.spawn.assert_not_called()
@@ -678,23 +656,6 @@ class ColdStartTests(unittest.TestCase):
              patch.object(transport.locking, 'lock', side_effect=installer_unlocks) as lock:
             self.assertEqual(ensure_service(self.directory), ENDPOINT)
         lock.assert_called_once()
-        attach.assert_called_once_with(self.directory.resolve())
-        preflight.assert_not_called()
-        self.spawn.assert_not_called()
-
-    def test_installer_finishes_before_wait_client_reattaches(self):
-        self.directory.mkdir(mode=private_dirs.directory_mode())
-        marker = self.directory / "upgrade.json"
-        marker.write_text("{}", encoding="utf-8", newline="\n")
-        (self.directory / "control-start.lock").touch(mode=0o600)
-
-        def installer_unlocks(_fd):
-            marker.unlink()
-
-        with patch.object(transport, '_attach_read_only', return_value=ENDPOINT) as attach, \
-             patch.object(transport, '_cold_start_preflight') as preflight, \
-             patch.object(transport.locking, 'lock', side_effect=installer_unlocks):
-            self.assertEqual(ensure_service(self.directory, resource="wait"), ENDPOINT)
         attach.assert_called_once_with(self.directory.resolve())
         preflight.assert_not_called()
         self.spawn.assert_not_called()

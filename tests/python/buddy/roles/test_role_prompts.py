@@ -318,6 +318,22 @@ class RolePromptTests(unittest.TestCase):
                             self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["request"]), prompt)
                             self.assertNotIn('timeout_seconds', vars(preparation.request))
 
+    def test_maintenance_prompt_names_tool_fields_and_the_paging_plan(self):
+        prompt = " ".join(router.MAINTENANCE_INSTRUCTIONS.split())
+        for instruction in (
+            "query_domains() pages across all active nodes",
+            "query_kinds() pages through every kind's identity with needsSummary",
+            "Take the union of unreadRunIds",
+            "task, turns, continuations, hostBoundaryFacts, acceptanceAndIntegration",
+            "Follow nextCursor until null",
+            "Then read task for any remaining needsClassification tasks",
+            "up to 16 tasks and three summary kinds",
+            "128 KiB of UTF-8 JSON",
+            "Use missingReads",
+            "Staged entries need no resubmission",
+        ):
+            self.assertIn(instruction, prompt)
+
     def test_profile_prompt_states_each_answer_validation_rule(self):
         # The instruction paragraph wraps mid-phrase, so compare on spacing that
         # ignores the wrap points rather than on the literal source lines.

@@ -21,7 +21,6 @@ import c_two as cc
 #: Identifier of the applied profile, echoed in every report so a running process
 #: can be compared against the source it claims to run.
 PROFILE_ID = "hey-my-buddy-lightweight-2"
-MAX_WAIT_CAPACITY = 48
 #: Shared by the launcher readiness wait and every native RPC server startup.
 SERVICE_STARTUP_TIMEOUT_SECONDS = 20
 

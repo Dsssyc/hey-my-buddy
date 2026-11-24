@@ -178,9 +178,12 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                         reply = transport.call_service(action)
                         assert reply["alreadyStopped"] and reply["stopped"]
                 else:
-                    for resource in ("control", "wait"):
+                    for action in (
+                        lambda: BoardClient(autostart=False).call("ping"),
+                        lambda: transport.open_wait_session().__enter__(),
+                    ):
                         try:
-                            BoardClient(autostart=False).call("ping", resource=resource)
+                            action()
                         except transport.ServiceError as error:
                             assert error.code == "SERVICE_UNAVAILABLE", error.payload()
                         else:

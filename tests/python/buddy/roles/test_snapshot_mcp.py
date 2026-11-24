@@ -6,7 +6,12 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import ANY, patch
 
+from hey_my_buddy import locking
+from hey_my_buddy.buddy.harnesses.snapshot_mount import (
+    mounted_micro_task_coverage, mounted_snapshot, prepare_snapshot_mount,
+)
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, SNAPSHOT_MCP_SERVER_NAME
 from hey_my_buddy.buddy.roles.snapshot_mcp import SnapshotService, serve
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
@@ -99,6 +104,42 @@ class SnapshotServiceTests(unittest.TestCase):
         self.assertEqual(sequences, set(range(1, 9)))
         keys, coverage = self.service.verify_calls(calls, [self.native])
         self.assertEqual((len(keys), len(coverage)), (8, 8))
+
+    def test_running_coverage_reads_only_issued_micro_task_ranges_under_shared_lock(self):
+        packet = {
+            "domainNodes": [], "classificationRunIds": ["run"], "kinds": [], "comparisonStatistics": [],
+            "microTasks": [{"runId": "run", "title": "Task", "task": "Read me",
+                            "project": None, "classification": None,
+                            "result": {"state": "accepted", "continuationRounds": 0, "turns": []}}],
+        }
+        reference, _ = publish_snapshot(self.root, "maintenance", "maint", packet)
+        mount = prepare_snapshot_mount(
+            invocation_root=self.root / "live-invocation", state_dir=self.root,
+            identity=self.configuration["identity"], input_sha256=self.configuration["inputSha256"],
+            snapshot={"namespace": "maintenance", "owner": "maint", "reference": reference})
+        service = mounted_snapshot(mount)
+        self.assertEqual(mounted_micro_task_coverage(mount), [])
+        self.assertFalse(service.ledger.exists())
+        service.mcp_call("query_batch", {})
+        service.mcp_call("query_micro_tasks", {"runIds": ["missing"]})
+        args = {"runIds": ["run"], "sections": ["task"]}
+        reply = service.mcp_call("query_micro_tasks", args)
+        data = decode_strict_json(reply["content"][0]["text"])["response"]["data"]
+        before = service.ledger.read_bytes()
+        with patch.object(locking, "lock", wraps=locking.lock) as lock:
+            self.assertEqual(mounted_micro_task_coverage(mount), [
+                {"tool": "query_micro_tasks", "ranges": data["coverage"]}])
+            lock.assert_called_once_with(ANY, shared=True)
+        self.assertEqual(service.ledger.read_bytes(), before)
+        # Issued pages are observable before the native root calls match.
+        with self.assertRaises(ReceiptError):
+            service.verify_calls([], [self.native])
+        rows = before.splitlines()
+        first = decode_strict_json(rows[0])
+        first["receiptSeq"] = 2
+        service.ledger.write_bytes(b"\n".join([canonical_json(first).encode(), *rows[1:]]) + b"\n")
+        with self.assertRaisesRegex(ValueError, "Invalid snapshot query ledger sequence"):
+            mounted_micro_task_coverage(mount)
 
     def test_stdio_maintenance_pages_long_items_and_32_item_batches_within_signed_limit(self):
         long_run_id = "11111111-2222-3333-4444-555555555555"

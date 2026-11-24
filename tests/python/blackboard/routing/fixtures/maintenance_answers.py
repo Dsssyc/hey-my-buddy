@@ -6,18 +6,24 @@ from hey_my_buddy.protocol.snapshot_query import SnapshotQuery
 EMPTY_STAGE = {"tree": [], "classifications": {}, "summaries": {}}
 
 
-def stage_and_commit(db, *, packet, answer, maintenance_run_id):
+def coverage_events(packet, queries=None):
     snapshot = SnapshotQuery(packet, plane="maintenance")
+    if queries is None:
+        queries = [{"runIds": [item["runId"]]} for item in packet["microTasks"]]
     events = []
-    for item in packet["microTasks"]:
-        args = {"runIds": [item["runId"]]}
+    for args in queries:
         while True:
             page, evidence = snapshot.call("query_micro_tasks", args)
             events.append(evidence)
             if page["nextCursor"] is None:
                 break
-            args["cursor"] = page["nextCursor"]
-    staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
-    written, errors = commit_staged(db, packet=packet, staged=staged, verified_events=events,
+            args = {**args, "cursor": page["nextCursor"]}
+    return events
+
+
+def stage_and_commit(db, *, packet, answer, maintenance_run_id):
+    events = coverage_events(packet)
+    staged, _ = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE, issued_events=events)
+    written, errors = commit_staged(db, packet=packet, answer=answer, staged=staged, verified_events=events,
                                     maintenance_run_id=maintenance_run_id)
-    return {"errors": list(dict.fromkeys(feedback["errors"] + errors)), "written": written}
+    return {"errors": errors, "written": written}

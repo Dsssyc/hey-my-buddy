@@ -266,9 +266,19 @@ def validate_claim_turn(claim: dict) -> None:
                 or not decision["buddy"]["harness"]):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
         if task["spec"].get("decision", {}).get("kind") == "maintain":
+            snapshot = decision.get("snapshot")
+            reference = snapshot.get("reference") if isinstance(snapshot, dict) else None
+            request = decision.get("request")
             if (decision.get("kind") != "maintain" or decision["routingMode"] != "fast"
                     or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
-                    or not isinstance(decision.get("input"), dict)):
+                    or not isinstance(snapshot, dict)
+                    or snapshot.get("namespace") != "maintenance"
+                    or snapshot.get("owner") != decision["maintenanceRunId"]
+                    or not isinstance(reference, dict)
+                    or not isinstance(reference.get("sha256"), str) or not reference["sha256"]
+                    or not isinstance(request, dict)
+                    or request.get("maintenanceRunId") != decision["maintenanceRunId"]
+                    or not isinstance(decision.get("outputSchema"), dict)):
                 raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
         elif task["spec"].get("decision", {}).get("kind") == "profile":
             if (decision.get("kind") != "profile" or decision["routingMode"] != "profile"
@@ -430,6 +440,7 @@ class Execution:
         self.client = client or BoardClient(self.state_dir, autostart=False)
         self._log = log or (lambda message: None)
         self.control = _ExecutionControl(self)
+        self._maintenance_rounds: dict[int, dict] = {}
         self._hints: dict = {}
         self._hint_seqs: dict = {}
         self._hint_serial = 0
@@ -995,15 +1006,31 @@ class Execution:
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 
-    def _maintenance_answer(self, raw, round_index, observations):
+    def _maintenance_answer(self, raw, round_index, observations, *, read_coverage):
         from ...protocol import maintenance as files
         run_id = self.claim["decisionInput"]["maintenanceRunId"]
-        reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
+        if round_index not in self._maintenance_rounds:
+            self._maintenance_rounds[round_index] = {
+                "answer": raw, "observations": observations, "coverage": read_coverage()}
+        material = self._maintenance_rounds[round_index]
+        if material["answer"] != raw:
+            raise BoardError("CONFLICT", "This maintenance round already has another answer")
+        # Recreating a transient file after a failed delivery keeps the round's
+        # original digest even if more query pages have since been issued.
+        reference = files.publish(self.state_dir, run_id, material)
         attempt = self.claim["attempt"]
+        params = {"attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
+                  "round": round_index, "answer": reference}
         try:
-            response = self.client.call("execution_maintenance", {
-                "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
-                "round": round_index, "answer": reference})
+            try:
+                response = self.client.call("execution_maintenance", params)
+            except BoardError as error:
+                if not is_retryable(error):
+                    raise
+                # A lost reply may follow a committed staging transaction.
+                # If dispatch rolled back, the service may have removed the file.
+                files.publish(self.state_dir, run_id, material)
+                response = self.client.call("execution_maintenance", params)
             return files.read(self.state_dir, run_id, response["feedback"])
         finally:
             files.discard_reference(self.state_dir, run_id, reference)

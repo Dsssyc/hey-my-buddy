@@ -2,31 +2,146 @@ import type zh from "../zh/shell";
 
 export default {
   maintenanceValidation: {
-    "invalidJson": "The maintenance answer is not valid JSON.",
-    "citationOutsideBatch": "A summary cites a micro task outside this batch.",
-    "unknown": "The maintenance answer failed validation.",
-    "wrongType": "A field in the answer has the wrong type.",
-    "invalidValue": "The answer contains a disallowed value.",
-    "requiredField": "The answer is missing a required field.",
-    "unexpectedField": "The answer contains an unexpected field.",
-    "textTooShort": "A text field in the answer is empty.",
-    "textTooLong": "A text field in the answer is too long.",
-    "tooManyItems": "The answer contains too many items.",
-    "duplicateNode": "A new domain node ID is duplicated.",
-    "blankNode": "A new domain node has a blank name or definition.",
-    "changedNode": "A previously written domain node cannot be changed in a correction.",
-    "inactiveParent": "A new domain node has an inactive parent.",
-    "parentCycle": "Domain node parents form a cycle.",
-    "duplicateName": "Active domain node names are duplicated.",
-    "duplicateMerge": "A domain node is merged more than once.",
-    "inactiveMergeSource": "The source domain node for a merge is inactive.",
-    "inactiveMergeTarget": "The target domain node for a merge is inactive.",
-    "invalidMerge": "A domain node merge is invalid.",
-    "duplicateClassification": "A micro task is classified more than once.",
-    "inactiveClassificationNode": "A classification points to an inactive domain node.",
-    "missingClassification": "A micro task is missing a classification.",
-    "duplicateCitation": "A summary cites the same micro task more than once.",
-    "deletedCitation": "A summary cites a deleted micro task.",
+    invalidJson: {
+      single: "invalid JSON in the maintenance answer",
+      multiple: "invalid JSON in {{total}} places in the maintenance answer",
+    },
+    citationOutsideBatch: {
+      single: "a summary cites a micro task outside this batch",
+      multiple: "{{total}} citations point to micro tasks outside this batch",
+    },
+    citationOutsideEvidence: {
+      single: "a summary cites a micro task outside its frozen evidence",
+      multiple: "{{total}} summaries cite micro tasks outside their frozen evidence",
+    },
+    unknown: {
+      single: "the maintenance answer failed validation",
+      multiple: "unrecognized validation problems at {{total}} targets",
+    },
+    wrongType: {
+      single: "a field in the answer has the wrong type",
+      multiple: "wrong field types at {{total}} locations in the answer",
+    },
+    invalidValue: {
+      single: "the answer contains a disallowed value",
+      multiple: "disallowed values at {{total}} locations in the answer",
+    },
+    requiredField: {
+      single: "the answer is missing a required field",
+      multiple: "{{total}} required fields are missing from the answer",
+    },
+    unexpectedField: {
+      single: "the answer contains an unexpected field",
+      multiple: "the answer contains {{total}} unexpected fields",
+    },
+    textTooShort: {
+      single: "a text field in the answer is empty",
+      multiple: "{{total}} text fields in the answer are empty",
+    },
+    textTooLong: {
+      single: "a text field in the answer is too long",
+      multiple: "{{total}} text fields in the answer are too long",
+    },
+    tooManyItems: {
+      single: "the answer contains too many items",
+      multiple: "too many items at {{total}} locations in the answer",
+    },
+    invalidUnicode: {
+      single: "the answer contains invalid Unicode text",
+      multiple: "{{total}} entries contain invalid Unicode text",
+    },
+    stagedConflict: {
+      single: "an entry conflicts with staged content",
+      multiple: "{{total}} entries conflict with staged content",
+    },
+    duplicateNode: {
+      single: "a new domain node ID is duplicated",
+      multiple: "{{total}} new domain node IDs are duplicated",
+    },
+    blankNode: {
+      single: "a new domain node has a blank name or definition",
+      multiple: "{{total}} new domain nodes have a blank name or definition",
+    },
+    changedNode: {
+      single: "a correction attempts to change an existing domain node",
+      multiple: "corrections attempt to change {{total}} existing domain nodes",
+    },
+    nulNode: {
+      single: "a domain node field contains a null character",
+      multiple: "{{total}} domain nodes have fields that contain null characters",
+    },
+    inactiveParent: {
+      single: "a domain node has an inactive parent",
+      multiple: "{{total}} tree edits involve inactive parent nodes",
+    },
+    parentCycle: {
+      single: "domain node parents form a cycle",
+      multiple: "{{total}} tree edits would create cycles in the parent relationships",
+    },
+    duplicateName: {
+      single: "active domain node names are duplicated",
+      multiple: "{{total}} tree edits would duplicate active domain node names",
+    },
+    duplicateMerge: {
+      single: "a domain node is merged more than once",
+      multiple: "{{total}} domain nodes are merged more than once",
+    },
+    inactiveMergeSource: {
+      single: "the source domain node for a merge is inactive",
+      multiple: "{{total}} merges have inactive source nodes",
+    },
+    inactiveMergeTarget: {
+      single: "the target domain node for a merge is inactive",
+      multiple: "{{total}} merges have inactive target nodes",
+    },
+    duplicateClassification: {
+      single: "a micro task is classified more than once",
+      multiple: "{{total}} micro tasks are classified more than once",
+    },
+    inactiveClassificationNode: {
+      single: "a classification points to an inactive domain node",
+      multiple: "classifications for {{total}} micro tasks point to inactive domain nodes",
+    },
+    unknownRun: {
+      single: "a classification points to an unknown micro task",
+      multiple: "classifications point to {{total}} unknown micro tasks",
+    },
+    missingClassification: {
+      single: "a micro task is missing a classification",
+      multiple: "{{total}} micro tasks are missing classifications",
+    },
+    unreadTaskSection: {
+      single: "a task section was not read in full",
+      multiple: "task sections were not read in full for {{total}} micro tasks",
+    },
+    duplicateSummary: {
+      single: "a buddy kind has more than one summary",
+      multiple: "{{total}} buddy kinds have more than one summary each",
+    },
+    unknownKind: {
+      single: "a summary refers to an unknown buddy kind",
+      multiple: "{{total}} summaries refer to unknown buddy kinds",
+    },
+    missingSummary: {
+      single: "a summary is missing",
+      multiple: "{{total}} summaries are missing",
+    },
+    unreadSummarySections: {
+      single: "a summary's required micro task sections were not read in full",
+      multiple: "required micro task reading was incomplete for {{total}} summaries",
+    },
+    summaryTooLong: {
+      single: "a summary exceeds the byte limit",
+      multiple: "{{total}} summaries exceed the byte limit",
+    },
+    duplicateCitation: {
+      single: "a summary cites the same micro task more than once",
+      multiple: "{{total}} summaries contain duplicate citations",
+    },
+    deletedCitation: {
+      single: "a summary cites a deleted micro task",
+      multiple: "{{total}} summaries cite deleted micro tasks",
+    },
   },
   reasonNoProcesses: "none",
   reasonProcess: "{{executable}} ({{pid}})",

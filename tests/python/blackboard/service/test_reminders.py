@@ -55,8 +55,8 @@ class ReminderBoardTests(BoardTestCase):
         return submitted["runId"], claim["claim"]["attempt"]
 
     def wait(self, run_id):
-        return call_operation(self.board_instance.wait_service, "task_wait", {
-            "runId": run_id, "timeoutMs": 0, "consumeReminders": True,
+        return call_operation(self.board_instance.service, "task_observe", {
+            "runId": run_id,
             "reminderWaitId": uuid.uuid4().hex,
         })
 

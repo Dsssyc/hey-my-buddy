@@ -54,7 +54,7 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     with patch.object(transport.rpc_config, 'configure_client'), \
                          patch.object(transport.cc, 'connect', side_effect=failure), \
                          self.assertRaises(transport.ServiceError) as caught:
-                        with transport._connection(endpoint, 'control', directory):
+                        with transport._connection(endpoint, directory):
                             pass
                     self.assertEqual(caught.exception.code, code)
                     self.assertEqual(caught.exception.details['io_kind'], kind)
@@ -135,8 +135,8 @@ class StructuredRpcFailureTests(unittest.TestCase):
             torn.__cause__ = cause
             calls = []
 
-            def request(_endpoint, operation, _params, resource='control', *, state_dir):
-                calls.append((operation, resource, state_dir))
+            def request(_endpoint, operation, _params, *, state_dir):
+                calls.append((operation, state_dir))
                 raise transport.local_rpc_error(torn)
 
             with patch.object(transport, '_read_endpoint', return_value=endpoint), \
@@ -144,7 +144,7 @@ class StructuredRpcFailureTests(unittest.TestCase):
                  patch.object(transport, '_request', side_effect=request), \
                  self.assertRaises(transport.ServiceError) as caught:
                 transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
-            self.assertEqual(calls, [('ping', 'control', directory)])
+            self.assertEqual(calls, [('ping', directory)])
             self.assertEqual(caught.exception.code, 'SERVICE_UNAVAILABLE')
             self.assertNotIn('transport_phase', caught.exception.details)
 
@@ -208,9 +208,28 @@ class StructuredRpcFailureTests(unittest.TestCase):
              patch.object(transport.rpc_config, 'configure_client'), \
              patch.object(transport.cc, 'connect', side_effect=failure):
             with self.assertRaises(ValueError) as caught:
-                with transport._connection(endpoint, 'control', Path(temporary)):
+                with transport._connection(endpoint, Path(temporary)):
                     pass
         self.assertIs(caught.exception, failure)
+
+    def test_call_capacity_exceeded_is_retryable_pre_dispatch_and_preserved_by_read_only_call(self):
+        from hey_my_buddy.buddy.runtime import receipts
+        overloaded = transport.ServiceError('C_TWO_CALL_CAPACITY_EXCEEDED', 'max_outstanding_calls reached')
+        self.assertTrue(transport.is_transient_ipc_error(overloaded))
+        self.assertTrue(transport.is_transient_ipc_error(overloaded, pre_dispatch_only=True))
+        self.assertTrue(receipts.is_retryable(overloaded, pre_dispatch_only=True))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'state'
+            directory.mkdir(mode=0o700)
+            with patch.object(transport, '_attach_read_only', side_effect=overloaded), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._call_board_read_only('ping', {}, directory)
+            self.assertEqual(caught.exception.code, 'C_TWO_CALL_CAPACITY_EXCEEDED')
+            with patch.object(transport, '_attach_read_only', side_effect=overloaded), \
+                 self.assertRaises(transport.ServiceError) as session_caught:
+                with transport._open_wait_session(directory):
+                    pass
+            self.assertEqual(session_caught.exception.code, 'C_TWO_CALL_CAPACITY_EXCEEDED')
 
     def test_c_two_contract_failure_keeps_its_stable_code_and_details(self):
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}

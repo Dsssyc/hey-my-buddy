@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { setLanguageChoice } from "./index";
-import { reasonText } from "./reason";
+import { reasonParameterText, reasonText } from "./reason";
 import zh from "./zh/reasons";
 import i18n from "i18next";
 
@@ -83,17 +83,67 @@ describe("the program reason catalog", () => {
     ] } };
     setLanguageChoice("zh");
     const chinese = reasonText(reason);
-    expect(chinese).toContain("摘要引用了本批次之外的微任务");
+    expect(chinese).toContain("归纳引用了本批次之外的微任务");
     expect(chinese).toContain("领域节点的上级关系形成环");
     expect(chinese).toContain("维护回答未通过校验");
     expect(chinese).not.toMatch(/enum|newNodes|future-validation-code/);
     setLanguageChoice("en");
     const english = reasonText(reason);
-    expect(english).toContain("A summary cites a micro task outside this batch");
-    expect(english).toContain("Domain node parents form a cycle");
-    expect(english).toContain("The maintenance answer failed validation");
+    expect(english).toContain("a summary cites a micro task outside this batch");
+    expect(english).toContain("domain node parents form a cycle");
+    expect(english).toContain("the maintenance answer failed validation");
     expect(english).not.toMatch(/enum|newNodes|future-validation-code/);
     expect(reasonText({ code: "profile-answer-invalid", params: { errors: ["profile.model: required"] } })).toContain("profile.model: required");
+  });
+  it.each([
+    ["zh", "19 个微任务的任务正文未读全、5 份归纳所需的微任务分节未读全"],
+    ["en", "task sections were not read in full for 19 micro tasks and required micro task reading was incomplete for 5 summaries"],
+  ] as const)("summarizes distinct coverage targets in %s", (language, summary) => {
+    setLanguageChoice(language);
+    const errors = [
+      ...Array.from({ length: 19 }, (_, index) => `classifications[run-${index}]: read the complete task section`),
+      ...Array.from({ length: 5 }, (_, index) => `summaries[kind-${index}]: read all five sections of every unread micro task in this batch`),
+    ];
+    const code = "maintenance-answer-invalid";
+    expect(reasonParameterText(errors, "errors", code)).toBe(summary);
+    expect(reasonText({ code, params: { errors } }).split(language === "zh" ? "问题：" : "Problems: ")[1]).toBe(summary);
+    expect(reasonParameterText([...errors, errors[0], errors[19]], "errors", code)).toBe(summary);
+  });
+
+  it.each([
+    ["$.classifications[0].runId: type", "回答中的字段类型不正确", "a field in the answer has the wrong type"],
+    ["$.classifications[0].taskType: enum", "回答包含不允许的值", "the answer contains a disallowed value"],
+    ["answer.summaries[0].kindId: required", "回答缺少必填字段", "the answer is missing a required field"],
+    ['$.summaries[0]["extra: field"]: additionalProperties', "回答包含未声明的字段", "the answer contains an unexpected field"],
+    ["$.newNodes[0].id: minLength", "回答中的文字为空", "a text field in the answer is empty"],
+    ["$.newNodes[0].name: maxLength", "回答中的文字超过长度上限", "a text field in the answer is too long"],
+    ["$.summaries[0].citations: maxItems", "回答包含过多条目", "the answer contains too many items"],
+    ["$: type", "回答中的字段类型不正确", "a field in the answer has the wrong type"],
+    ["classifications[run-1]: missing runId", "微任务缺少分类", "a micro task is missing a classification"],
+    ["summaries[kind-1]: missing kindId", "缺少一份归纳", "a summary is missing"],
+    ["summaries[kind-1]: citation is outside the frozen kind evidence", "归纳引用了冻结证据之外的微任务", "a summary cites a micro task outside its frozen evidence"],
+    ["classifications[run-1]: read the complete task section", "任务正文未读全", "a task section was not read in full"],
+    ["summaries[kind-1]: read all five sections of every unread micro task in this batch", "归纳所需的微任务分节未读全", "a summary's required micro task sections were not read in full"],
+    ["newNodes[node]: label]: domain node fields must not contain NUL characters", "领域节点的字段包含空字符", "a domain node field contains a null character"],
+    ["merges[node]: domain parent cycle at root", "领域节点的上级关系形成环", "domain node parents form a cycle"],
+    ["classifications[0]: invalid Unicode", "回答包含无效的 Unicode 文本", "the answer contains invalid Unicode text"],
+    ["classifications[run-1]: unknown runId", "分类指向未知的微任务", "a classification points to an unknown micro task"],
+    ["summaries[kind-1]: unknown kindId", "归纳对应的种类未知", "a summary refers to an unknown buddy kind"],
+    ["summaries[kind-1]: duplicate kindId", "同一种类提交了多份归纳", "a buddy kind has more than one summary"],
+    ["summaries[kind-1]: text exceeds 4096 UTF-8 bytes", "归纳超过字节上限", "a summary exceeds the byte limit"],
+  ])("translates %s in both languages", (error, chinese, english) => {
+    for (const [language, expected] of [["zh", chinese], ["en", english]] as const) {
+      setLanguageChoice(language);
+      expect(reasonParameterText([error, error], "errors", "maintenance-answer-invalid")).toBe(expected);
+    }
+  });
+
+  it("counts distinct schema paths and summarizes unrecognized errors once", () => {
+    setLanguageChoice("en");
+    const errors = ["$.newNodes[0].name: type", "$.newNodes[0].name: type", "$.newNodes[1].name: type",
+      "future-validation-a", "future-validation-b", "future-validation-a"];
+    expect(reasonParameterText(errors, "errors", "maintenance-answer-invalid"))
+      .toBe("wrong field types at 2 locations in the answer and the maintenance answer failed validation");
   });
   it("has exactly the protocol's codes as its Chinese leaves", () => {
     expect(Object.values(zh).every(value => typeof value === "string")).toBe(true);

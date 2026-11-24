@@ -266,14 +266,13 @@ class ActivityProjection(BoardTestCase):
         self.assertEqual(board.store.head(), old_cursor)
 
         client.progress(attempt["attemptId"], attempt["generation"], nonce, data={"activity": second})
-        following = board.store.events_wait({"after": old_cursor, "runId": task["runId"], "timeoutMs": 0})
+        following = board.store.events_read({"after": old_cursor, "runId": task["runId"]})
         self.assertEqual(len(following["events"]), 1)
         self.assertGreater(following["cursor"], old_cursor)
         self.assertEqual(following["head"], board.store.head())
         self.assertEqual(following["events"][0]["payload"], {})
         self.assertEqual(following["events"][0]["taskId"], task["runId"])
         self.assertEqual(following["events"][0]["attemptId"], attempt["attemptId"])
-        self.assertFalse(following["timedOut"])
         all_events = client.read_events(after=0)["events"]
         self.assertNotIn(old_cursor, [event["seq"] for event in all_events])
         self.assertEqual(client.get(runId=task["runId"])["activity"], second)

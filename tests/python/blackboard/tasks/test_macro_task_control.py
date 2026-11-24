@@ -134,9 +134,9 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
                 self.assertFalse(paused['awaitingHost'])
                 self.assertEqual(pending_root_count(board.store), 0)
                 self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
-                wait = {'runId':run['runId'],'timeoutMs':0,'consumeReminders':True,'reminderWaitId':'pause-'+harness}
-                self.assertIn('pause', board.call('task_wait', wait))
-                self.assertNotIn('pause', board.call('task_wait', {**wait,'reminderWaitId':'later-'+harness}))
+                wait = {'runId': run['runId'], 'reminderWaitId': 'pause-' + harness}
+                self.assertIn('pause', board.call('task_observe', wait))
+                self.assertNotIn('pause', board.call('task_observe', {**wait, 'reminderWaitId': 'later-' + harness}))
                 self.control(board, 'resume', target)
                 second = self.claim(board, run_id=run['runId'])['claim']['turn']['input']
                 self.assertEqual(second['resumeMode'], expected)
@@ -415,12 +415,12 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         other = self.submit(board, kind='worktree', request_id='stop-wait', macroTaskId=first['macroTaskId'])
         active = self.claim(board, run_id=other['runId'])
         continued = []
-        def host_finishes(_params):
+        def host_finishes(_seq, _timeout):
             continued.append(board.call('workflow_continue', params))
             self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='attention')
             self.finish_turn(board, active, runner_status='cancelled', seal=False)
-            return {}
-        with patch.object(board.store, 'events_wait', side_effect=host_finishes):
+            return True
+        with patch.object(board.store, 'wait_change', side_effect=host_finishes):
             result = self.control(board, 'end', first['macroTaskId'])
         self.assertEqual(len(continued), 1)
         self.assertEqual(result, {'macroTaskId': first['macroTaskId'], 'duplicate': False})

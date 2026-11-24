@@ -70,7 +70,7 @@ class NativeConfigTests(NativeConfigCase):
         env = json.loads(self.fake.with_name("launch-environment.json").read_text(encoding="utf-8"))
         self.assertEqual(env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"], str(self.builtin.resolve()))
         self.assertNotIn("ZCODE_MODEL_TELEMETRY_ENABLED", env)
-        self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", env)
+        self.assertEqual(env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"], str(self.personal.resolve()))
         self.assertEqual(env["ZCODE_STORAGE_DIR"], str(Path(request.private_state.native_root).resolve() / "storage"))
         self.assertEqual(env["ZCODE_SESSION_DB_PATH"], str(Path(request.private_state.native_root).resolve() / "sessions.sqlite"))
         for name in ("builtin-provider.json", "personal-provider.json"):
@@ -143,6 +143,53 @@ class NativeConfigTests(NativeConfigCase):
         native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
         os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         self.assertEqual(self.discover()["providers"][0]["accessType"], "unknown")
+
+    def test_active_builtin_prefers_newer_runtime_synced_revision_and_never_downgrades(self):
+        from hey_my_buddy.buddy.harnesses.zcode.config import (
+            _client_platform, _endpoint_dir, active_builtin_provider_path,
+        )
+        env = {"ZCODE_DATA_BASE_DIR": str(self.native_config)}
+        self.builtin.write_text(json.dumps({"schemaVersion": 1, "revision": 44, "config": {
+            "providerConfigRules": {"templateRules": [], "providerRules": []}}}), encoding="utf-8", newline="\n")
+        base_runtime = (self.native_config / ".zcode/v2/runtime/provider" / _client_platform())
+        endpoint = _endpoint_dir(env)
+        older = base_runtime / "3.18.2" / endpoint / "zcode-builtin.json"
+        older.parent.mkdir(parents=True)
+        older.write_text(json.dumps({"schemaVersion": 1, "revision": 43, "config": {}}), encoding="utf-8", newline="\n")
+        self.assertEqual(active_builtin_provider_path(env, [str(self.fake)], self.builtin), self.builtin)
+
+        newer = base_runtime / "3.19.1" / endpoint / "zcode-builtin.json"
+        newer.parent.mkdir(parents=True)
+        newer.write_text(json.dumps({"schemaVersion": 1, "revision": 47, "config": {
+            "providerConfigRules": {"templateRules": [{"templateId": "plan", "config": {
+                "access": {"type": "zhipu-coding-plan-api-key"}}}],
+                "providerRules": [{"providerId": "fixture-account", "templateId": "plan"}]}}}),
+            encoding="utf-8", newline="\n")
+        self.assertEqual(active_builtin_provider_path(env, [str(self.fake)], self.builtin), newer)
+
+        # Higher schemaVersion or corrupt JSON is ignored rather than breaking launch.
+        bad_schema = base_runtime / "3.20.0" / endpoint / "zcode-builtin.json"
+        bad_schema.parent.mkdir(parents=True)
+        bad_schema.write_text(json.dumps({"schemaVersion": 2, "revision": 99, "config": {}}), encoding="utf-8", newline="\n")
+        self.assertEqual(active_builtin_provider_path(env, [str(self.fake)], self.builtin), newer)
+
+        # Exact app version match (ZCODE_APP_VERSION / macOS Info.plist) wins when newer than bundled.
+        exact = base_runtime / "3.19.0" / endpoint / "zcode-builtin.json"
+        exact.parent.mkdir(parents=True)
+        exact.write_text(json.dumps({"schemaVersion": 1, "revision": 46, "config": {}}), encoding="utf-8", newline="\n")
+        self.assertEqual(active_builtin_provider_path({**env, "ZCODE_APP_VERSION": "3.19.0"},
+                                                      [str(self.fake)], self.builtin), exact)
+
+        # Spawn receives the newer runtime-synced builtin and native personal config paths.
+        os.environ["HMB_ZCODE_TEST_CASE"] = "native-config"
+        request = self.fast_request("Choose a buddy. Return only one JSON value matching this schema: {}")
+        request = request.model_copy(update={"buddy": request.buddy.model_copy(
+            update={"provider": "fixture-account"})})
+        result = native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result)
+        launched = json.loads(self.fake.with_name("launch-environment.json").read_text(encoding="utf-8"))
+        self.assertEqual(launched["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"], str(newer.resolve()))
+        self.assertEqual(launched["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"], str(self.personal.resolve()))
 
 
 class RuntimePreferenceTests(NativeConfigCase):

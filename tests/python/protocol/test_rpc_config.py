@@ -24,8 +24,7 @@ from support import BoardTestCase, stop_private_service, _child_environment, shu
 
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
-from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
+from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message, wait_task
 from hey_my_buddy.paths import native_path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -226,8 +225,9 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(values["budgets"]["max_outstanding_calls"], 256)
         self.assertEqual(server["budgets"]["max_payload_size"], 32 * MIB)
         self.assertGreaterEqual(server["budgets"]["max_payload_size"], MAX_MESSAGE_BYTES)
-        self.assertGreater(server["budgets"]["max_execution_workers"], WAIT_CAPACITY_DEFAULT)
+        self.assertGreater(server["budgets"]["max_execution_workers"], 0)
         self.assertLessEqual(server["budgets"]["max_execution_workers"], 64)
+        self.assertFalse(hasattr(rpc_config, "MAX_WAIT_CAPACITY"))
 
     def test_configure_is_idempotent_and_writes_no_environment(self):
         import c_two as cc
@@ -399,15 +399,10 @@ class ProfileTests(unittest.TestCase):
         rpc_config.configure_client(other)
         self.assertEqual(Path(cc.endpoint.local_endpoint_context().root), other / "ipc")
 
-    def test_wait_admission_cannot_consume_every_native_callback(self):
-        from hey_my_buddy.blackboard.service.daemon import Daemon
-        from hey_my_buddy.errors import BoardError
-        with mock.patch.dict(os.environ, {"HMB_WAIT_CAPACITY": "64"}):
-            with self.assertRaises(BoardError) as raised:
-                Daemon(self.state)
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        with mock.patch.dict(os.environ, {"HMB_WAIT_CAPACITY": "48"}):
-            self.assertEqual(Daemon(self.state).wait_admission.capacity, 48)
+    def test_retired_wait_capacity_setting_is_not_in_launch_keys(self):
+        from hey_my_buddy.install.launcher import LAUNCH_KEYS, SERVICE_ENVIRONMENT_KEYS
+        self.assertNotIn("HMB_WAIT_CAPACITY", LAUNCH_KEYS)
+        self.assertNotIn("HMB_WAIT_CAPACITY", SERVICE_ENVIRONMENT_KEYS)
 
 
 class IsolatedTransportTests(unittest.TestCase):
@@ -586,9 +581,9 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
 
 
 class RealDaemonControlTests(BoardTestCase):
-    """Real command executions leave control RPC responsive while waits are admitted."""
+    """Real command executions leave control RPC responsive while >48 topic subscribers wait."""
 
-    WAIT_CAPACITY = 6
+    SUBSCRIBER_COUNT = 60
     WAIT_MILLISECONDS = 30000
     CONTROL_BUDGET_SECONDS = 2.0
 
@@ -611,8 +606,7 @@ class RealDaemonControlTests(BoardTestCase):
         remove_private_test_root(self.work)
 
     def _start_daemon(self) -> dict:
-        environment = private_environment(self.directory, HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
-                                          HMB_MAX_CONCURRENT="2")
+        environment = private_environment(self.directory, HMB_MAX_CONCURRENT="2")
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")
         process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"],
@@ -652,25 +646,24 @@ class RealDaemonControlTests(BoardTestCase):
         )
         return reply["task"]["runId"]
 
-    def _admission(self) -> dict:
+    def _subscribers(self) -> int:
         return call_board("health", {}, endpoint=self.endpoint,
-                          state_dir=self.directory)["waitAdmission"]
+                          state_dir=self.directory)["activeSubscribers"]
 
-    def _await_admitted(self, expected: int) -> None:
-        deadline = time.monotonic() + 10
-        admitted = None
+    def _await_subscribers(self, expected: int) -> None:
+        deadline = time.monotonic() + 15
+        active = None
         while time.monotonic() < deadline:
-            admitted = self._admission().get("admitted")
-            if admitted == expected:
+            active = self._subscribers()
+            if active == expected:
                 return
             time.sleep(0.05)
-        self.fail(f"every wait slot must be busy before control traffic; admitted={admitted}")
+        self.fail(f"expected {expected} topic subscribers before control traffic; active={active}")
 
     def _wait(self, run_id: str) -> dict:
-        return call_board("task_wait", {"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS},
-                          endpoint=self.endpoint, state_dir=self.directory, resource="wait")
+        return wait_task({"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS}, self.directory)
 
-    def test_admitted_waits_do_not_starve_control_or_command_completion(self):
+    def test_many_topic_subscribers_do_not_starve_control_or_command_completion(self):
         release = self.work / "waited.release"
         cancel_release = self.work / "cancel.release"
         waited = self._submit_command("rpc-waited-1", release=release)
@@ -685,8 +678,8 @@ class RealDaemonControlTests(BoardTestCase):
                 self.assertLess(time.monotonic(), deadline, f"command never reached its gate: {marker.name}")
                 time.sleep(0.05)
         started = time.monotonic()
-        with ThreadPoolExecutor(max_workers=self.WAIT_CAPACITY) as pool:
-            waits = [pool.submit(self._wait, waited) for _ in range(self.WAIT_CAPACITY)]
+        with ThreadPoolExecutor(max_workers=self.SUBSCRIBER_COUNT) as pool:
+            waits = [pool.submit(self._wait, waited) for _ in range(self.SUBSCRIBER_COUNT)]
             measured: dict[str, float] = {}
 
             def control(name: str, operation: str, params: dict) -> dict:
@@ -696,7 +689,7 @@ class RealDaemonControlTests(BoardTestCase):
                 return reply
 
             try:
-                self._await_admitted(self.WAIT_CAPACITY)
+                self._await_subscribers(self.SUBSCRIBER_COUNT)
                 self.assertEqual(control("health", "health", {})["status"], "ok")
                 self.assertIn("events", control("events", "events_read", {"after": 0}))
                 cancelled = control("cancel", "task_cancel", {"runId": cancellable,
@@ -710,29 +703,31 @@ class RealDaemonControlTests(BoardTestCase):
                     if final["state"] in ("completed", "failed", "cancelled"):
                         break
                     self.assertFalse(any(wait.done() for wait in waits),
-                                     "quick command must finish while the waits still hold their slots")
+                                     "quick command must finish while all topic subscribers remain waiting")
                     self.assertLess(time.monotonic(), deadline, final)
                     time.sleep(0.05)
                 self.assertEqual(final["state"], "completed", final)
                 self.assertTrue(final["resultAvailable"])
-                self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)
+                self.assertEqual(self._subscribers(), self.SUBSCRIBER_COUNT)
                 self.assertFalse(any(wait.done() for wait in waits),
-                                 "control traffic must not end an admitted wait")
+                                 "control traffic must not end a topic wait")
             finally:
                 # Completion, rather than a short sleep, releases all task waits.
                 release.touch()
             replies = [wait.result(timeout=180) for wait in waits]
         elapsed = round(time.monotonic() - started, 3)
-        print("daemon control evidence: " + json.dumps({"controlSeconds": measured,
+        print("daemon control evidence: " + json.dumps({"subscribers": self.SUBSCRIBER_COUNT,
+                                                         "controlSeconds": measured,
                                                          "waitsSeconds": elapsed}))
-        self.assertEqual(len(replies), self.WAIT_CAPACITY)
+        self.assertEqual(len(replies), self.SUBSCRIBER_COUNT)
         for reply in replies:
             self.assertNotIn("error", reply, reply)
             self.assertEqual(reply["state"], "completed", reply)
             self.assertTrue(reply["resultAvailable"])
         for name, seconds in measured.items():
             self.assertLess(seconds, self.CONTROL_BUDGET_SECONDS,
-                            f"{name} was starved behind admitted waits")
+                            f"{name} was starved behind topic subscribers")
+        self._await_subscribers(0)
 
 
 if __name__ == "__main__":

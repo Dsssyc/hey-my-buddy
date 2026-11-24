@@ -14,16 +14,16 @@ from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 ROOT = Path(__file__).resolve().parents[3]
 CONTRACT_SOURCE = ROOT / "src/hey_my_buddy/protocol/contracts.py"
 SIGNATURE_FIXTURE = Path(__file__).with_name("contract_signatures.json")
-RESOURCE_NAMES = ("BuddyControl", "BuddyWait", "ExecutionLive")
+RESOURCE_NAMES = ("BuddyControl", "ExecutionLive")
 
 
 def contract_signature_digest(source: str) -> str:
-    """Hash declared signatures, using syntax stable across supported Python versions."""
+    """Hash declared signatures and decorators, including @cc.topic declarations."""
     classes = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.ClassDef)}
     signatures = [
         [name, [
-            [method.name, ast.unparse(method.args),
-             ast.unparse(method.returns)]
+            [method.name, [ast.unparse(decorator) for decorator in method.decorator_list],
+             ast.unparse(method.args), ast.unparse(method.returns)]
             for method in classes[name].body if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]]
         for name in RESOURCE_NAMES
@@ -52,3 +52,9 @@ class ContractVersionTests(unittest.TestCase):
         )
         self.assertNotEqual(changed, source)
         self.assertNotEqual(contract_signature_digest(changed), contract_signature_digest(source))
+
+    def test_signature_digest_changes_when_a_topic_decorator_changes(self):
+        source = CONTRACT_SOURCE.read_text(encoding="utf-8")
+        removed = source.replace("    @cc.topic\n", "", 1)
+        self.assertNotEqual(removed, source)
+        self.assertNotEqual(contract_signature_digest(removed), contract_signature_digest(source))

@@ -4,17 +4,17 @@ import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from blackboard.routing.fixtures.maintenance_answers import EMPTY_STAGE, stage_and_commit
+from blackboard.routing.fixtures.maintenance_answers import EMPTY_STAGE, coverage_events, stage_and_commit
 from support import FakeClock, seed_buddy
 from hey_my_buddy.blackboard.routing.maintenance_data import (
-    MAX_MICRO_TASKS, MAX_SUMMARY_CITATIONS, MAX_SUMMARY_KINDS, MAX_SUMMARY_TEXT_BYTES,
-    answer_schema, build_packet, merge_domain, pending, rename_domain, stage_answer, pending_count,
+    MAX_MICRO_TASKS, MAX_SUMMARY_CITATIONS, MAX_SUMMARY_KINDS, MAX_SUMMARY_TEXT_BYTES, MICRO_TASKS_MAX_BYTES,
+    answer_schema, build_packet, commit_staged, merge_domain, pending, rename_domain, stage_answer, pending_count,
 )
 from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.task_types import TASK_TYPES
-from hey_my_buddy.protocol.snapshot_query import kind_id
+from hey_my_buddy.protocol.snapshot_query import MAINTENANCE_SECTIONS, SnapshotQuery, kind_id
 from hey_my_buddy.blackboard.evaluation.models import append_correspondence, current_model, ensure_model_service
 
 
@@ -144,7 +144,7 @@ class MaintenanceDataTests(WorkflowTestCase):
                   "summaries": [valid, valid, {**valid, "kindId": "outside-batch"}]}
         self.assertEqual(schema_errors(answer, answer_schema()), [])
         with self.board_.store.db.read() as db:
-            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE, issued_events=[])
         self.assertEqual(staged["summaries"], {})
         self.assertIn(f"summaries[{kind['kindId']}]: duplicate kindId", feedback["errors"])
         self.assertIn("summaries[outside-batch]: unknown kindId", feedback["errors"])
@@ -176,33 +176,38 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run_id}))
             run_ids[kind_id] = run_id
 
-        packet = self.packet()
-        ordinary = next(kind for kind in packet["kinds"] if kind["harness"] == BUDDY["harness"])
-        self.assertEqual(ordinary["kindId"], ":".join(packet_key(ordinary)))
-        self.assertEqual({packet_key(kind): kind["kindId"] for kind in packet["kinds"] if kind["harness"] == "zcode"},
-                         {("zcode", model_id, effort): kind_id for model_id, effort, kind_id in cases})
-        schema = answer_schema()
-
-        answer = {
-            "newNodes": [{"id": "parser", "name": "Parsing", "definition": "Parsing work", "parentId": None}],
-            "merges": [],
-            "classifications": [{"runId": run_id, "domainNodeId": "parser", "taskType": "debug"}
-                                for run_id in packet["classificationRunIds"]],
-            "summaries": [{"kindId": ordinary["kindId"], "text": "Ordinary kind", "citations": []},
-                          *({"kindId": kind_id, "text": kind_id, "citations": [run_id]} for kind_id, run_id in run_ids.items())],
-        }
-        self.assertEqual(schema_errors(answer, schema), [])
         with self.board_.store.db.write() as db:
-            result = stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
-            self.assertEqual(result["errors"], [])
-            self.assertEqual(result["written"]["summaries"], len(cases) + 1)
+            for batch in range(2):
+                packet = build_packet(db)
+                summaries = []
+                for kind in packet["kinds"]:
+                    identifier = kind["kindId"]
+                    if kind["harness"] == "zcode":
+                        self.assertIn((*packet_key(kind)[1:], identifier), cases)
+                        citations = [run_ids[identifier]]
+                    else:
+                        self.assertEqual(identifier, ":".join(packet_key(kind)))
+                        citations = []
+                    summaries.append({"kindId": identifier, "text": identifier, "citations": citations})
+                answer = {
+                    "newNodes": [] if batch else [
+                        {"id": "parser", "name": "Parsing", "definition": "Parsing work", "parentId": None}],
+                    "merges": [],
+                    "classifications": [{"runId": run_id, "domainNodeId": "parser", "taskType": "debug"}
+                                        for run_id in packet["classificationRunIds"]],
+                    "summaries": summaries,
+                }
+                self.assertEqual(schema_errors(answer, answer_schema()), [])
+                result = stage_and_commit(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
+                self.assertEqual(result["errors"], [])
+                self.assertEqual(result["written"]["summaries"], len(summaries))
             rows = db.execute("SELECT s.model_id,s.effort,s.text,e.run_id FROM kind_summaries s"
                               " JOIN kind_summary_evidence e USING(harness,model_id,effort)"
                               " WHERE s.harness='zcode' AND e.cited=1")
             self.assertCountEqual([tuple(row) for row in rows],
                                   [(model_id, effort, kind_id, run_ids[kind_id]) for model_id, effort, kind_id in cases])
 
-    def test_six_summary_kinds_are_selected_and_the_rest_drain_in_the_next_batch(self):
+    def test_three_summary_kinds_follow_task_order_and_the_rest_remain_pending(self):
         kinds = [f"batch-kind-{index}" for index in range(9)]
         with self.board_.store.db.write() as db:
             for model in kinds:
@@ -214,8 +219,12 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
             self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
         first = self.packet()
-        self.assertEqual(len(first["kinds"]), 6)
-        original_ids = {kind["kindId"] for kind in first["kinds"]}
+        self.assertEqual(len(first["kinds"]), 3)
+        first_kinds = list(dict.fromkeys(
+            kind_id(turn["kind"]) for task in first["microTasks"]
+            for turn in task["result"]["turns"] if turn["kind"] and turn["failureCategory"] == "ability"))
+        self.assertEqual([kind["kindId"] for kind in first["kinds"]], first_kinds[:3])
+        original_ids = set(first_kinds[:3])
         answer = {"newNodes": [{"id": "work", "name": "Work", "definition": "Work evidence", "parentId": None}],
                   "merges": [],
                   "classifications": [{"runId": run_id, "domainNodeId": "work", "taskType": "change"}
@@ -224,10 +233,10 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             result = stage_and_commit(db, packet=first, answer=answer, maintenance_run_id=self.maintenance_id)
         self.assertEqual(result["errors"], [])
-        self.assertEqual(result["written"]["summaries"], 6)
+        self.assertEqual(result["written"]["summaries"], 3)
         rest = self.packet()
         self.assertEqual(rest["classificationRunIds"], [])
-        self.assertEqual(len(rest["kinds"]), 4)
+        self.assertEqual(len(rest["kinds"]), 3)
         self.assertTrue(original_ids.isdisjoint(kind["kindId"] for kind in rest["kinds"]))
 
     def test_full_multibyte_batch_fits_dsh_structured_answer_limit(self):
@@ -241,7 +250,9 @@ class MaintenanceDataTests(WorkflowTestCase):
                               cwd=str(self.workdir(f"budget-{index}")), kind="existing")
             run_ids.append(row["runId"])
         packet["classificationRunIds"] = run_ids
-        packet["microTasks"] = [{"runId": run_id} for run_id in run_ids]
+        sample = packet["microTasks"][0]
+        packet["microTasks"] = [{**sample, "runId": run_id} for run_id in run_ids]
+        events = coverage_events(packet)
         citations = run_ids[:MAX_SUMMARY_CITATIONS]
         kind = packet["kinds"][0]
         packet["kinds"] = [
@@ -262,20 +273,20 @@ class MaintenanceDataTests(WorkflowTestCase):
                           for entry in packet["kinds"]],
         }
         with self.board_.store.db.read() as db:
-            staged, feedback = stage_answer(db, packet=packet, answer=canonical_json(answer), previous=EMPTY_STAGE)
+            staged, feedback = stage_answer(db, packet=packet, answer=canonical_json(answer), previous=EMPTY_STAGE, issued_events=events)
             self.assertEqual(feedback["errors"], [])
             self.assertEqual(len(staged["classifications"]), MAX_MICRO_TASKS)
             self.assertEqual(len(staged["summaries"]), MAX_SUMMARY_KINDS)
             self.assertLess(len(canonical_json(answer).encode("utf-8")), 65_536)
             answer["summaries"][0]["text"] += "界"
-            answer["summaries"][1]["citations"] = run_ids[:MAX_SUMMARY_CITATIONS + 1]
-            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+            answer["summaries"][1]["citations"] = [run_ids[0]] * (MAX_SUMMARY_CITATIONS + 1)
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE, issued_events=events)
         self.assertIn(f"summaries[{packet['kinds'][0]['kindId']}]: text exceeds 4096 UTF-8 bytes", feedback["errors"])
         self.assertIn("$.summaries[1].citations: maxItems", feedback["errors"])
         self.assertEqual(len(staged["summaries"]), MAX_SUMMARY_KINDS - 2)
         answer["classifications"].append(answer["classifications"][0])
         with self.board_.store.db.read() as db:
-            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+            staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE, issued_events=events)
         self.assertIn("$.classifications: maxItems", feedback["errors"])
         self.assertIn(f"classifications[{run_ids[0]}]: duplicate runId", feedback["errors"])
         self.assertIn(f"classifications[{run_ids[0]}]: missing runId", feedback["errors"])
@@ -356,7 +367,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             node[field] = value
             answer = {"newNodes": [node], "merges": [], "classifications": [], "summaries": []}
             with self.subTest(field=field), self.board_.store.db.read() as db:
-                staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE)
+                staged, feedback = stage_answer(db, packet=packet, answer=answer, previous=EMPTY_STAGE, issued_events=[])
             self.assertEqual(staged["tree"], [])
             self.assertTrue(any("NUL" in error for error in feedback["errors"]), feedback["errors"])
 
@@ -768,7 +779,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(applied["errors"], [])
         self.assertEqual(applied["written"]["classifications"], 2)
 
-    def test_sixty_classified_tasks_are_read_in_two_batches_without_losing_progress(self):
+    def test_sixty_classified_tasks_drain_in_sixteen_task_batches(self):
         for number in range(2, 60):
             run = self.submit(self.board_, request_id=f"read-evidence-{number}", task=f"Evidence {number}",
                               cwd=str(self.workdir(f"read-evidence-{number}")), kind="existing")
@@ -780,31 +791,149 @@ class MaintenanceDataTests(WorkflowTestCase):
                        (self.maintenance_id,))
             db.executemany("INSERT INTO micro_task_classifications VALUES(?,'existing','review',?)",
                            [(run["runId"], self.maintenance_id) for run in self.runs])
-            self.assertEqual(pending_count(db), 60)
-            first = build_packet(db)
-            self.assertEqual(len(first["microTasks"]), 50)
-            self.assertEqual(first["classificationRunIds"], [])
-            self.assertTrue(all(item["classification"] == {"domainNodeId": "existing", "taskType": "review"}
-                                for item in first["microTasks"]))
-            first_ids = {item["runId"] for item in first["microTasks"]}
-            result = stage_and_commit(db, packet=first, answer={
-                "newNodes": [], "merges": [], "classifications": [],
-                "summaries": self.summary(first, [first["microTasks"][0]["runId"]]),
-            }, maintenance_run_id=self.maintenance_id)
-            self.assertEqual(result["errors"], [])
-            self.assertEqual(pending_count(db), 10)
-            second = build_packet(db)
-            self.assertEqual(len(second["microTasks"]), 10)
-            self.assertFalse(first_ids & {item["runId"] for item in second["microTasks"]})
-            result = stage_and_commit(db, packet=second, answer={
-                "newNodes": [], "merges": [], "classifications": [],
-                "summaries": self.summary(second, [second["microTasks"][0]["runId"]]),
-            }, maintenance_run_id=self.maintenance_id)
-            self.assertEqual(result["errors"], [])
+            seen = set()
+            for size in (16, 16, 16, 12):
+                self.assertEqual(pending_count(db), 60 - len(seen))
+                packet = build_packet(db)
+                self.assertEqual(len(packet["microTasks"]), size)
+                self.assertEqual(packet["classificationRunIds"], [])
+                self.assertTrue(all(item["classification"] == {"domainNodeId": "existing", "taskType": "review"}
+                                    for item in packet["microTasks"]))
+                ids = {item["runId"] for item in packet["microTasks"]}
+                self.assertTrue(ids.isdisjoint(seen))
+                seen.update(ids)
+                result = stage_and_commit(db, packet=packet, answer={
+                    "newNodes": [], "merges": [], "classifications": [],
+                    "summaries": self.summary(packet, [packet["microTasks"][0]["runId"]]),
+                }, maintenance_run_id=self.maintenance_id)
+                self.assertEqual(result["errors"], [])
             self.assertEqual(pending_count(db), 0)
             self.assertIsNone(build_packet(db))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence").fetchone()[0], 60)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence WHERE cited=1").fetchone()[0], 1)
+
+    def test_packet_budget_counts_utf8_brackets_and_commas_and_keeps_oversized_first_task(self):
+        with self.board_.store.db.write() as db:
+            packet = build_packet(db)
+            first, second = packet["microTasks"]
+            budget = 128 * 1024
+            self.assertEqual(MICRO_TASKS_MAX_BYTES, budget)
+            room = budget - len(canonical_json(packet["microTasks"]).encode("utf-8"))
+            multibyte = "界" * (room // 3) + "x" * (room % 3)
+
+            def set_task(item, value):
+                db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?",
+                           (value, item["runId"]))
+
+            set_task(second, second["task"] + multibyte)
+            full = build_packet(db)
+            self.assertEqual(len(canonical_json(full["microTasks"]).encode("utf-8")), budget)
+            self.assertEqual([task["runId"] for task in full["microTasks"]], [first["runId"], second["runId"]])
+            set_task(second, second["task"] + multibyte + "界")
+            cut = build_packet(db)
+            self.assertEqual(cut["microTasks"], [first])
+            self.assertEqual(cut["classificationRunIds"], [first["runId"]])
+            for kind in cut["kinds"]:
+                self.assertEqual(kind["unreadRunIds"], [first["runId"]])
+                self.assertEqual(kind["citationRunIds"], [first["runId"]])
+
+            oversized = "界" * (budget // 3 + 1) + "end"
+            set_task(first, oversized)
+            single = build_packet(db)
+            self.assertEqual(single["microTasks"], [{**first, "task": oversized}])
+            result = stage_and_commit(db, packet=single, answer={
+                "newNodes": [{"id": "work", "name": "Work", "definition": "Work evidence", "parentId": None}],
+                "merges": [], "classifications": [
+                    {"runId": first["runId"], "domainNodeId": "work", "taskType": "review"}],
+                "summaries": self.summary(single),
+            }, maintenance_run_id=self.maintenance_id)
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(build_packet(db)["classificationRunIds"], [second["runId"]])
+
+    def test_missing_reads_are_grouped_and_unstaged_entries_can_be_rewritten(self):
+        packet = self.packet()
+        kind = packet["kinds"][0]
+        second = {**kind, "modelId": "also-unread"}
+        packet["kinds"].append({**second, "kindId": kind_id(second)})
+        answer = {"newNodes": [{"id": "work", "name": "Work", "definition": "Work evidence", "parentId": None}],
+                  "merges": [], "classifications": [
+                      {"runId": run_id, "domainNodeId": "work", "taskType": "review"}
+                      for run_id in packet["classificationRunIds"]], "summaries": self.summary(packet)}
+        first, other = packet["classificationRunIds"]
+        packet["microTasks"][0]["task"] = "界" * 12_000
+        with self.board_.store.db.read() as db:
+            query = SnapshotQuery(packet, plane="maintenance")
+            _, partial = query.call("query_micro_tasks", {"runIds": [first], "sections": ["task"]})
+            staged, feedback = stage_answer(db, packet=packet, answer=answer,
+                                            previous=EMPTY_STAGE, issued_events=[partial])
+            self.assertEqual(staged["classifications"], {})
+            self.assertEqual(staged["summaries"], {})
+            self.assertEqual(feedback["errors"], [])
+            self.assertEqual({row["runId"] for row in feedback["missingReads"]}, {first, other})
+            self.assertEqual(len(feedback["missingReads"]), 2)
+            for row in feedback["missingReads"]:
+                self.assertEqual([item["section"] for item in row["sections"]], list(MAINTENANCE_SECTIONS))
+            first_reads = next(row for row in feedback["missingReads"] if row["runId"] == first)
+            self.assertIsNotNone(first_reads["sections"][0]["cursor"])
+
+            rewritten = {**answer, "newNodes": [], "classifications": [{**item, "taskType": "debug"}
+                          for item in answer["classifications"]], "summaries": [
+                              {**item, "text": "Corrected summary"} for item in answer["summaries"]]}
+            covered = coverage_events(packet, [{"runIds": [first, other]}])
+            restaged, correction = stage_answer(db, packet=packet, answer=rewritten,
+                                               previous=staged, issued_events=covered)
+        self.assertEqual(correction["errors"], [])
+        self.assertEqual(correction["missingReads"], [])
+        self.assertEqual({item["taskType"] for item in restaged["classifications"].values()}, {"debug"})
+        self.assertEqual({item["text"] for item in restaged["summaries"].values()}, {"Corrected summary"})
+
+    def test_staged_summary_invalidated_by_deleted_citation_can_be_rewritten(self):
+        from contextlib import ExitStack
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion
+
+        packet = self.packet()
+        first, second = packet["classificationRunIds"]
+        events = coverage_events(packet)
+        kind_key = packet["kinds"][0]["kindId"]
+        answer = {"newNodes": [{"id": "work", "name": "Work", "definition": "Work evidence", "parentId": None}],
+                  "merges": [], "classifications": [
+                      {"runId": first, "domainNodeId": "work", "taskType": "review"}],
+                  "summaries": [{"kindId": kind_key, "text": "Cites both runs", "citations": [first, second]}]}
+        with self.board_.store.db.read() as db:
+            staged, first_feedback = stage_answer(db, packet=packet, answer=answer,
+                                                  previous=EMPTY_STAGE, issued_events=events)
+        self.assertEqual(first_feedback["staged"]["summaries"], [kind_key])
+        self.assertEqual(first_feedback["errors"], [f"classifications[{second}]: missing runId"])
+
+        with ExitStack() as stack:
+            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_private_roots"):
+                stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
+            deleted = macro_task_deletion.delete(self.board_.store, f"run:{first}", 1)
+        self.assertEqual(deleted["state"], "deleted")
+
+        with self.board_.store.db.read() as db:
+            without_rewrite, missing_rewrite = stage_answer(
+                db, packet=packet, answer={"newNodes": [], "merges": [], "classifications": [
+                    {"runId": second, "domainNodeId": "work", "taskType": "review"}], "summaries": []},
+                previous=staged, issued_events=events)
+        self.assertEqual(without_rewrite["summaries"], {})
+        self.assertEqual(missing_rewrite["errors"],
+                         [f"summaries[{kind_key}]: cited micro task was deleted; rewrite summary"])
+
+        rewritten = {"newNodes": [], "merges": [], "classifications": [
+            {"runId": second, "domainNodeId": "work", "taskType": "review"}],
+            "summaries": [{"kindId": kind_key, "text": "Rewritten without deleted run", "citations": [second]}]}
+        with self.board_.store.db.write() as db:
+            restaged, second_feedback = stage_answer(db, packet=packet, answer=rewritten,
+                                                     previous=staged, issued_events=events)
+            self.assertEqual(second_feedback["errors"], [])
+            self.assertEqual(second_feedback["missingReads"], [])
+            self.assertEqual(restaged["summaries"][kind_key]["citations"], [second])
+            written, commit_errors = commit_staged(
+                db, packet=packet, answer=rewritten, staged=restaged,
+                verified_events=events, maintenance_run_id=self.maintenance_id)
+        self.assertEqual(commit_errors, [])
+        self.assertEqual(written["summaries"], 1)
 
     def test_only_ability_rounds_require_kind_summary(self):
         first, second = (run["runId"] for run in self.runs)

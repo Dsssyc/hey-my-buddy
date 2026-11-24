@@ -73,7 +73,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
 
         def service(method, params, directory):
             self.assertIs(directory, self.state)
-            if method in ('task_get', 'task_wait'):
+            if method == 'task_observe':
                 return dict(run)
             if method == "workflow_get":
                 return {"state": "cancelled", "actions": run["actions"],
@@ -99,17 +99,16 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         def service(method, params, directory):
             self.assertIs(directory, self.state)
             calls.append((method, params))
-            if method == "task_get":
+            if method == "task_observe":
+                self.assertEqual(params["runId"], "parent")
+                if sum(m == "task_observe" for m, _ in calls) == 1:
+                    return dict(run)
+                clock.advance(0.1)
+                run["workflowShutdown"] = {**pending, "descendantsConfirmed": True, "unconfirmedRunIds": [], "unconfirmedCount": 0}
                 return dict(run)
             if method == "workflow_get":
                 return {"state": "cancelled", "actions": run["actions"],
                         "finalArtifactId": None, "activeRequest": None}
-            if method == "task_wait":
-                self.assertEqual(params["runId"], "parent")
-                self.assertEqual(params['afterRevision'], 9)
-                clock.advance(0.1)
-                run["workflowShutdown"] = {**pending, "descendantsConfirmed": True, "unconfirmedRunIds": [], "unconfirmedCount": 0}
-                return dict(run)
             if method == "task_result":
                 return {**run, "result": {"status": "cancelled"}}
             raise AssertionError(f"unexpected operation {method}")
@@ -118,7 +117,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "cancelled")
         self.assertTrue(result["shutdownConfirmed"])
         self.assertTrue(result["shutdown"]["descendantsConfirmed"])
-        self.assertEqual(sum(method == "task_wait" for method, _ in calls), 1)
+        self.assertEqual(sum(method == "task_observe" for method, _ in calls), 2)
 
     def test_unknown_descendant_stop_expires_only_the_wait(self):
         clock = VirtualClock()
@@ -126,13 +125,15 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         run = {"runId": "parent", "state": "cancelled", "workflowState": "cancelled", "revision": 9,
                "actions": ["get", "conclude"],
                "resultAvailable": True, "shutdownConfirmed": True, "workflowShutdown": pending}
+        observes = 0
 
         def service(method, params, directory):
+            nonlocal observes
             self.assertIs(directory, self.state)
-            if method == "task_get":
-                return dict(run)
-            if method == "task_wait":
-                clock.advance(params["timeoutMs"] / 1000)
+            if method == "task_observe":
+                observes += 1
+                if observes == 2:
+                    clock.advance(1)
                 return dict(run)
             raise AssertionError(f"unexpected operation {method}")
 
@@ -151,15 +152,14 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         def service(method, params, directory):
             self.assertIs(directory, self.state)
             calls.append(method)
-            if method == "task_get":
-                return dict(run)
-            if method == "task_wait":
-                clock.advance(params["timeoutMs"] / 1000)
+            if method == "task_observe":
+                if len(calls) == 2:
+                    clock.advance(1)
                 return dict(run)
             raise AssertionError(f"await must stay read-only, but called {method!r}")
 
         result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=clock)
         self.assertEqual(result["outcome"], "wait-timeout")
         self.assertTrue(result["timedOut"])
-        self.assertEqual(set(calls) - {"task_get", "task_wait"}, set(), "a timeout never starts or cancels the micro task")
+        self.assertEqual(set(calls) - {"task_observe"}, set(), "a timeout never starts or cancels the micro task")
         self.assertEqual(result["actions"], ["await", "get", "cancel"])

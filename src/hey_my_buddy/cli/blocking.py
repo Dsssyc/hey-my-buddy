@@ -1,4 +1,4 @@
-"""Host blocking calls over bounded private service waits."""
+"""Host blocking calls over one read-only topic subscription on BuddyControl."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,11 +7,11 @@ import uuid
 from typing import Any, Callable
 
 from ..protocol.requests import AwaitRequest, ConcludeRequest, dump_request, parse_request
-from ..protocol.transport import ServiceError, _call_service
+from ..protocol.transport import ServiceError, _call_service, _open_wait_session
 from ..protocol.awaiting import message_kind, shutdown_confirmed as _shutdown_confirmed
 
-WAIT_SLICE_MS = 30000
 UPGRADE_HANDOVER_POLL_SECONDS = 0.2
+CAPACITY_BACKOFF_SECONDS = 0.05
 
 
 class WaitAbandoned(RuntimeError):
@@ -112,21 +112,8 @@ def _upgrade_handover(state_dir: Path, deadline: float, clock: Callable[[], floa
     return True
 
 
-def _wait_slice(run: dict, *, deadline: float, clock: Callable[[], float],
-                service: Callable[..., dict], state_dir: Path, consume_reminders: bool,
-                reminder_wait_id: str | None = None) -> dict | None:
-    """Use one bounded task wait and rearm it when an upgrade changes owners."""
-    timeout_ms = max(1, int(min(WAIT_SLICE_MS, (deadline - clock()) * 1000)))
-    params = {"runId": run["runId"], "afterRevision": run.get("revision"),
-              "timeoutMs": timeout_ms, "consumeReminders": consume_reminders}
-    if reminder_wait_id is not None:
-        params["reminderWaitId"] = reminder_wait_id
-    try:
-        return service("task_wait", params, state_dir)
-    except ServiceError:
-        if _upgrade_handover(state_dir, deadline, clock):
-            return None
-        raise
+def _with_credential(params: dict, credential: str | None) -> dict:
+    return {**params, "credential": credential} if credential is not None else dict(params)
 
 
 def await_run(
@@ -134,47 +121,93 @@ def await_run(
     state_dir: Path,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
+    *,
+    credential: str | None = None,
 ) -> dict:
-    """Wait for one admitted run, preserving the existing wakeup conditions."""
+    """Wait for one admitted run over one read-only topic subscription."""
     request = params if isinstance(params, AwaitRequest) else parse_request("await", params)
     run_id, wait_seconds = request.runId, request.waitSeconds
     started = clock()
     deadline = started + wait_seconds
     reminder_wait_id = uuid.uuid4().hex
+    use_session = service is _call_service
+    session = None
+    subscribed = False
+    run: dict | None = None
+
+    def close_session() -> None:
+        nonlocal session, subscribed
+        if session is not None:
+            session.close()
+            session = None
+        subscribed = False
+
+    def call_op(operation: str, payload: dict) -> dict:
+        wired = _with_credential(payload, credential)
+        if session is not None:
+            return session.call(operation, wired)
+        return service(operation, wired, state_dir)
+
+    def ensure_session():
+        nonlocal session
+        if not use_session or session is not None:
+            return
+        remaining = deadline - clock()
+        opened = _open_wait_session(state_dir, timeout=max(0.05, remaining) if remaining > 0 else None)
+        opened.__enter__()
+        session = opened
+
+    def observe_once() -> dict:
+        return call_op("task_observe", {"runId": run_id, "reminderWaitId": reminder_wait_id})
+
     try:
-        run = service("task_get", {"runId": run_id}, state_dir)
-        # An already visible workflow boundary must not bypass the one-time
-        # delivery of a new issue. This also keeps Lead's doorbell and its next
-        # await consistent when the issue arrives after an owned delivery.
-        if message_kind(run) is not None and not run.get('reminder') and not run.get('issue'):
-            run = service('task_wait', {'runId': run_id, 'timeoutMs': 0, 'consumeReminders': True,
-                                        'reminderWaitId': reminder_wait_id}, state_dir)
         while True:
+            try:
+                ensure_session()
+                if subscribed and session is not None:
+                    session.prepare_read()
+                run = observe_once()
+            except ServiceError as error:
+                if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                    remaining = deadline - clock()
+                    if remaining > 0:
+                        if subscribed and session is not None:
+                            session.wait_wake(min(CAPACITY_BACKOFF_SECONDS, remaining), clock=clock)
+                        else:
+                            time.sleep(min(CAPACITY_BACKOFF_SECONDS, remaining))
+                        continue
+                close_session()
+                if _upgrade_handover(state_dir, deadline, clock):
+                    continue
+                if run is None:
+                    raise
+                return _view(run, outcome="unavailable", started=started,
+                             wait_seconds=wait_seconds, clock=clock, error=error.payload())
+
             reminder = run.get("reminder")
             kind = message_kind(run)
-            if kind == 'issue':
-                return _view(run, outcome='issue', started=started, wait_seconds=wait_seconds, clock=clock)
+            if kind == "issue":
+                return _view(run, outcome="issue", started=started, wait_seconds=wait_seconds, clock=clock)
             if isinstance(reminder, dict):
                 return _view(run, outcome=reminder["kind"], started=started,
                              wait_seconds=wait_seconds, clock=clock, reminder=reminder)
-            if kind == 'paused':
-                return _view(run, outcome='paused', started=started,
+            if kind == "paused":
+                return _view(run, outcome="paused", started=started,
                              wait_seconds=wait_seconds, clock=clock)
             workflow_state = run.get("workflowState")
             if workflow_state == "awaiting-host":
                 try:
-                    run = _workflow_facts(run, service=service, state_dir=state_dir)
+                    run = _workflow_facts(run, service=lambda op, p, _d: call_op(op, p), state_dir=state_dir)
                 except ServiceError as error:
                     return _view(run, outcome="unavailable", started=started,
                                  wait_seconds=wait_seconds, clock=clock,
                                  error=error.payload())
                 if run["workflowState"] != "awaiting-host":
-                    run = service("task_get", {"runId": run_id}, state_dir)
                     continue
                 result = None
                 if run.get("resultAvailable"):
                     try:
-                        result = _read_result(run, service=service, state_dir=state_dir)
+                        result = _read_result(run, service=lambda op, p, _d: call_op(op, p), state_dir=state_dir)
                     except ServiceError as error:
                         return _view(run, outcome="waiting-host", started=started,
                                      wait_seconds=wait_seconds, clock=clock,
@@ -187,19 +220,33 @@ def await_run(
             if remaining <= 0:
                 return _view(run, outcome="wait-timeout", started=started,
                              wait_seconds=wait_seconds, clock=clock)
-            try:
-                next_run = _wait_slice(run, deadline=deadline, clock=clock, service=service,
-                                       state_dir=state_dir, consume_reminders=True,
-                                       reminder_wait_id=reminder_wait_id)
-            except ServiceError as error:
-                return _view(run, outcome="unavailable", started=started,
-                             wait_seconds=wait_seconds, clock=clock,
-                             error=error.payload())
-            if next_run is not None:
-                run = next_run
+            if use_session:
+                assert session is not None
+                try:
+                    if not subscribed:
+                        session.subscribe()
+                        subscribed = True
+                        # Mandatory post-READY re-check so a change between the
+                        # initial observation and subscription READY is never lost.
+                        continue
+                    session.wait_wake(remaining, clock=clock)
+                except ServiceError as error:
+                    if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                        remaining = deadline - clock()
+                        if remaining > 0:
+                            time.sleep(min(CAPACITY_BACKOFF_SECONDS, remaining))
+                            continue
+                    close_session()
+                    if _upgrade_handover(state_dir, deadline, clock):
+                        continue
+                    return _view(run, outcome="unavailable", started=started,
+                                 wait_seconds=wait_seconds, clock=clock,
+                                 error=error.payload())
+
+        assert run is not None
         if not run.get("resultAvailable"):
             try:
-                run = _workflow_facts(run, service=service, state_dir=state_dir)
+                run = _workflow_facts(run, service=lambda op, p, _d: call_op(op, p), state_dir=state_dir)
             except ServiceError as error:
                 return _view(run, outcome="unavailable", started=started,
                              wait_seconds=wait_seconds, clock=clock,
@@ -208,8 +255,8 @@ def await_run(
                          wait_seconds=wait_seconds, clock=clock,
                          error={"code": "RESULT_NOT_AVAILABLE", "message": "No persisted execution result is available"})
         try:
-            run = _workflow_facts(run, service=service, state_dir=state_dir)
-            result = _read_result(run, service=service, state_dir=state_dir)
+            run = _workflow_facts(run, service=lambda op, p, _d: call_op(op, p), state_dir=state_dir)
+            result = _read_result(run, service=lambda op, p, _d: call_op(op, p), state_dir=state_dir)
         except ServiceError as error:
             return _view(run, outcome="result-unavailable", started=started,
                          wait_seconds=wait_seconds, clock=clock,
@@ -222,6 +269,8 @@ def await_run(
                      started=started, wait_seconds=wait_seconds, clock=clock, result=result)
     except KeyboardInterrupt:
         raise WaitAbandoned(run_id) from None
+    finally:
+        close_session()
 
 
 def conclude_run(
@@ -229,10 +278,12 @@ def conclude_run(
     state_dir: Path,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
+    *,
+    credential: str | None = None,
 ) -> dict:
     """Conclude, then wait for confirmed tree shutdown before an identical retry."""
     request = params if isinstance(params, ConcludeRequest) else parse_request("conclude", params)
-    wire = dump_request(request)
+    wire = _with_credential(dump_request(request), credential)
     wire.pop("waitSeconds", None)
     run_id = request.runId
     wait_seconds = request.waitSeconds
@@ -251,6 +302,16 @@ def conclude_run(
             raise
 
     run: dict | None = None
+    use_session = service is _call_service
+    session = None
+    subscribed = False
+
+    def close_session() -> None:
+        nonlocal session, subscribed
+        if session is not None:
+            session.close()
+            session = None
+        subscribed = False
 
     def pending_error(error: dict, *, timed_out: bool = False,
                       conclusion_recorded: bool | None = False) -> dict:
@@ -272,6 +333,7 @@ def conclude_run(
     try:
         while True:
             if run is not None and _shutdown_confirmed(run):
+                close_session()
                 try:
                     retry_sent = True
                     return service("conclude", wire, state_dir)
@@ -287,26 +349,61 @@ def conclude_run(
                     uncertain_reply = False
                     run = None
                     continue
-            if deadline - clock() <= 0:
+            remaining = deadline - clock()
+            if remaining <= 0:
                 return pending_error({"code": "SHUTDOWN_UNCONFIRMED",
                                       "message": "Cancellation is recorded; shutdown is not confirmed and no conclusion has been recorded"},
                                      timed_out=True)
-            if run is None:
+            try:
+                if use_session:
+                    if session is None:
+                        opened = _open_wait_session(state_dir, timeout=max(0.05, remaining))
+                        opened.__enter__()
+                        session = opened
+                    if subscribed:
+                        session.prepare_read()
+                    run = session.call("task_observe", _with_credential({"runId": run_id}, credential))
+                else:
+                    run = service("task_observe", _with_credential({"runId": run_id}, credential), state_dir)
+            except ServiceError as error:
+                if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                    remaining = deadline - clock()
+                    if remaining > 0:
+                        if subscribed and session is not None:
+                            session.wait_wake(min(CAPACITY_BACKOFF_SECONDS, remaining), clock=clock)
+                        else:
+                            time.sleep(min(CAPACITY_BACKOFF_SECONDS, remaining))
+                        continue
+                close_session()
+                if _upgrade_handover(state_dir, deadline, clock):
+                    continue
+                return pending_error(error.payload())
+            if _shutdown_confirmed(run):
+                continue
+            remaining = deadline - clock()
+            if remaining <= 0:
+                continue
+            if use_session:
+                assert session is not None
                 try:
-                    run = service("task_get", {"runId": run_id}, state_dir)
+                    if not subscribed:
+                        session.subscribe()
+                        subscribed = True
+                        continue
+                    session.wait_wake(remaining, clock=clock)
                 except ServiceError as error:
+                    if error.code == "C_TWO_CALL_CAPACITY_EXCEEDED":
+                        remaining = deadline - clock()
+                        if remaining > 0:
+                            time.sleep(min(CAPACITY_BACKOFF_SECONDS, remaining))
+                            continue
+                    close_session()
                     if _upgrade_handover(state_dir, deadline, clock):
                         continue
                     return pending_error(error.payload())
-                continue
-            try:
-                next_run = _wait_slice(run, deadline=deadline, clock=clock, service=service,
-                                       state_dir=state_dir, consume_reminders=False)
-            except ServiceError as error:
-                return pending_error(error.payload())
-            if next_run is not None:
-                run = next_run
     except KeyboardInterrupt:
         return pending_error({"code": "WAIT_ABANDONED",
                               "message": "The conclude wait was interrupted after cancellation was requested"},
                              conclusion_recorded=None if retry_sent else False)
+    finally:
+        close_session()

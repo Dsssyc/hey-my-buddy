@@ -1,51 +1,102 @@
 import i18n from "i18next";
 import type zh from "./zh/reasons";
+import type zhShell from "./zh/shell";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
 import { formatCoolingTime, formatDateTime, formatList, formatNumber } from "./format";
 
-function maintenanceValidationError(value: unknown): string {
-  const error = typeof value === "string" ? value : "";
-  let key = "unknown";
-  if (error === "answer-invalid-json") key = "invalidJson";
-  else if (error === "summary-citation-outside-batch") key = "citationOutsideBatch";
-  else if (error.startsWith("answer")) {
-    const issue = error.split(": ").at(-1);
-    if (issue === "enum" && error.includes(".citations")) key = "citationOutsideBatch";
-    else key = ({
-      type: "wrongType", enum: "invalidValue", required: "requiredField",
-      additionalProperties: "unexpectedField", minLength: "textTooShort",
-      maxLength: "textTooLong", maxItems: "tooManyItems",
-    } as Record<string, string>)[issue ?? ""] ?? "unknown";
-  } else if (error.startsWith("newNodes[")) {
-    if (error.endsWith(": duplicate id")) key = "duplicateNode";
-    else if (error.includes("name and definition must be nonblank")) key = "blankNode";
-    else if (error.includes("existing node cannot be changed")) key = "changedNode";
-    else if (error.includes("parent is not active") || error.includes("parent must be an active node")) key = "inactiveParent";
-    else if (error.includes("parent cycle")) key = "parentCycle";
-    else if (error.includes("active domain name already exists")) key = "duplicateName";
-  } else if (error.startsWith("merges[")) {
-    if (error.includes("duplicate source")) key = "duplicateMerge";
-    else if (error.includes("merge source is not active")) key = "inactiveMergeSource";
-    else if (error.includes("merge target must be an active node")) key = "inactiveMergeTarget";
-    else key = "invalidMerge";
-  } else if (error.startsWith("classifications[")) {
-    if (error.includes("duplicate runId")) key = "duplicateClassification";
-    else if (error.includes("domain node is not active")) key = "inactiveClassificationNode";
-    else if (error.includes("missing classification")) key = "missingClassification";
-  } else if (error.startsWith("summaries[")) {
-    if (error.includes("duplicate citation")) key = "duplicateCitation";
-    else if (error.includes("cited micro task was deleted")) key = "deletedCitation";
+type MaintenanceIssue = keyof typeof zhShell.maintenanceValidation;
+
+const schemaIssues = new Map<string, MaintenanceIssue>([
+  ["type", "wrongType"],
+  ["enum", "invalidValue"],
+  ["required", "requiredField"],
+  ["additionalProperties", "unexpectedField"],
+  ["minLength", "textTooShort"],
+  ["maxLength", "textTooLong"],
+  ["maxItems", "tooManyItems"],
+]);
+
+const entryIssues = new Map<string, MaintenanceIssue>([
+  ["invalid Unicode", "invalidUnicode"],
+  ["conflicts with staged entry", "stagedConflict"],
+  ["duplicate id", "duplicateNode"],
+  ["name and definition must be nonblank", "blankNode"],
+  ["existing node cannot be changed", "changedNode"],
+  ["domain node fields must not contain NUL characters", "nulNode"],
+  ["parent is not active", "inactiveParent"],
+  ["parent must be an active node", "inactiveParent"],
+  ["parent cycle", "parentCycle"],
+  ["domain parent cycle at", "parentCycle"],
+  ["active domain name already exists", "duplicateName"],
+  ["duplicate source", "duplicateMerge"],
+  ["duplicate sourceId", "duplicateMerge"],
+  ["merge source is not active", "inactiveMergeSource"],
+  ["merge target must be an active node", "inactiveMergeTarget"],
+  ["duplicate runId", "duplicateClassification"],
+  ["domain node is not active", "inactiveClassificationNode"],
+  ["unknown runId", "unknownRun"],
+  ["missing classification", "missingClassification"],
+  ["missing runId", "missingClassification"],
+  ["read the complete task section", "unreadTaskSection"],
+  ["duplicate kindId", "duplicateSummary"],
+  ["unknown kindId", "unknownKind"],
+  ["missing kindId", "missingSummary"],
+  ["read all five sections of every unread micro task in this batch", "unreadSummarySections"],
+  ["duplicate citation", "duplicateCitation"],
+  ["citation is outside the frozen kind evidence", "citationOutsideEvidence"],
+  ["cited micro task was deleted; rewrite summary", "deletedCitation"],
+]);
+
+function maintenanceValidationIssue(error: unknown): { key: MaintenanceIssue; target?: string } {
+  if (error === "answer-invalid-json") return { key: "invalidJson" };
+  if (error === "summary-citation-outside-batch") return { key: "citationOutsideBatch" };
+  if (typeof error !== "string") return { key: "unknown" };
+
+  const schema = error.match(/^((?:\$|answer)(?:[.\[].*)?): (\w+)$/s);
+  if (schema) {
+    const [, path, keyword] = schema;
+    // Earlier answers reported out-of-batch citations as enum violations.
+    const key = keyword === "enum" && path.startsWith("answer.") && path.includes(".citations")
+      ? "citationOutsideBatch" : schemaIssues.get(keyword) ?? "unknown";
+    return { key, target: path };
   }
-  return i18n.t(`shell:maintenanceValidation.${key}`);
+
+  if (!/^(newNodes|merges|classifications|summaries)\[/.test(error)) return { key: "unknown" };
+  let firstTarget: string | undefined;
+  // An identifier can contain a closing bracket. Find the separator followed by a known issue.
+  for (const separator of error.matchAll(/\]: /g)) {
+    const target = error.slice(0, separator.index + 1);
+    firstTarget ??= target;
+    const issue = error.slice(separator.index + separator[0].length);
+    const key = entryIssues.get(issue.split(": ", 1)[0])
+      ?? (/^domain parent cycle at /s.test(issue) ? "parentCycle" : undefined)
+      ?? (/^text exceeds \d+ UTF-8 bytes$/.test(issue) ? "summaryTooLong" : undefined);
+    if (key) return { key, target };
+  }
+  return { key: "unknown", target: firstTarget };
+}
+
+function maintenanceValidationText(errors: unknown[]): string {
+  const groups = new Map<MaintenanceIssue, Set<string>>();
+  for (const error of errors) {
+    const { key, target } = maintenanceValidationIssue(error);
+    let targets = groups.get(key);
+    if (!targets) groups.set(key, targets = new Set());
+    if (target !== undefined) targets.add(target);
+  }
+  return formatList([...groups].map(([key, targets]) => i18n.t(
+    `shell:maintenanceValidation.${key}.${targets.size > 1 ? "multiple" : "single"}`,
+    { total: formatNumber(targets.size) },
+  )));
 }
 
 export function reasonParameterText(value: unknown, key: string, code: string): string {
   if (isReason(value)) return reasonText(value);
   if (Array.isArray(value)) {
+    if (key === "errors" && code === "maintenance-answer-invalid") return maintenanceValidationText(value);
     if (!value.length && (key === "processes" || key === "unreadableProcesses")) return i18n.t("shell:reasonNoProcesses");
-    return formatList(value.map(item => key === "errors" && code === "maintenance-answer-invalid"
-      ? maintenanceValidationError(item) : reasonParameterText(item, key, code)));
+    return formatList(value.map(item => reasonParameterText(item, key, code)));
   }
   if (typeof value === "number") return formatNumber(value);
   if (typeof value === "boolean") return i18n.t(`shell:reasonValue.${value ? "yes" : "no"}`);

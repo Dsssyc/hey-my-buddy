@@ -7,16 +7,15 @@ payloads travel as bounded JSON strings over C-Two. This DTO is a
 no FastDB DTO is used here, and a non-Python client must define its own contract.
 
 
-``BuddyControl`` owns mutations and reads. ``BuddyWait`` is a *separate* resource
-name with its own bounded capacity, so many waiting clients can never consume the
-control capacity that cancel, renew and result commits need.
+``BuddyControl`` owns mutations, reads and the ``board_changed`` change-signal
+topic. Blocking waits run on the client over one multiplexed ``BuddyControl``
+connection, so waiting clients occupy no server callback threads.
 """
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.76.0"
+CONTRACT_VERSION = "0.78.0"
 CONTROL_NAME = "hey-my-buddy-control"
-WAIT_NAME = "hey-my-buddy-wait"
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
@@ -97,6 +96,9 @@ class BuddyControl:
         ...
 
     def task_cancel(self, request_json: str) -> str:
+        ...
+
+    def task_observe(self, request_json: str) -> str:
         ...
 
 
@@ -213,17 +215,10 @@ class BuddyControl:
     def macro_task_delete(self, request_json: str) -> str:
         ...
 
-
-@cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
-class BuddyWait:
-    """Bounded waits on a dedicated resource so waiting never blocks mutations."""
-
-    def events_wait(self, request_json: str) -> str:
+    # -- topics -------------------------------------------------------------
+    @cc.topic
+    def board_changed(self) -> int:
         ...
-
-    def task_wait(self, request_json: str) -> str:
-        ...
-
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)

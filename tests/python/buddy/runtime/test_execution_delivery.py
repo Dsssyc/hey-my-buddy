@@ -475,6 +475,24 @@ class ExecutionDeliveryTests(unittest.TestCase):
         client.submit_result.assert_called_once()
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
 
+    def test_deliver_receipt_retries_call_capacity_exceeded_without_losing_receipt(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+        write_receipt(self.execution.directory, receipt)
+        client = mock.Mock()
+        client.submit_result.side_effect = [
+            BoardError("C_TWO_CALL_CAPACITY_EXCEEDED", "max_outstanding_calls reached"),
+            BoardError("C_TWO_CALL_CAPACITY_EXCEEDED", "max_outstanding_calls reached"),
+            {"accepted": True},
+        ]
+        clock = [0.0]
+        with mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(entry.time, "sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)):
+            self.assertTrue(deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64))
+        self.assertEqual(client.submit_result.call_count, 3)
+        self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
+
     def test_repeated_wrap_up_does_not_extend_deadline_and_force_escalates(self):
         control = self.execution.control
         control.request_stop("host", 100.0)

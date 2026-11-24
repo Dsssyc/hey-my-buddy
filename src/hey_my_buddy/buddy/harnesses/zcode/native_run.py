@@ -100,7 +100,8 @@ from ..run_contract import (
     unknown_event_name,
     unsupported_method_names,
 )
-from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
+from .config import (active_builtin_provider_path, cli_command, launch, load_runtime_preferences,
+                     provider_access_types, provider_paths)
 from ..inquiry_bridge import InquiryBridge
 from .inquiry import NativeInquiry
 from ..session_receipts import ReceiptError
@@ -708,11 +709,14 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     private = ensure_private_dir(invocation_root)
     if incoming.get("HMB_DEV_SOURCE") == "1" and "HMB_ZCODE_TEST_CASE" in incoming:
         environment["HMB_ZCODE_TEST_CASE"] = incoming["HMB_ZCODE_TEST_CASE"]
-    builtin, _personal = provider_paths(environment, command)
+    bundled, personal = provider_paths(environment, command)
+    builtin = active_builtin_provider_path(environment, command, bundled)
     preferences = load_runtime_preferences(environment)
-    # The standalone CLI needs the installed built-in file's location. No
-    # provider file is copied; personal configuration and telemetry stay native.
+    # Pass both the active built-in file (including runtime-synced revisions) and
+    # the native personal config path so zcode.cjs uses them read-only without
+    # redirecting into an unversioned 0.0.0-dev cache.
     environment.update({"ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": str(builtin),
+                        **({"ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": str(personal)} if personal is not None else {}),
                         "ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0"})
     version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
@@ -1895,7 +1899,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
             # configuration locations as the native process, never shell pins.
             from ..discovery import native_environment
             environment = native_environment(dict(os.environ))
-            access = provider_access_types(*provider_paths(environment, spawn.command))
+            bundled, personal = provider_paths(environment, spawn.command)
+            access = provider_access_types(active_builtin_provider_path(environment, spawn.command, bundled), personal)
             catalog_value = catalog(snapshot, access, version)
             if discovery_facts.unknown_counts:
                 catalog_value["discoveries"][0]["status"] = "unknown"

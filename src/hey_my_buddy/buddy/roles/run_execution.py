@@ -38,7 +38,7 @@ from ..harnesses.run_contract import (
     ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
     SnapshotQueryMount,
 )
-from ..harnesses.snapshot_mount import prepare_snapshot_mount
+from ..harnesses.snapshot_mount import mounted_micro_task_coverage, prepare_snapshot_mount
 from . import turn_io, worker_services
 from .run_observers import FastCorrection, MaintenanceCorrection, ReviewObserver, selection_validator, worker_observer
 from .run_controller import NATIVE_OPERATIONS
@@ -578,7 +578,10 @@ def fast_request(control: dict, module):
     from ..harnesses.registry import adapter
     session_preserved = adapter(control["harness"]).same_session_corrections
     if control.get("maintenance"):
-        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get(),
+        publish = _maintenance_publisher.get()
+        publisher = (partial(publish, read_coverage=partial(mounted_micro_task_coverage, snapshot))
+                     if publish is not None else None)
+        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, publisher,
                                            session_preserved=session_preserved)
     else:
         correction = FastCorrection(request_values["outputSchema"], base_prompt,

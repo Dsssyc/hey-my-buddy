@@ -2,8 +2,8 @@
 
 The previous version of this file drove an owned mock Node engine. The engine is
 gone: this file now exercises the actual Python blackboard service over the actual
-C-Two transport, including its token check, its named operations and its dedicated
-bounded wait route.
+C-Two transport, including its token check, its named operations and its
+multiplexed board_changed topic wakes on BuddyControl.
 """
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from support import BoardTestCase, _child_environment, request_private_service_stop
+from support import BoardTestCase, _child_environment, request_private_service_stop, wait_for
 
-from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
-from hey_my_buddy.protocol.transport import _read_endpoint
+from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, BuddyControl
+from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, open_wait_session, wait_events
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.protocol.client import BoardClient
 
@@ -47,48 +47,44 @@ class TestNamedContract(BoardTestCase):
                 self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
 
     def test_idle_waits_reuse_one_named_connection_across_timeouts(self):
-        with self.daemon(env={"HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "1"}):
-            client = BoardClient(self.directory, autostart=False)
-            endpoint = self._endpoint()
-            with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as peer:
-                for _ in range(3):
-                    frame = json.dumps({"token": endpoint["token"], "after": 2**62, "timeoutMs": 50})
-                    self.assertTrue(json.loads(peer.events_wait(frame))["timedOut"])
-            health=client.call("health")
-            capacity = health["waitAdmission"]
-            self.assertEqual(health["waitCapacity"],capacity["capacity"])
-            self.assertEqual(capacity["admitted"], 0)
-            self.assertEqual(capacity["available"], 1)
-
-    def test_service_stop_wakes_the_remote_wait_resource(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
-            endpoint = self._endpoint()
+            with open_wait_session(self.directory) as session:
+                session.subscribe()
+                self.assertTrue(wait_for(lambda: client.call("health")["activeSubscribers"] == 1, 5))
+                for _ in range(3):
+                    session.prepare_read()
+                    page = session.call("events_read", {"after": 2**62})
+                    self.assertEqual(page["events"], [])
+                    self.assertFalse(session.wait_wake(0.05))
+            self.assertTrue(wait_for(lambda: client.call("health")["activeSubscribers"] == 0, 5))
+
+    def test_service_stop_wakes_remote_topic_subscribers(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            client = BoardClient(self.directory, autostart=False)
             with ThreadPoolExecutor(max_workers=1) as executor:
-                holder = executor.submit(self._wait_call, endpoint, "events_wait",
-                                         {"after": 2**62, "timeoutMs": 30000})
-                deadline = time.monotonic() + 3
-                while True:
-                    capacity = client.call("health")["waitAdmission"]
-                    if capacity["admitted"] == 1:
-                        break
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(.02)
+                def wait_for_stop() -> ServiceError | None:
+                    try:
+                        wait_events({"after": 2**62, "timeoutMs": 30000}, self.directory)
+                        return None
+                    except ServiceError as error:
+                        return error
+
+                holder = executor.submit(wait_for_stop)
+                self.assertTrue(wait_for(lambda: client.call("health")["activeSubscribers"] == 1, 5))
                 request_private_service_stop(self.directory, client.call, drainSeconds=0)
-                self.assertEqual(holder.result(timeout=2)["error"]["code"], "SERVICE_STOPPING")
+                caught = holder.result(timeout=5)
+                self.assertIsNotNone(caught)
+                self.assertIn(caught.code, ("C_TWO_CALL_CANCELLED", "SERVICE_UNAVAILABLE", "C_TWO_IPC_ERROR"))
 
     def _endpoint(self):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint, "the daemon must publish a private endpoint")
         return endpoint
 
-    def _capacity(self, endpoint):
+    def _active_subscribers(self, endpoint) -> int:
         with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
-            return json.loads(control.health(json.dumps({"token":endpoint["token"]})))["waitAdmission"]
-
-    def _wait_call(self, endpoint, operation: str, params: dict) -> dict:
-        with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
-            return json.loads(getattr(wait, operation)(json.dumps({"token": endpoint["token"], **params})))
+            return json.loads(control.health(json.dumps({"token": endpoint["token"]})))["activeSubscribers"]
 
     def test_every_operation_is_named_and_authenticated(self):
         with self.daemon():
@@ -103,10 +99,16 @@ class TestNamedContract(BoardTestCase):
                 self.assertEqual(health["contractVersion"], CONTRACT_VERSION)
                 self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertIn("runtimeIdentity", health)
+                self.assertEqual(health["activeSubscribers"], 0)
+                self.assertNotIn("waitCapacity", health)
+                self.assertNotIn("waitAdmission", health)
                 self.assertTrue(hasattr(board, "execution_result"))
+                self.assertTrue(hasattr(board, "task_observe"))
+                self.assertTrue(hasattr(board, "board_changed"))
                 self.assertFalse(hasattr(board, "worker_claim"))
-                for retired in ("workflow_takeover", "workflow_decide", "workflow_reclaim", "console_snapshot", "selection_request", "task_retry", "task_acknowledge", "task_wait"):
-                    self.assertFalse(hasattr(board,retired),retired)
+                for retired in ("workflow_takeover", "workflow_decide", "workflow_reclaim", "console_snapshot",
+                                "selection_request", "task_retry", "task_acknowledge", "task_wait", "events_wait"):
+                    self.assertFalse(hasattr(board, retired), retired)
                 self.assertTrue(hasattr(board, "events_read"))
                 self.assertFalse(hasattr(board, "dispatch"), "no generic dispatch facade may exist")
                 denied = json.loads(board.task_list(json.dumps({"token": "wrong"})))
@@ -120,11 +122,9 @@ class TestNamedContract(BoardTestCase):
                     denied = json.loads(getattr(board, operation)(json.dumps({"token": endpoint["token"], **params})))
                     self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
 
-    def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
-        with self.daemon(env={"HMB_WAIT_CAPACITY": "1"}):
+    def test_topic_wait_wakes_on_matching_task_events_without_blocking_control(self):
+        with self.daemon():
             endpoint = self._endpoint()
-            capacity = self._capacity(endpoint)
-            self.assertEqual(capacity["capacity"], 1)
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = self.submit_execution(
                     requestId="wait-route", task="do", cwd=str(self.workdir()),
@@ -133,9 +133,6 @@ class TestNamedContract(BoardTestCase):
                 )
                 self.assertEqual(reply["task"]["state"], "queued")
                 task_id = reply["task"]["runId"]
-                # Admission can publish an executing attempt before its first
-                # progress. Read the cursor from a page containing that progress,
-                # after which only our cancellation can wake this command's wait.
                 deadline = time.monotonic() + 180
                 while True:
                     page = json.loads(board.events_read(json.dumps({
@@ -146,41 +143,32 @@ class TestNamedContract(BoardTestCase):
                     self.assertLess(time.monotonic(), deadline, page)
                     time.sleep(0.02)
                 cursor = page["cursor"]
-                # Scope the wait to this task; unrelated events cannot release it.
                 params = {"after": cursor, "runId": task_id, "timeoutMs": 10000}
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
-                    deadline = time.monotonic() + 5
-                    while self._capacity(endpoint)["admitted"] != 1:
-                        if holder.done():
-                            self.fail(f"The holder returned before admission was observed: {holder.result()}")
-                        if time.monotonic() >= deadline:
-                            self.fail("The holder did not acquire the wait slot")
-                        time.sleep(0.02)
+                    holder = pool.submit(wait_events, params, self.directory)
+                    self.assertTrue(wait_for(lambda: self._active_subscribers(endpoint) == 1, 5))
+                    self.assertFalse(holder.done())
 
-                    # An unrelated event must not release the scoped wait slot.
+                    # An unrelated event must not end the scoped wait.
                     unrelated = self.submit_execution(
                         requestId="wait-route-unrelated", task="unrelated", cwd=str(self.workdir()),
                         adapter="command", argv=[sys.executable, "-c", "pass"], expectedSeconds=1800,
                     )
                     self.assertNotIn("error", unrelated)
-                    overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
-                    self.assertIn("error", overloaded, overloaded)
-                    self.assertEqual(overloaded["error"]["code"], "WAIT_OVERLOAD")
-                    self.assertEqual(overloaded["error"]["details"]["retryAfterMs"], 250)
-                    self.assertIn("cursor", overloaded["error"]["details"])
-                    # Control capacity remains available; this mutation also wakes
-                    # the holder through the event it was actually waiting for.
+                    time.sleep(0.1)
+                    self.assertFalse(holder.done())
+
                     started = time.monotonic()
                     cancelled = json.loads(board.task_cancel(json.dumps({
                         "token": endpoint["token"], "runId": task_id,
                     })))
                     self.assertTrue(cancelled["task"]["cancelRequested"])
-                    self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for the wait route")
+                    self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for topic subscribers")
                     held = holder.result(timeout=5)
                     self.assertFalse(held["timedOut"])
                     self.assertTrue(held["events"])
                     self.assertTrue(all(event["taskId"] == task_id for event in held["events"]))
+                self.assertTrue(wait_for(lambda: self._active_subscribers(endpoint) == 0, 5))
 
     def test_multiple_clients_share_one_authoritative_task(self):
         with self.daemon():
@@ -209,6 +197,60 @@ class TestNamedContract(BoardTestCase):
             )
             self.assertEqual(second.returncode, 2)
             self.assertIn("ALREADY_RUNNING", second.stderr)
+
+    def test_quiet_daemon_keyboard_interrupt_exits_promptly_and_cleans_subscriber(self):
+        with self.daemon():
+            client = BoardClient(self.directory, autostart=False)
+            script = (
+                "import os, signal, sys\n"
+                "from hey_my_buddy.protocol.transport import wait_events\n"
+                "try:\n"
+                "    wait_events({'after': 2**62, 'timeoutMs': 30000}, os.environ['HMB_STATE_DIR'])\n"
+                "except KeyboardInterrupt:\n"
+                "    sys.exit(130)\n"
+            )
+            env = _child_environment(self.directory)
+            child = subprocess.Popen([sys.executable, "-c", script], env=env,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, encoding="utf-8")
+            try:
+                self.assertTrue(wait_for(lambda: client.call("health")["activeSubscribers"] == 1, 10))
+                started = time.monotonic()
+                if os.name == "nt":
+                    child.terminate()
+                else:
+                    import signal
+                    child.send_signal(signal.SIGINT)
+                _out, err = child.communicate(timeout=5)
+                elapsed = time.monotonic() - started
+                self.assertLess(elapsed, 2.5, err)
+                if os.name != "nt":
+                    self.assertEqual(child.returncode, 130, err)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+            self.assertTrue(wait_for(lambda: client.call("health")["activeSubscribers"] == 0, 5))
+
+    def test_store_notify_publishes_on_deletion_without_seq_growth_and_isolates_publish_errors(self):
+        board = self.board()
+        published: list[int] = []
+        board.store.on_publish = published.append
+        head = board.store.head()
+        before_seq = board.store.change_seq()
+        # Macro-task deletion can leave MAX(seq) unchanged while changing task visibility.
+        board.store._notify(head, changed_tasks={"deleted-task"})
+        self.assertGreater(board.store.change_seq(), before_seq)
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0], board.store.change_seq())
+        # A post-commit publish failure must never abort a committed store notification.
+        def failing_publish(_value: int) -> None:
+            raise RuntimeError("simulated topic publish failure")
+        board.store.on_publish = failing_publish
+        before_error_seq = board.store.change_seq()
+        board.store._notify(head + 1)
+        self.assertEqual(board.store.head(), head + 1)
+        self.assertGreater(board.store.change_seq(), before_error_seq)
 
 
 if __name__ == "__main__":

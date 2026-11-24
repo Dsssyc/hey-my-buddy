@@ -1,31 +1,146 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
   maintenanceValidation: {
-    "invalidJson": "维护回答不是有效 JSON。",
-    "citationOutsideBatch": "摘要引用了本批次之外的微任务。",
-    "unknown": "维护回答未通过校验。",
-    "wrongType": "回答中的字段类型不正确。",
-    "invalidValue": "回答包含不允许的值。",
-    "requiredField": "回答缺少必填字段。",
-    "unexpectedField": "回答包含未声明的字段。",
-    "textTooShort": "回答中的文字为空。",
-    "textTooLong": "回答中的文字超过长度上限。",
-    "tooManyItems": "回答包含过多条目。",
-    "duplicateNode": "新领域节点的标识重复。",
-    "blankNode": "新领域节点的名称或定义为空。",
-    "changedNode": "已写入的领域节点不能在更正中改动。",
-    "inactiveParent": "新领域节点的上级无效。",
-    "parentCycle": "领域节点的上级关系形成环。",
-    "duplicateName": "活动领域节点的名称重复。",
-    "duplicateMerge": "同一领域节点被重复合并。",
-    "inactiveMergeSource": "合并的来源节点无效。",
-    "inactiveMergeTarget": "合并的目标节点无效。",
-    "invalidMerge": "领域节点的合并无效。",
-    "duplicateClassification": "同一微任务被重复分类。",
-    "inactiveClassificationNode": "分类指向无效的领域节点。",
-    "missingClassification": "微任务缺少分类。",
-    "duplicateCitation": "摘要重复引用了同一微任务。",
-    "deletedCitation": "摘要引用的微任务已删除。",
+    invalidJson: {
+      single: "维护回答的 JSON 格式无效",
+      multiple: "{{total}} 处维护回答的 JSON 格式无效",
+    },
+    citationOutsideBatch: {
+      single: "归纳引用了本批次之外的微任务",
+      multiple: "{{total}} 处引用指向本批次之外的微任务",
+    },
+    citationOutsideEvidence: {
+      single: "归纳引用了冻结证据之外的微任务",
+      multiple: "{{total}} 份归纳引用了冻结证据之外的微任务",
+    },
+    unknown: {
+      single: "维护回答未通过校验",
+      multiple: "维护回答有 {{total}} 处未识别的校验问题",
+    },
+    wrongType: {
+      single: "回答中的字段类型不正确",
+      multiple: "回答中有 {{total}} 处字段类型不正确",
+    },
+    invalidValue: {
+      single: "回答包含不允许的值",
+      multiple: "回答中有 {{total}} 处取值不合法",
+    },
+    requiredField: {
+      single: "回答缺少必填字段",
+      multiple: "回答中有 {{total}} 处缺少必填字段",
+    },
+    unexpectedField: {
+      single: "回答包含未声明的字段",
+      multiple: "回答中有 {{total}} 处字段未声明",
+    },
+    textTooShort: {
+      single: "回答中的文字为空",
+      multiple: "回答中有 {{total}} 处文字为空",
+    },
+    textTooLong: {
+      single: "回答中的文字超过长度上限",
+      multiple: "回答中有 {{total}} 处文字超过长度上限",
+    },
+    tooManyItems: {
+      single: "回答包含过多条目",
+      multiple: "回答中有 {{total}} 处条目数量超限",
+    },
+    invalidUnicode: {
+      single: "回答包含无效的 Unicode 文本",
+      multiple: "{{total}} 个条目包含无效的 Unicode 文本",
+    },
+    stagedConflict: {
+      single: "条目与已暂存的内容冲突",
+      multiple: "{{total}} 个条目与已暂存的内容冲突",
+    },
+    duplicateNode: {
+      single: "新领域节点的标识重复",
+      multiple: "{{total}} 个新领域节点的标识重复",
+    },
+    blankNode: {
+      single: "新领域节点的名称或定义为空",
+      multiple: "{{total}} 个新领域节点的名称或定义为空",
+    },
+    changedNode: {
+      single: "更正试图改动已写入的领域节点",
+      multiple: "更正试图改动 {{total}} 个已写入的领域节点",
+    },
+    nulNode: {
+      single: "领域节点的字段包含空字符",
+      multiple: "{{total}} 个领域节点的字段包含空字符",
+    },
+    inactiveParent: {
+      single: "领域节点的上级无效",
+      multiple: "{{total}} 项领域树改动涉及无效的上级节点",
+    },
+    parentCycle: {
+      single: "领域节点的上级关系形成环",
+      multiple: "{{total}} 项领域树改动会使上级关系形成环",
+    },
+    duplicateName: {
+      single: "活动领域节点的名称重复",
+      multiple: "{{total}} 项领域树改动会使活动节点的名称重复",
+    },
+    duplicateMerge: {
+      single: "同一领域节点被重复合并",
+      multiple: "{{total}} 个领域节点被重复合并",
+    },
+    inactiveMergeSource: {
+      single: "合并的来源节点无效",
+      multiple: "{{total}} 项合并的来源节点无效",
+    },
+    inactiveMergeTarget: {
+      single: "合并的目标节点无效",
+      multiple: "{{total}} 项合并的目标节点无效",
+    },
+    duplicateClassification: {
+      single: "同一微任务被重复分类",
+      multiple: "{{total}} 个微任务被重复分类",
+    },
+    inactiveClassificationNode: {
+      single: "分类指向无效的领域节点",
+      multiple: "{{total}} 个微任务的分类指向无效的领域节点",
+    },
+    unknownRun: {
+      single: "分类指向未知的微任务",
+      multiple: "分类指向 {{total}} 个未知的微任务",
+    },
+    missingClassification: {
+      single: "微任务缺少分类",
+      multiple: "{{total}} 个微任务缺少分类",
+    },
+    unreadTaskSection: {
+      single: "任务正文未读全",
+      multiple: "{{total}} 个微任务的任务正文未读全",
+    },
+    duplicateSummary: {
+      single: "同一种类提交了多份归纳",
+      multiple: "{{total}} 个种类分别提交了多份归纳",
+    },
+    unknownKind: {
+      single: "归纳对应的种类未知",
+      multiple: "{{total}} 份归纳对应的种类未知",
+    },
+    missingSummary: {
+      single: "缺少一份归纳",
+      multiple: "缺少 {{total}} 份归纳",
+    },
+    unreadSummarySections: {
+      single: "归纳所需的微任务分节未读全",
+      multiple: "{{total}} 份归纳所需的微任务分节未读全",
+    },
+    summaryTooLong: {
+      single: "归纳超过字节上限",
+      multiple: "{{total}} 份归纳超过字节上限",
+    },
+    duplicateCitation: {
+      single: "归纳重复引用了同一微任务",
+      multiple: "{{total}} 份归纳重复引用了微任务",
+    },
+    deletedCitation: {
+      single: "归纳引用的微任务已删除",
+      multiple: "{{total}} 份归纳引用了已删除的微任务",
+    },
   },
   reasonNoProcesses: "无",
   reasonProcess: "{{executable}}（{{pid}}）",

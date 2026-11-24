@@ -15,12 +15,12 @@ class AwaitRouteTests(unittest.TestCase):
             calls = []
             def service(method, params, state_dir):
                 calls.append(method)
-                if method == "task_get":
+                if len(calls) == 1:
                     return {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
                             "actions": ["await", "inquire", "cancel", "get"]}
                 raise ServiceError("SERVICE_UNAVAILABLE", "service restarted")
             answer = await_run({"runId": "run-1"}, Path(directory), service=service)
-        self.assertEqual(calls, ["task_get", "task_wait"])
+        self.assertEqual(calls, ["task_observe", "task_observe"])
         self.assertEqual(answer["outcome"], "unavailable")
         self.assertEqual(answer["runId"], "run-1")
         self.assertEqual(answer["error"]["code"], "SERVICE_UNAVAILABLE")
@@ -29,11 +29,12 @@ class AwaitRouteTests(unittest.TestCase):
         self.assertNotIn("nextCommands", answer)
 
     def test_observation_names_are_private_to_await_and_clients(self):
-        self.assertEqual(INTERNAL_METHOD_MAP["task_get"], ("control", "task_get"))
-        self.assertEqual(INTERNAL_METHOD_MAP["task_result"], ("control", "task_result"))
-        self.assertEqual(INTERNAL_METHOD_MAP["task_wait"], ("wait", "task_wait"))
-        self.assertEqual(INTERNAL_METHOD_MAP["events_wait"], ("wait", "events_wait"))
-        for name in ("task_get", "task_result", "task_wait", "events_wait", "events_read"):
+        self.assertEqual(INTERNAL_METHOD_MAP["task_get"], "task_get")
+        self.assertEqual(INTERNAL_METHOD_MAP["task_result"], "task_result")
+        self.assertEqual(INTERNAL_METHOD_MAP["task_observe"], "task_observe")
+        self.assertNotIn("task_wait", INTERNAL_METHOD_MAP)
+        self.assertNotIn("events_wait", INTERNAL_METHOD_MAP)
+        for name in ("task_get", "task_result", "task_observe", "task_wait", "events_wait", "events_read"):
             self.assertNotIn(name, METHOD_MAP)
 
 

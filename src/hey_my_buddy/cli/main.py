@@ -137,17 +137,14 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
                 result = paths(wire)
             elif args.method in ("await", "conclude"):
                 from .blocking import WaitAbandoned, await_run, conclude_run
-                def wait_service(operation, parameters, directory):
-                    request = {**parameters, **({"credential": credential} if credential is not None else {})}
-                    return _call_service(operation, request, directory)
                 if args.method == "await":
                     try:
-                        result = await_run(parsed, state_dir=state_dir, service=wait_service)
+                        result = await_run(parsed, state_dir=state_dir, service=_call_service, credential=credential)
                     except WaitAbandoned as abandoned:
                         result = {"error": {"code": "WAIT_ABANDONED", "message": str(abandoned)},
                                   "runId": abandoned.run_id, "actions": ["get", "await"]}
                 else:
-                    result = conclude_run(parsed, state_dir=state_dir, service=wait_service)
+                    result = conclude_run(parsed, state_dir=state_dir, service=_call_service, credential=credential)
             else:
                 if credential is not None:
                     wire["credential"] = credential

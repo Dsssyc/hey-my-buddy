@@ -1,6 +1,12 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { open, test } from "./preview";
 
+const validationErrors = [
+  "classifications[run-1]: read the complete task section",
+  "classifications[run-2]: read the complete task section",
+  "summaries[kind-1]: read all five sections of every unread micro task in this batch",
+];
+
 async function expectFailure(page: Page, region: Locator, text: string, code: string) {
   const failure = region.locator('[data-slot="router-failure"]').filter({ hasText: text }).first();
   await expect(failure).toHaveText(text);
@@ -34,6 +40,10 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       snapshot.maintenance.runs = ["native-prompt-refused", "future-native-failure"].map((code, index) => ({
         ...maintenance, maintenanceRunId: `synthetic-failure-${index}`, state: "failed", reason: { code, params: {} },
       }));
+      snapshot.maintenance.runs.push({
+        ...maintenance, maintenanceRunId: "synthetic-validation-failure", state: "failed",
+        reason: { code: "maintenance-answer-invalid", params: { errors: validationErrors } },
+      });
       const profile = snapshot.models.find((row: { latestProfileRun: unknown }) => row.latestProfileRun);
       snapshot.models = ["native-prompt-refused", "future-native-failure"].map((code, index) => ({
         ...profile, modelId: `synthetic-failure-model-${index}`, displayName: `Synthetic failure model ${index}`,
@@ -50,8 +60,13 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
 
     const nav = page.getByRole("navigation", { name: zh ? "Router 的工作" : "Router work" });
     await nav.getByRole("link", { name: zh ? /^维护/ : /^Maintenance/ }).click();
-    await expectFailure(page, page.locator('[data-slot="maintenance-records-region"]'), native, "native-prompt-refused");
-    await expectFailure(page, page.locator('[data-slot="maintenance-records-region"]'), unknown, "future-native-failure");
+    const maintenance = page.locator('[data-slot="maintenance-records-region"]');
+    await expectFailure(page, maintenance, native, "native-prompt-refused");
+    await expectFailure(page, maintenance, unknown, "future-native-failure");
+    await expectFailure(page, maintenance, zh
+      ? "维护的回答最终仍不合格。 问题：2 个微任务的任务正文未读全、归纳所需的微任务分节未读全"
+      : "The maintenance answer remains invalid. Problems: task sections were not read in full for 2 micro tasks and a summary's required micro task sections were not read in full",
+    validationErrors.join("; "));
 
     await nav.getByRole("link", { name: zh ? /^画像/ : /^Profiles/ }).click();
     const profiles = page.locator('[data-slot="profile-records"]');

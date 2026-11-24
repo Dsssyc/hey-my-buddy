@@ -128,9 +128,10 @@ class SnapshotService:
         envelope, ok = self.call(tool_name, args, native_identity=native_identity, call_id=call_id)
         return _result(envelope, ok=ok, direct=True)
 
-    def _read_ledger(self) -> dict:
+    @staticmethod
+    def _read_ledger(path: Path) -> dict:
         try:
-            fd = private_dirs.open_regular_fd(self.ledger, os.O_RDONLY)
+            fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
         except FileNotFoundError:
             return {}
         with os.fdopen(fd, "rb") as stream:
@@ -146,6 +147,13 @@ class SnapshotService:
                 rows[sequence] = row
             return rows
 
+    @classmethod
+    def issued_micro_task_coverage(cls, invocation_root: Path) -> list[dict]:
+        """Read issued pages for correction before native call evidence settles."""
+        rows = cls._read_ledger(invocation_root / _LEDGER_NAME)
+        return [row["coverage"] for row in rows.values()
+                if row["ok"] is True and row["toolName"] == "query_micro_tasks" and row["coverage"]]
+
     def verify_calls(self, calls, native_roots) -> tuple[frozenset[tuple[str, str]], list[dict]]:
         """Pair complete mounted-tool calls and ledger rows in both directions.
 
@@ -154,7 +162,7 @@ class SnapshotService:
         """
         try:
             roots = {canonical_json(root) for root in native_roots}
-            unmatched = self._read_ledger()
+            unmatched = self._read_ledger(self.ledger)
             keys = set()
             accepted = {}
             for call in calls:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from ... import locking
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -19,12 +20,12 @@ from ...protocol import rpc_config
 from ...install import launcher, runtime
 from ..tasks import scheduling
 from ...console.server import Console
-from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
+from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, BuddyControl
 from ..store.db import SCHEMA_VERSION, utc_now
 from ...private_files import publish_bytes, read_text
 from ...text import configure_utf8_output
 from ...errors import BoardError
-from .service import BoardService, WaitAdmission, WaitService
+from .service import BoardService
 from .execution_scheduler import ExecutionScheduler
 from .live_registry import LiveRegistry
 from ..store.store import BoardStore
@@ -47,10 +48,6 @@ class Daemon:
         self.started_at = utc_now()
         self.service_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
-        wait_capacity = _env_int("HMB_WAIT_CAPACITY", 32)
-        if wait_capacity > rpc_config.MAX_WAIT_CAPACITY:
-            raise BoardError("INVALID_ARGUMENT", "HMB_WAIT_CAPACITY exceeds RPC callback capacity")
-        self.wait_admission = WaitAdmission(wait_capacity)
         self._admission_lock = threading.RLock()
         max_concurrent = _env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
         minimum, maximum = launcher.LAUNCH_KEYS["HMB_MAX_CONCURRENT"]
@@ -67,8 +64,6 @@ class Daemon:
             "contract_version": CONTRACT_VERSION,
             "protocol": 2,
             "schema_version": SCHEMA_VERSION,
-            "wait_capacity": self.wait_admission.capacity,
-            "wait_admission": self.wait_admission,
             "stopping": False,
             "restart_requested": False,
             "runtime": runtime_identity,
@@ -127,11 +122,11 @@ class Daemon:
             self.store.on_change = self._board_changed
             self.console = Console(self.store, service, runtime_identity=self.control["runtime"])
             self.console.start(issue_ticket=False)
-            wait_service = WaitService(self.store, self.wait_admission, token=self.token)
-            cc.register(BuddyControl, service, name=CONTROL_NAME,
-                        concurrency=cc.ConcurrencyConfig(mode="parallel"))
-            cc.register(BuddyWait, wait_service, name=WAIT_NAME,
-                        concurrency=cc.ConcurrencyConfig(mode="parallel"))
+            registration = cc.register(BuddyControl, service, name=CONTROL_NAME,
+                                       concurrency=cc.ConcurrencyConfig(mode="parallel"))
+            publisher = registration.publisher("board_changed")
+            self.store.on_publish = publisher.publish
+            self.control["active_subscribers"] = lambda: registration.active_subscribers
             self.resume_path.unlink(missing_ok=True)
             self.stop_path.unlink(missing_ok=True)
             atomic_json(self.endpoint_path, {
@@ -287,8 +282,11 @@ class Daemon:
             self._maintenance.join()
         if getattr(self, 'harnesses', None) is not None:
             self.harnesses.close()
+        self.store.on_publish = None
         self.live_registry.close()
-        cc.shutdown()
+        outcome = cc.shutdown(timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+        if not outcome.get("completed"):
+            logging.warning("C-Two daemon shutdown incomplete: %s", outcome)
         if self.console is not None:
             self.console.close()
         self.store.db.close()

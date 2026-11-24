@@ -9,7 +9,7 @@ from support import BoardTestCase
 class LauncherSelectionTests(BoardTestCase):
     def test_current_pointer_selects_previous_client_and_preserves_scoped_credentials(self):
         root=(self.directory/'runtime').resolve();target=root/('a'*32);target.mkdir(parents=True)
-        launcher.write_active_runtime(self.directory,target,{'HMB_MAX_CONCURRENT':'7','HMB_WAIT_CAPACITY':'32'})
+        launcher.write_active_runtime(self.directory,target,{'HMB_MAX_CONCURRENT':'7'})
         clean={k:v for k,v in os.environ.items() if k not in ('HMB_RUNTIME','HMB_DEV_SOURCE')}
         with mock.patch.dict(os.environ,{**clean,'HMB_RUNTIME_ROOT':str(root),'HMB_AGENT_CREDENTIAL_FILE':'/private/attempt'},clear=True), mock.patch('hey_my_buddy.install.runtime.is_ready',return_value=True):
             self.assertEqual(launcher.selected_runtime(self.directory),target)
@@ -18,13 +18,13 @@ class LauncherSelectionTests(BoardTestCase):
         with os.fdopen(private_dirs.open_regular_fd(self.directory/'active-runtime.json', os.O_RDONLY), 'rb') as stream:
             private_dirs.validate_private_fd(stream.fileno())
 
-    def test_upgrade_environment_preserves_capacity_over_caller_defaults(self):
+    def test_upgrade_environment_preserves_capacity_and_strips_retired_wait_capacity(self):
         launcher.write_private(self.directory/'upgrade.json',{'environment':{'HMB_MAX_CONCURRENT':'7','HMB_WAIT_CAPACITY':'32'}})
         with mock.patch.dict(os.environ,{'HMB_MAX_CONCURRENT':'8','HMB_WAIT_CAPACITY':'64'}):
             with mock.patch.object(upgrade.runtime, 'read_ready', return_value={'sourceCommit': 'f' * 40}):
                 values=upgrade._environment(self.directory,self.directory/'target')
         self.assertEqual(values['HMB_MAX_CONCURRENT'],'7')
-        self.assertEqual(values['HMB_WAIT_CAPACITY'],'32')
+        self.assertNotIn('HMB_WAIT_CAPACITY',values)
 
     def test_pointer_outside_root_and_unknown_launch_settings_are_refused(self):
         root=(self.directory/'runtime').resolve();root.mkdir()
@@ -32,8 +32,13 @@ class LauncherSelectionTests(BoardTestCase):
         clean={k:v for k,v in os.environ.items() if k not in ('HMB_RUNTIME','HMB_DEV_SOURCE')}
         with mock.patch.dict(os.environ,{**clean,'HMB_RUNTIME_ROOT':str(root)},clear=True), mock.patch('hey_my_buddy.install.runtime.is_ready',return_value=True):
             with self.assertRaises(BoardError):launcher.selected_runtime(self.directory)
-        launcher.write_private(self.directory/'launch-settings.json',{'environment':{'ARBITRARY_ENV':'1'}})
-        with self.assertRaises(BoardError):launcher.launch_defaults(self.directory)
+        for bad in ({'ARBITRARY_ENV': '1'}, {'HMB_WAIT_CAPACITY': '32'}):
+            launcher.write_private(self.directory/'launch-settings.json',{'environment':bad})
+            with self.assertRaises(BoardError):launcher.launch_defaults(self.directory)
+        launcher.write_private(self.directory/'launch-settings.json',
+                               {'environment':{'HMB_MAX_CONCURRENT':'5','HMB_WAIT_CAPACITY':'32'}})
+        self.assertEqual(upgrade._read_upgrade_launch_defaults(self.directory),
+                         {'HMB_MAX_CONCURRENT': '5', 'HMB_WAIT_CAPACITY': '32'})
 
 
 class TargetEntryModuleTests(BoardTestCase):

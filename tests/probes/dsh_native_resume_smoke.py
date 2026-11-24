@@ -32,7 +32,7 @@ from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
 from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.private_dirs import ensure_private_dir
 from hey_my_buddy.protocol import rpc_config
-from hey_my_buddy.protocol.contracts import BuddyControl, BuddyWait, CONTROL_NAME, WAIT_NAME
+from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
 from hey_my_buddy.blackboard.service.daemon import atomic_json
 from support import InProcessBoard
 
@@ -150,8 +150,6 @@ def publish_board(board: InProcessBoard) -> None:
     """Give the isolated execution a real C-Two route to this same private board."""
     rpc_config.configure_server(board.directory)
     cc.register(BuddyControl, board.service, name=CONTROL_NAME,
-                concurrency=cc.ConcurrencyConfig(mode="parallel"))
-    cc.register(BuddyWait, board.wait_service, name=WAIT_NAME,
                 concurrency=cc.ConcurrencyConfig(mode="parallel"))
     atomic_json(board.directory / "control.json", {"address": cc.server_address(), "token": "test-token"})
 

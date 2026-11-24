@@ -139,7 +139,7 @@ class HostCutoverTests(WorkflowTestCase):
         target = self.private_runtime('target')
         self.catalog_fixture()
         environment = self.child_environment({'HMB_RUNTIME_ROOT': str(previous.parent),
-                                              'HMB_MAX_CONCURRENT': '1', 'HMB_WAIT_CAPACITY': '4'})
+                                              'HMB_MAX_CONCURRENT': '1'})
         environment.pop('PYTHONPATH', None)
         environment.pop('HMB_DEV_SOURCE', None)
         original_modules = launcher.entry_modules

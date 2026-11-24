@@ -91,14 +91,16 @@ _ROUTING_TOOLS = {
 _MAINTENANCE_TOOLS = {
     tool["name"]: tool for tool in (
         _tool("query_domains", "Browse the children of a domain, or search by identifier, name or definition. "
-              "Omit both filters for top-level domains. Set includeMerged to see merged nodes and their retained target.",
+              "Omit both filters for all active domains. Pass parentId: null for top-level domains. "
+              "Set includeMerged to see merged nodes and their retained target.",
               {**_DOMAIN_FILTERS, "includeMerged": {"type": "boolean"}}),
         _tool("query_batch", "List micro tasks in this batch, their classification and participating kinds.", {}),
         _tool("query_micro_tasks", "Read frozen micro task sections. The task section includes its basic metadata. "
               "Omit sections to read all. Each returned coverage range applies to one run and section.",
               {"runIds": _array(_string()), "sections": _fields(MAINTENANCE_SECTIONS)}, required=("runIds",)),
         _tool("query_kinds", "Read summary targets and comparison kinds. Omit kindIds for all kinds "
-              "and include for all fields. Use domainNodeIds to select domain aggregates and task-type cells.",
+              "and include for identity and targets’ unreadRunIds only. Request include fields for details. "
+              "Use domainNodeIds to select domain aggregates and task-type cells when requesting statistics.",
               {"kindIds": _array(_string()), "domainNodeIds": _array(_string()), "include": _fields(_KIND_DETAILS)}),
     )
 }
@@ -352,7 +354,7 @@ class SnapshotQuery:
         nodes = [row for row in self._domains.values() if include_merged or not row.get("mergedIntoId")]
         children = Counter(row["parentId"] for row in nodes)
         for row in nodes:
-            if ("parentId" in args or not search) and row["parentId"] != parent:
+            if ("parentId" in args or (not maintenance and not search)) and row["parentId"] != parent:
                 continue
             if search and not any(search in row[key].casefold() for key in ("nodeId", "name", "definition")):
                 continue
@@ -446,14 +448,16 @@ class SnapshotQuery:
         domains = args.get("domainNodeIds")
         if domains is not None:
             _require_ids(self._domains, domains, "domainNodeIds")
-        include = args.get("include", _KIND_DETAILS)
+        include = args.get("include", ("unreadRunIds",))
         for identifier in identifiers:
             kind = self._kinds[identifier]
             identity = {key: kind[key] for key in (*_KIND, "modelDisplayName", "modelNames")}
             target = "unreadRunIds" in kind
             yield _Record({"kindId": identifier, "field": "identity"}, {**identity, "needsSummary": target}, wrap=True)
             for field in include:
-                value = kind.get(field)
+                if field not in kind:
+                    continue
+                value = kind[field]
                 if field == "statistics" and domains is not None:
                     value = {**value, **{
                         key: {domain: value[key][domain] for domain in domains if domain in value[key]}
@@ -462,19 +466,22 @@ class SnapshotQuery:
                 yield _Record({"kindId": identifier, "field": field}, value, wrap=True)
 
 
-def verified_coverage(plane: str, events: Iterable[dict]) -> dict[str, set[str]]:
-    """Reduce ledger events already verified against native root call evidence."""
-    if plane != "maintenance":
-        return {}
+def _section_prefixes(events: Iterable[dict], *, issued_only=False):
+    """Find the first uncovered character of each delivered section."""
     by_section = defaultdict(list)
     for event in events:
         if not isinstance(event, dict) or not isinstance(event.get("tool"), str):
             raise QueryError("Invalid snapshot delivery event.")
         if event["tool"] != "query_micro_tasks":
+            if issued_only:
+                raise QueryError("Expected only query_micro_tasks delivery events.")
             continue
         ranges = event.get("ranges")
-        if not isinstance(ranges, list):
+        if (set(event) != {"tool", "ranges"} or not isinstance(ranges, list)
+                or not 1 <= len(ranges) <= _MAX_PAGE_ITEMS):
             raise QueryError("Invalid micro task delivery ranges.")
+        previous_index = None
+        seen = set()
         for span in ranges:
             if not isinstance(span, dict) or set(span) != {"runId", "section", "itemIndex", "start", "end", "total"}:
                 raise QueryError("Invalid micro task delivery range.")
@@ -482,13 +489,19 @@ def verified_coverage(plane: str, events: Iterable[dict]) -> dict[str, set[str]]
             start, end, total = span["start"], span["end"], span["total"]
             if (not isinstance(run_id, str) or not run_id or section not in MAINTENANCE_SECTIONS
                     or any(type(index) is not int for index in (span["itemIndex"], start, end, total))
-                    or span["itemIndex"] < 0
+                    or not 0 <= span["itemIndex"] < MAX_QUERY_IDS * len(MAINTENANCE_SECTIONS)
                     or not 0 <= start < end <= total):
                 raise QueryError("Invalid micro task delivery bounds.")
-            by_section[run_id, section].append((start, end, total))
+            key = (run_id, section)
+            index = span["itemIndex"]
+            if (key in seen or (previous_index is not None and index != previous_index + 1)
+                    or (len(ranges) > 1 and (start != 0 or end != total))):
+                raise QueryError("Invalid micro task delivery page.")
+            seen.add(key)
+            previous_index = index
+            by_section[key].append((start, end, total))
 
-    complete = defaultdict(set)
-    for (run_id, section), spans in by_section.items():
+    for key, spans in by_section.items():
         total = spans[0][2]
         if any(span[2] != total for span in spans):
             raise QueryError("Micro task delivery ranges disagree on section length.")
@@ -497,23 +510,59 @@ def verified_coverage(plane: str, events: Iterable[dict]) -> dict[str, set[str]]
             if start > covered:
                 break
             covered = max(covered, end)
-        if covered == total:
-            complete[run_id].add(section)
+        yield key, covered, total
+
+
+def verified_coverage(plane: str, events: Iterable[dict]) -> dict[str, set[str]]:
+    """Reduce ledger events already verified against native root call evidence."""
+    complete = defaultdict(set)
+    if plane == "maintenance":
+        for (run_id, section), covered, total in _section_prefixes(events):
+            if covered == total:
+                complete[run_id].add(section)
     return dict(complete)
+
+
+class MaintenanceCoverage:
+    """Coverage of frozen sections, with cursors independent of the original query filters."""
+
+    def __init__(self, snapshot, events, surviving_run_ids, *, issued_only=False):
+        self._complete = defaultdict(set)
+        self._prefixes = {}
+        self._surviving = set(surviving_run_ids)
+        query = SnapshotQuery(snapshot, plane="maintenance")
+        for (run_id, section), covered, total in _section_prefixes(events, issued_only=issued_only):
+            args = {"runIds": [run_id], "sections": [section]}
+            record, = query._query_micro_tasks(args)
+            if total != len(canonical_json(record.item())):
+                raise QueryError("Micro task delivery length differs from the frozen section.")
+            if covered == total:
+                self._complete[run_id].add(section)
+            elif covered > 0:
+                signature, _, _ = _cursor_position("maintenance", "query_micro_tasks", args)
+                self._prefixes[run_id, section] = f"{signature}:0:{covered}"
+
+    def gaps(self, run_ids, sections):
+        """Yield the unread sections of the requested surviving tasks."""
+        for run_id in run_ids:
+            if run_id in self._surviving:
+                for section in sections:
+                    if section not in self._complete.get(run_id, ()):
+                        yield run_id, section, self._prefixes.get((run_id, section))
+
 
 
 def maintenance_coverage(snapshot: dict, events: Iterable[dict], *,
                          surviving_run_ids: Iterable[str] | None = None) -> tuple[set[str], set[str]]:
     """Return eligible classification and summary targets from verified deliveries."""
-    complete = verified_coverage("maintenance", events)
     surviving = ({task["runId"] for task in snapshot["microTasks"]}
                  if surviving_run_ids is None else set(surviving_run_ids))
+    coverage = MaintenanceCoverage(snapshot, events, surviving)
     classifications = {run_id for run_id in snapshot["classificationRunIds"]
-                       if run_id in surviving and "task" in complete.get(run_id, ())}
-    required = set(MAINTENANCE_SECTIONS)
+                       if run_id in surviving and not any(coverage.gaps([run_id], ("task",)))}
     summaries = set()
     for kind in snapshot["kinds"]:
         unread = surviving.intersection(kind["unreadRunIds"])
-        if unread and all(required.issubset(complete.get(run_id, ())) for run_id in unread):
+        if unread and not any(coverage.gaps(unread, MAINTENANCE_SECTIONS)):
             summaries.add(kind["kindId"])
     return classifications, summaries

@@ -55,9 +55,9 @@ class CreationReplayTests(BoardTestCase):
         real_request = transport._request
         expected_operation = {"create": "workflow_create", "submit": "workflow_submit"}[method]
 
-        def request(endpoint, operation, wire, resource="control", *, state_dir):
+        def request(endpoint, operation, wire, *, state_dir):
             self.assert_rpc_state_dir(state_dir)
-            result = real_request(endpoint, operation, wire, resource, state_dir=state_dir)
+            result = real_request(endpoint, operation, wire, state_dir=state_dir)
             if operation == expected_operation:
                 observed.append((operation, dict(wire), result))
             if lose_reply and operation == expected_operation:

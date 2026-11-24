@@ -199,7 +199,11 @@ class CorrectionPolicyTests(unittest.TestCase):
 
         def publish(raw, index, observations):
             publications.append((raw, index, observations))
-            return {"errors": [{"field": "$.summaries[0]"}]}
+            return {
+                "errors": [{"field": "$.summaries[0]"}],
+                "missingReads": [],
+                "staged": {"newNodes": [], "merges": [], "classifications": ["run-done"], "summaries": []},
+            }
 
         raw = "x" * 5000
         for preserved in (True, False):
@@ -212,3 +216,15 @@ class CorrectionPolicyTests(unittest.TestCase):
             self.assertEqual("Frozen maintenance request" in feedback.input_text, not preserved)
             self.assertEqual("x" * 4000 in feedback.input_text, not preserved)
             self.assertNotIn(raw, feedback.input_text)
+
+        structured = json.dumps({
+            "newNodes": [], "merges": [],
+            "classifications": [{"runId": "run-done", "domainNodeId": "d", "taskType": "change"}],
+            "summaries": [{"kindId": "k1", "text": "s" * 4200, "citations": []}],
+        })
+        fresh = MaintenanceCorrection({}, "Frozen maintenance request", publish, session_preserved=False)
+        feedback = fresh.observer({"settled": True, "rawAnswer": structured,
+                                   "toolCalls": 1, "sessionToolCalls": 1})
+        self.assertEqual(feedback.action, "correct")
+        self.assertNotIn("run-done", feedback.input_text.split("Unstaged draft", 1)[1])
+        self.assertIn("s" * 4200, feedback.input_text)

@@ -52,9 +52,7 @@ class PauseProjectionTests(WorkflowTestCase):
                          'actor': {'role': 'console', 'id': 'user'}},
             )
         def wait(wait_id):
-            return board.call('task_wait', {'runId': run_id, 'timeoutMs': 0,
-                                            'consumeReminders': True,
-                                            'reminderWaitId': wait_id})
+            return board.call('task_observe', {'runId': run_id, 'reminderWaitId': wait_id})
         first = wait('pause-wait-1')
         self.assertEqual(first['pause']['pausedAt'], paused_at)
         with patch.object(board.store.db, 'write', side_effect=AssertionError('unexpected writer')):
