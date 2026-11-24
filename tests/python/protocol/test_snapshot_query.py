@@ -126,7 +126,15 @@ class SnapshotQueryTests(unittest.TestCase):
         self.assertEqual(candidates[0]["preference"], {"mode": "prefer", "notePreview": "偏好原因" * 40,
                                                      "hasLongNote": True})
         self.assertTrue(candidates[0]["hasProfile"])
+        self.assertEqual(candidates[0]["profilePositioning"], "model profile")
         self.assertTrue(candidates[0]["hasSummary"])
+        no_profile = SnapshotQuery({
+            **snapshot,
+            "buddies": [{**snapshot["buddies"][0], "modelProfile": None}],
+        })
+        plain_candidates, _ = self.read_items(no_profile, "query_compare", args)
+        self.assertFalse(plain_candidates[0]["hasProfile"])
+        self.assertIsNone(plain_candidates[0]["profilePositioning"])
 
         groups, _ = self.read_items(query, "query_explore", {"domainNodeId": "child", "limit": 1})
         self.assertEqual([(item["domainNodeId"], item["samples"], item["buddyIds"]) for item in groups],
