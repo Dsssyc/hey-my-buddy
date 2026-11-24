@@ -22,7 +22,6 @@ import type { Step, Steps } from "./steps";
 import { modelEffort } from "./names";
 import type { Interval } from "../timeline/labels";
 import { DetailLinks } from "./linking";
-import type { DetailTab } from "./location";
 import { TimelineThumbnail } from "./TimelineThumbnail";
 import { buddyColorKey, eventName } from "../macro-task-display";
 import { isFailedRow } from "../timeline/failure";
@@ -59,18 +58,15 @@ function anchorOf(step: Step | null, spans: readonly { spanId: string; startAt: 
  * decided then and there. Selecting another step reveals its drawn slice or
  * marker with the smallest horizontal scroll; later reads leave the view alone.
  */
-export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revealRef, tab }: {
+export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revealRef }: {
   row: TimelineRow; timeline: MacroTaskTimeline; steps: Steps; selected: number;
   /** The address's step, counted from 1, exactly as the page's own onStep. */
   onStep: (step: number) => void; nowMs: number;
-  revealRef: Ref<() => void>; tab: DetailTab;
+  revealRef: Ref<() => void>;
 }) {
   const { t } = useTranslation("taskDetail");
   const named = useNamedBuddy();
-  const [display, setDisplay] = useState({ tab, open: tab === "overview" });
-  const expanded = display.tab === tab ? display.open : tab === "overview";
-  if (display.tab !== tab) setDisplay({ tab, open: expanded });
-  const show = (open: boolean) => setDisplay({ tab, open });
+  const [expanded, setExpanded] = useState(false);
   const timelineId = useId();
   const [timelineToggle, setTimelineToggle] = useState<HTMLButtonElement | null>(null);
   const thumbnail = useViewport<HTMLSpanElement>(300);
@@ -104,7 +100,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
   const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, Math.max(1, width - SLACK * 2), row.runId, viewportRef,
     steps.steps[selected]?.at ?? null, nowMs, SLACK);
   useTimelineGestures(gestureArea, ruler, zoomAt, () => zoom(0), true, {
-    element: expanded ? null : timelineToggle, reveal: () => show(true),
+    element: expanded ? null : timelineToggle, reveal: () => setExpanded(true),
   });
   useEffect(() => {
     if (centered.current || !scale || !viewport) return;
@@ -184,7 +180,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
       </div>
       <button ref={setTimelineToggle} type="button" data-slot="timeline-toggle" aria-expanded={expanded} aria-controls={timelineId}
         aria-label={expanded ? t("strip.hide") : input.domain ? t("strip.show") : `${t("strip.show")} · ${t("strip.empty")}`}
-        onClick={() => show(!expanded)}
+        onClick={() => setExpanded(open => !open)}
         className="group flex h-full w-[clamp(200px,32cqw,420px)] max-w-[calc(100cqw-13rem)] @min-[700px]:max-w-[calc(100cqw-25rem)] shrink-0 cursor-pointer items-center gap-2 overflow-hidden border-r border-line bg-sunk px-2.5 text-ink2 outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-selection hover:text-ink aria-expanded:bg-selection aria-expanded:text-ink aria-expanded:hover:bg-selection/80 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <span ref={thumbnail.setViewport} className="min-w-0 flex-1 truncate">
           {expanded ? t("strip.hide")

@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { expectNoSidewaysScroll, expectTextUncut, open, screenshots as shots, settle, test } from "./preview";
+import { expandDetailTimeline, expectNoSidewaysScroll, expectTextUncut, open, screenshots as shots, settle, test } from "./preview";
 
 const MACRO_A = "macro-11111111-1111-4111-8111-111111111111";
 const MACRO_B = "macro-22222222-2222-4222-8222-222222222222";
@@ -107,6 +107,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         await marker.press("Enter");
         const detail = page.locator("[data-slot=task-detail]");
         await expect(detail).toBeVisible();
+        await expandDetailTimeline(page);
         const step = page.locator("[data-slot=detail-strip] [aria-pressed=true]");
         await expect(step).toHaveAccessibleName(new RegExp(stop));
         const pane = detail.locator("[data-slot=detail-pane]");
@@ -130,6 +131,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
         zh ? "停止未确认 · 待核实执行 1 项" : "Stop unconfirmed · executions to verify: 1");
       const hostStop = zh ? "由 Host 停止" : "Stopped by Host";
+      await expandDetailTimeline(page);
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();
       await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();
       await settle(page);

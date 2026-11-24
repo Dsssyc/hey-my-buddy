@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import type { MacroTaskTimeline, TimelineEvent } from "../src/macro-task-types";
-import { open, openLegend, settle, test } from "./preview";
+import { expandDetailTimeline, open, openLegend, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const at = (minutes: number) => new Date(Date.UTC(2026, 8, 27, 6) + minutes * 60_000).toISOString();
@@ -129,6 +129,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
     expect(diamonds.some(diamond => diamond.kind === "review" && diamond.fill === "none" && diamond.stroke !== "none")).toBe(true);
     await page.keyboard.press("Escape");
     await page.locator('[data-key="span:execution:att-a1-2"]').click();
+    await expandDetailTimeline(page);
     const strip = page.locator('[data-slot=detail-strip]');
     await expect(strip).toBeVisible();
     await expect(strip.locator('[data-key="span:execution:att-a1-2"] [data-slot=execution-buddy]')).toHaveCount(0);

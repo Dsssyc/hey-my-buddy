@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const MACRO = "macro-22222222-2222-4222-8222-222222222222";
 
@@ -11,6 +11,7 @@ for (const [locale, conclusion] of [["zh-CN", "Host 的结论"], ["en-US", "Host
       await open(page, `#tasks/${MACRO}/preview-run-b2`);
       const detail = page.locator("[data-slot=task-detail]");
       await expect(detail).toBeVisible();
+      await expandDetailTimeline(page);
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: /^(结论|Conclusion) ·/ }).click();
       const section = page.locator("[data-slot=detail-pane]").getByRole("group", { name: conclusion });
       const title = page.locator("[data-slot=detail-pane] [data-slot=pane-title]");

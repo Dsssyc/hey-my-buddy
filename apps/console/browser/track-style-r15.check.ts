@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 
@@ -41,6 +41,7 @@ for (const width of [390, 1440]) test.describe(`track style ${width}px`, () => {
   for (const detail of [false, true]) test(`keeps axis clocks clear of the fit button in ${detail ? "detail" : "macro"}`, async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
     await open(page, `#tasks/${macro}${detail ? "/preview-run-a1/7" : ""}`);
+    if (detail) await expandDetailTimeline(page);
     const surface = page.locator(detail ? '[data-slot=detail-strip]' : '[data-slot=timeline-tracks]');
     const ruler = surface.locator('[data-slot=zoom-ruler]');
     await ruler.press("+"); await ruler.press("+");

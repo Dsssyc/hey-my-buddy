@@ -4,7 +4,7 @@ import i18n from "i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { CODEX, HOST, OPUS, at, audit, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
-import { chosenStep, open, pane, ready, step, strip, stripSlice } from "./task-detail.testing";
+import { chosenStep, open, pane, ready, step, strip, stripSlice, timelineToggle } from "./task-detail.testing";
 import type { Artifact, Integration } from "./types";
 
 afterEach(cleanup);
@@ -148,6 +148,7 @@ describe("opening the detail of a micro task", () => {
   it("switches detail steps with horizontal arrows, clamps both ends and focuses the step's own slice", async () => {
     const f = open({ step: 1 });
     await ready();
+    await f.user.click(timelineToggle());
     await f.user.keyboard("{ArrowLeft}"); expect(chosenStep()).toContain("委派");
     await f.user.keyboard("{ArrowRight}"); expect(chosenStep()).toContain("路由");
     expect(document.activeElement?.getAttribute("data-key")).toBe("span:r1");
@@ -368,6 +369,7 @@ describe("the route", () => {
     expect(within(pane()).getByRole("heading", { name: "选择依据" })).toBeTruthy();
     expect(pane().querySelector("li code")?.textContent).toBe("contract.ts");
     expect(pane().textContent).toContain("具体的选择依据。".repeat(60));
+    fireEvent.click(timelineToggle());
     fireEvent.click(stripSlice("span:r2")!);
     expect(pane().textContent).toContain("具体的选择依据。".repeat(60) + "二");
   });
@@ -529,6 +531,7 @@ describe("a turn", () => {
     expect(pane().textContent).toContain(CODEX.model);
     expect(pane().textContent).not.toContain("失败");
     expect(chosenStep()).toContain("回合 1");
+    fireEvent.click(timelineToggle());
     expect(stripSlice("span:e1")?.getAttribute("aria-label")).toContain("已改派");
     expect(stripSlice("span:r2")).toBeTruthy();
     await userEvent.setup().click(stripSlice("span:r2")!);
@@ -644,6 +647,7 @@ describe("a Host's decision", () => {
     f.atStep(6);
     expect(pane().textContent).toContain("gpt-6.1-sol");
     expect(pane().textContent).toContain("claude-opus-5-5");
+    await f.user.click(timelineToggle());
     fireEvent.click(stripSlice("event:4")!);
     await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "接管" })).toBeTruthy());
     fireEvent.click(stripSlice("event:5")!);

@@ -19,12 +19,14 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     await open(page, `#tasks/${macro}/${run}/2?tab=session`);
     const bar = page.locator('[data-slot="step-bar"]');
     const toggle = bar.locator('[data-slot="timeline-toggle"]');
+    const fullTimeline = page.locator('[data-slot="detail-strip"] > [data-expanded]');
     const track = page.locator('[data-slot="detail-timeline"] [data-slot="timeline-track"]');
     const readout = bar.locator('[data-slot="step-readout"]');
     const title = readout.locator(":scope > span").first();
     const panels = page.getByRole("tab", { name: session, exact: true });
     await expect(panels).toHaveAttribute("aria-selected", "true");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(fullTimeline).toHaveAttribute("inert", "");
     await expect(bar).toHaveCSS("height", "38px");
     await expect(toggle).toHaveCSS("height", "38px");
     await expect(toggle).toHaveCSS("border-right-width", "1px");
@@ -56,6 +58,8 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     })).toBe(true);
     await bar.getByRole("button", { name: next, exact: true }).click();
     await expect(page).toHaveURL(/\/3\?tab=session$/);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(thumbnail).toBeVisible();
     const expectUnmovedToggle = async () => {
       const box = (await toggle.boundingBox())!;
       expect(box.x).toBe(before.x);
@@ -67,6 +71,7 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     if (width === 1440) await expectWholeAndApart(readout, readout.locator(":scope > *"));
     await toggle.click();
     await expect(toggle).toHaveAccessibleName(hide);
+    await expect(fullTimeline).not.toHaveAttribute("inert", "");
     await settle(page);
     await expectUnmovedToggle();
     const fit = Number(await track.getAttribute("width"));
@@ -75,7 +80,9 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     await settle(page);
     await expectUnmovedToggle();
     await toggle.hover();
+    if (locale === "en-US") await page.keyboard.down("Control");
     await page.mouse.wheel(0, -250);
+    if (locale === "en-US") await page.keyboard.up("Control");
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect.poll(async () => Number(await track.getAttribute("width"))).toBeGreaterThan(fit);
     const ruler = page.locator('[data-slot="detail-timeline"] [data-slot="zoom-ruler"]');
@@ -83,7 +90,16 @@ for (const [locale, width, reducedMotion, session, overview, hide, next, routeTi
     await expect.poll(async () => Number(await track.getAttribute("width"))).toBe(fit);
     await toggle.click();
     await page.getByRole("tab", { name: overview, exact: true }).click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(thumbnail).toBeVisible();
+    await expect(fullTimeline).toHaveAttribute("inert", "");
+    await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("tab", { name: session, exact: true }).click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${macro}/preview-run-a2/3`);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(thumbnail).toBeVisible();
     await expectNoSidewaysScroll(page);
   });
 });

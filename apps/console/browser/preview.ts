@@ -29,6 +29,15 @@ export async function open(page: Page, hash: string): Promise<void> {
   await page.getByRole("navigation").first().waitFor();
 }
 
+/** Expand the detail's full timeline before interacting with its slices or ruler. */
+export async function expandDetailTimeline(page: Page): Promise<void> {
+  const toggle = page.locator('[data-slot="timeline-toggle"]');
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await settle(page);
+}
+
 /** Open the timeline key after navigating to a macro task. */
 export async function openLegend(page: Page): Promise<Locator> {
   await page.locator('[data-slot="legend-trigger"]').click();

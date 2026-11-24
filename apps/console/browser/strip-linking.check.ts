@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { expectNoSidewaysScroll, open, test } from "./preview";
+import { expandDetailTimeline, expectNoSidewaysScroll, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const run = "preview-run-a1";
@@ -67,6 +67,7 @@ for (const theme of ["dark", "light"]) for (const locale of ["zh-CN", "en-US"]) 
       const last = item(page, `inquiry:${late}`);
       await expect(last).toBeAttached();
       await page.evaluate(() => document.fonts.ready);
+      await expandDetailTimeline(page);
       const ruler = strip(page).locator('[data-slot=zoom-ruler]:visible');
       for (let index = 0; index < 8 && await marker(page, `inquiry:${late}`).count() === 0; index++) await ruler.press("+");
       const lateMarker = marker(page, `inquiry:${late}`);
@@ -189,6 +190,7 @@ for (const motion of ["reduce", "no-preference"] as const) test.describe(`strip 
     await longTurn(page);
     await open(page, `#tasks/${macro}/${run}/3`);
     await expect(item(page, `inquiry:${late}`)).toBeAttached();
+    await expandDetailTimeline(page);
     const ruler = strip(page).locator('[data-slot=zoom-ruler]:visible');
     for (let index = 0; index < 8 && await marker(page, `inquiry:${late}`).count() === 0; index++) await ruler.press("+");
     await marker(page, `inquiry:${late}`).click();

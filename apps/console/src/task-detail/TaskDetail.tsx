@@ -182,7 +182,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
       <div className="shrink-0 border-b py-2"><ExecutionIssues attempt={view.attempt} /></div>}
     {steps && !steps.complete && <p className="border-b bg-background px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
     {steps && current && ctx && row && <div ref={stripRef} data-slot="detail-step-band" className="shrink-0 border-b border-line bg-background">
-      <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip} tab={tab}/>
+      <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>
     </div>}
     {steps && current && ctx
       ? <div key={current.key} data-step-direction={stepDirection} className={cn("flex min-h-0 min-w-0 flex-1 flex-col motion-reduce:transition-none", stepDirection && "step-pane-enter")}>{pane(current, ctx, execution ? children =>

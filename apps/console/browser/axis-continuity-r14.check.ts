@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,7 @@ for (const theme of ["dark", "light"]) for (const detail of [false, true]) for (
     test("keeps one baseline and a small break mark across every folded interval", async ({ page }) => {
       await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
       await open(page, `#tasks/${macro}${detail ? "/preview-run-b1/3" : ""}`);
+      if (detail) await expandDetailTimeline(page);
       const zoom = page.locator("[data-slot=zoom-ruler]:visible");
       await zoom.press("+"); await zoom.press("+");
       await page.evaluate(() => (document.activeElement as HTMLElement).blur());

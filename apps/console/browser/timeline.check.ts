@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { screenshots as shots, open, test, settle, expectNoSidewaysScroll, expectWholeAndApart } from "./preview";
+import { expandDetailTimeline, screenshots as shots, open, test, settle, expectNoSidewaysScroll, expectWholeAndApart } from "./preview";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
@@ -204,6 +204,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     await expect(fragment(execution)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.locator("[data-slot=detail-strip]")).toBeVisible();
+    await expandDetailTimeline(page);
     const chosen = page.locator('[data-slot=detail-strip] [aria-pressed=true]');
     await expect(chosen).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "回合 2" : "Turn 2"));
     const current = Number((await page.evaluate(() => window.location.hash.match(/\/(\d+)$/)))?.[1]);

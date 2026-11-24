@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { at, event, row, timeline } from "./task-detail.fixtures";
-import { open, pane, ready, strip, stripSlice } from "./task-detail.testing";
+import { open, pane, ready, strip, stripSlice, timelineToggle } from "./task-detail.testing";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -12,27 +12,54 @@ const scroll = () => document.querySelector<HTMLElement>('[data-slot=detail-stri
 const trackSvg = () => document.querySelector<SVGElement>('[data-slot=detail-strip] [data-slot=timeline-track]')!;
 
 describe("the step strip along the top of a micro task's detail", () => {
-  it("starts folded on Session and opens or closes from the same control", async () => {
-    const f = open({ step: 3 });
+  it.each([["overview", "概述"], ["session", "会话"]] as const)("starts folded on %s", async (tab, label) => {
+    open({ step: 3, tab });
     await ready();
-    const toggle = strip().querySelector<HTMLButtonElement>('[data-slot="timeline-toggle"]')!;
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    await f.user.click(screen.getByRole("tab", { name: "会话" }));
+    expect(screen.getByRole("tab", { name: label }).getAttribute("aria-selected")).toBe("true");
+    const toggle = timelineToggle();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.querySelector('[data-slot="timeline-thumbnail"]')).toBeTruthy();
     expect(toggle.querySelector('[data-slot="thumbnail-selection"]')).toBeTruthy();
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)!.hasAttribute("inert")).toBe(true);
+  });
+
+  it("keeps the reader's expansion choice across step and tab changes", async () => {
+    const f = open({ step: 2, tab: "session" });
+    await ready();
+    const toggle = timelineToggle();
+    const timeline = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    const previous = screen.getByRole("button", { name: "上一步" });
+    const next = screen.getByRole("button", { name: "下一步" });
+
+    await f.user.click(previous);
+    expect(screen.queryByRole("tab", { name: "会话" })).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await f.user.click(next);
+    await f.user.click(screen.getByRole("tab", { name: "会话" }));
+    expect(toggle.querySelector('[data-slot="timeline-thumbnail"]')).toBeTruthy();
+
     await f.user.click(toggle);
     expect(toggle.textContent).toContain("收起时间轴");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    await f.user.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    await f.user.click(screen.getByRole("tab", { name: "概述" }));
+    expect(timeline.hasAttribute("inert")).toBe(false);
+    await f.user.click(previous);
+    expect(screen.queryByRole("tab", { name: "会话" })).toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await f.user.click(next);
+    await f.user.click(screen.getByRole("tab", { name: "会话" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    await f.user.click(toggle);
+    await f.user.click(screen.getByRole("tab", { name: "概述" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.querySelector('[data-slot="timeline-thumbnail"]')).toBeTruthy();
+    expect(timeline.hasAttribute("inert")).toBe(true);
   });
 
   it("centres the step the detail opened with once; a later read never recentres it", async () => {
     const f = open({ origin: "span:e2" });
     await ready();
+    fireEvent.click(timelineToggle());
     const centred = scroll().scrollLeft;
     expect(centred).toBeGreaterThan(0);
     f.reread({ origin: "span:e2", timeline: timeline() });
@@ -44,6 +71,9 @@ describe("the step strip along the top of a micro task's detail", () => {
     const f = open({ origin: "span:r1" });
     await ready();
     const fitted = Number(trackSvg().getAttribute("width"));
+    fireEvent.keyDown(timelineToggle(), { key: "+" });
+    expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
+    await f.user.click(timelineToggle());
     const ruler = strip().querySelector<HTMLElement>('[data-slot="zoom-ruler"]')!;
     fireEvent.wheel(ruler, { deltaY: -300, clientX: 220 });
     expect(Number(trackSvg().getAttribute("width"))).toBeGreaterThan(fitted);
@@ -51,15 +81,17 @@ describe("the step strip along the top of a micro task's detail", () => {
     expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
     fireEvent.keyDown(strip(), { key: "+" });
     expect(Number(trackSvg().getAttribute("width"))).toBeGreaterThan(fitted);
-    fireEvent.keyDown(strip(), { key: "0" });
-    expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
     fireEvent.keyDown(strip(), { key: "-" });
+    expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
+    fireEvent.keyDown(strip(), { key: "+" });
+    fireEvent.keyDown(strip(), { key: "0" });
     expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
   });
 
   it("keeps one selected slice, switches the step below with one click, and offers the delegation as its own slice", async () => {
     const f = open({ timeline: timeline(), step: 2 });
     await ready();
+    fireEvent.click(timelineToggle());
     expect(stripSlice("span:r1")!.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(stripSlice("span:h1")!);
     await Promise.resolve();
@@ -101,6 +133,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     await f.user.click(previous());
     expect(pane().textContent).toContain("实现微任务详情");
     expect(previous().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(timelineToggle());
     fireEvent.click(strip().querySelector('[data-key="settle:m1"]')!);
     expect(next().getAttribute("aria-disabled")).toBe("true");
     await f.user.click(next());
@@ -110,6 +143,7 @@ describe("the step strip along the top of a micro task's detail", () => {
   it("offers a delivered micro task's open acceptance as its own slice at the end of the record", async () => {
     open({ timeline: timeline(), origin: "span:e2" });
     await ready();
+    fireEvent.click(timelineToggle());
     const acceptance = strip().querySelector('[data-key="settle:m1"]')!;
     expect(acceptance.getAttribute("aria-pressed")).toBe("false");
     expect(acceptance.getAttribute("aria-label")).toContain("等待验收");
@@ -126,6 +160,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     await ready();
     expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-pressed")).toBe("true");
     // The wait's recorded start anchors the one centre-on-open; the reader's own scrolling then stands.
+    fireEvent.click(timelineToggle());
     const centred = scroll().scrollLeft;
     expect(centred).toBeGreaterThan(0);
     scroll().scrollLeft = 0;
@@ -145,6 +180,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     open({ timeline: settled, step: 8 });
     await ready();
     expect(pane().textContent).toContain("已验收");
+    fireEvent.click(timelineToggle());
     const accept = stripSlice("event:5")!;
     expect(accept.getAttribute("aria-pressed")).toBe("true");
     expect(strip().querySelectorAll('[aria-pressed=true]')).toHaveLength(1);
@@ -160,6 +196,7 @@ describe("the step strip along the top of a micro task's detail", () => {
   it("gives a change of buddy its own slice on the boundary it happened on, selectable and alone", async () => {
     const f = open({ timeline: timeline(), step: 7 });
     await ready();
+    fireEvent.click(timelineToggle());
     const handoff = strip().querySelector('[data-key^="handoff:"]')!;
     expect(handoff.getAttribute("aria-label")).toContain("换手");
     expect(handoff.getAttribute("aria-label")).toContain("gpt-6.1-sol");

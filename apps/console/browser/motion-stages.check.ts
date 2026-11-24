@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { open, settle, test } from "./preview";
+import { expandDetailTimeline, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const detail = (page: Page) => page.locator('[data-slot=task-detail]');
@@ -76,6 +76,7 @@ export async function runCheck(page: Page) {
     await expect(content(page)).toHaveCSS("animation-name", `step-${direction}-in`);
   }
   // A cross-step click uses a fade, then a different micro task replays the stage.
+  await expandDetailTimeline(page);
   await page.locator('[data-slot=detail-strip] [data-key=delegation]').click();
   await expect(content(page)).toHaveAttribute("data-step-direction", "jump");
   await expect(content(page)).toHaveCSS("animation-name", "stage-fade-in");

@@ -129,6 +129,7 @@ afterEach(() => { cleanup(); setLanguageChoice("browser"); delete (window as { m
 
 const detailOf = () => screen.getByRole("region", { name: "微任务详情" });
 const stripOf = () => screen.getByRole("group", { name: "微任务步骤" });
+const timelineToggle = () => stripOf().querySelector<HTMLButtonElement>('[data-slot="timeline-toggle"]')!;
 const selectedStep = () => (detailOf().querySelector("[data-slot=detail-pane] h3") ?? detailOf()).textContent!;
 const hashNow = () => window.location.hash;
 /** A step back or forward through the browser's history. */
@@ -192,6 +193,7 @@ describe("the detail of a micro task in its macro task", () => {
     await openSpan(f, "s-r2-e1");
     expect(window.history.length).toBe(length + 1);
     expect(hashNow()).toBe("#tasks/macro-1/r2/3");
+    await f.user.click(timelineToggle());
     await f.user.click(within(stripOf()).getByRole("button", { name: "委派" }));
     expect(hashNow()).toBe("#tasks/macro-1/r2/1");
     expect(window.history.length).toBe(length + 1);
@@ -270,6 +272,7 @@ describe("the detail of a micro task in its macro task", () => {
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r2-e1");
+    await f.user.click(timelineToggle());
     await f.user.click(within(stripOf()).getByRole("button", { name: "委派" }));
     await f.user.click(within(detailOf()).getByRole("button", { name: "补充 schema 升级离线副本的验证测试" }));
     await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3", expect.any(AbortSignal)));
@@ -303,6 +306,7 @@ describe("the detail of a micro task in its macro task", () => {
     await openMacroTask(f);
     await openSpan(f, "s-r2-r");
     expect(selectedStep()).toContain("路由");
+    await f.user.click(timelineToggle());
     await f.user.click(within(stripOf()).getByRole("button", { name: "委派" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
     await openSpan(f, "s-r2-r");
@@ -317,9 +321,14 @@ describe("the detail of a micro task in its macro task", () => {
     await f.user.click(document.querySelector('[data-key="row:r1"]')!);
     await screen.findByRole("group", { name: "微任务步骤" });
     expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
+    expect(timelineToggle().getAttribute("aria-expanded")).toBe("false");
+    await f.user.click(timelineToggle());
+    expect(timelineToggle().getAttribute("aria-expanded")).toBe("true");
     // The list beside the detail switches micro tasks with one click; the open row is where the reader is.
     await f.user.click(document.querySelector('[data-key="row:r2"]')!);
     await waitFor(() => expect(hashNow()).toMatch(/^#tasks\/macro-1\/r2\/\d+$/));
+    await waitFor(() => expect(timelineToggle().getAttribute("aria-expanded")).toBe("false"));
+    expect(timelineToggle().querySelector('[data-slot="timeline-thumbnail"]')).toBeTruthy();
     expect(document.querySelector('[data-key="row:r1"]')!.getAttribute("aria-current")).toBeNull();
     expect(document.querySelector('[data-key="row:r2"]')!.getAttribute("aria-current")).toBe("true");
   });

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX, HOST, NO_BASIS, OPUS, REASON, at, audit, client, event, inquiry, result, routing, row, span, task, timeline, workflow } from "./task-detail.fixtures";
-import { chosenStep, open, pane, ready, strip, stripSlice } from "./task-detail.testing";
+import { chosenStep, open, pane, ready, strip, stripSlice, timelineToggle } from "./task-detail.testing";
 import type { Artifact, Basis, Integration } from "./types";
 
 afterEach(cleanup);
@@ -135,6 +135,7 @@ describe("a route", () => {
     expect(pane().textContent).not.toContain("改用快速模式后的结论");
     expect(band().textContent).toContain("审阅");
     expect(band().textContent).toContain("gpt-6-luna");
+    fireEvent.click(timelineToggle());
     fireEvent.click(stripSlice("span:r2")!);
     await waitFor(() => expect(pane().textContent).toContain("改用快速模式后的结论"));
     expect(pane().textContent).not.toContain("审阅模式不可用之前的结论");

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { at, event, inquiry, row, timeline } from "./task-detail.fixtures";
-import { open, pane, ready, strip, stripSlice } from "./task-detail.testing";
+import { open, pane, ready, strip, stripSlice, timelineToggle } from "./task-detail.testing";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 beforeEach(() => vi.stubGlobal("matchMedia", () => ({ matches: true })));
@@ -18,6 +18,7 @@ describe("one focused item shared by the strip and the overview", () => {
     const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
     const f = open({ step: 7, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
     await ready();
+    await f.user.click(timelineToggle());
     const marker = stripSlice("inquiry:inq-1")!;
     expect(marker.getAttribute("tabindex")).toBe("0");
     if (action === "click") fireEvent.click(marker);
@@ -32,6 +33,7 @@ describe("one focused item shared by the strip and the overview", () => {
   it("marks the strip only when an entry is selected, never while the pointer passes", async () => {
     const f = open({ step: 3, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
     await ready();
+    await f.user.click(timelineToggle());
     await f.user.hover(item("inquiry:inq-1"));
     item("inquiry:inq-1").focus();
     expect(f.onStep).not.toHaveBeenCalled();
@@ -55,6 +57,7 @@ describe("one focused item shared by the strip and the overview", () => {
     const f = open({ step: 3, origin: "span:e1" });
     await ready();
     expect(pane().querySelectorAll("[data-highlighted=true]")).toHaveLength(0);
+    await f.user.click(timelineToggle());
     fireEvent.click(stripSlice("span:e1")!);
     expect(f.onStep).toHaveBeenLastCalledWith(3, "span:e1");
     expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("true");
@@ -112,6 +115,7 @@ describe("one focused item shared by the strip and the overview", () => {
   it.each([["span:q1", 2], ["span:q2", 6], ["span:h1", 4], ["settle:m1", 8]] as const)("links the wait %s in both directions", async (key, step) => {
     const f = open({ step });
     await ready();
+    await f.user.click(timelineToggle());
     const marker = stripSlice(key)!;
     fireEvent.keyDown(marker, { key: " " });
     expect(f.onStep).toHaveBeenLastCalledWith(step, key);
@@ -127,6 +131,7 @@ describe("one focused item shared by the strip and the overview", () => {
     settled.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
     const f = open({ step: 3, timeline: settled });
     await ready();
+    await f.user.click(timelineToggle());
     fireEvent.click(stripSlice("settle:m1")!);
     expect(f.onStep).toHaveBeenLastCalledWith(8, "settle:m1");
     expect(item("settle:m1").getAttribute("data-highlighted")).toBe("true");

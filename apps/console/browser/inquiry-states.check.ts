@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
+import { expandDetailTimeline, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 // All three are real synthetic preview records in the same macro task. The ZCode
 // turn is still running; the two terminal questions belong to the ended DSH turn.
@@ -87,6 +87,7 @@ for (const words of labels) for (const width of [390, 1440]) for (const theme of
     test("shows checkpoint queuing and both ended states in full without overflow", async ({ page }, testInfo) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${MACRO}/preview-run-b8`);
+      await expandDetailTimeline(page);
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(`^${words.turn} 1(?: ·|$)`) }).press("Enter");
       await expect(page.locator("[data-slot=detail-pane]")).toContainText("zcode / zai / glm-5");
       await expectInquiryWhole(page, "inq-b8-checkpoint", words.queued);
@@ -94,6 +95,7 @@ for (const words of labels) for (const width of [390, 1440]) for (const theme of
       await page.screenshot({ path: testInfo.outputPath(`inquiry-queued-${words.locale}-${width}.png`) });
 
       await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${MACRO}/preview-run-b9`);
+      await expandDetailTimeline(page);
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(`^${words.turn} 2(?: ·|$)`) }).press("Enter");
       await expect(page.locator("[data-slot=detail-pane]")).toContainText("dsh / deepseek-official / deepseek-flash");
       for (const [id, text, name] of [

@@ -1,5 +1,5 @@
 import { expect, type Locator } from "@playwright/test";
-import { open, settle, test } from "./preview";
+import { expandDetailTimeline, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const run = "preview-run-a1";
@@ -41,6 +41,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       }
 
       await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${macro}/${run}/2`);
+      await expandDetailTimeline(page);
       const strip = page.locator("[data-slot=detail-strip]");
       const track = strip.locator("[data-slot=timeline-track]");
       await expect(track).toBeVisible();

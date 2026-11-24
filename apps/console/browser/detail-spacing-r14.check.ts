@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const captures = fileURLToPath(new URL("../test-results/shots/detail-groups", import.meta.url));
@@ -17,6 +17,11 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const tabs = page.locator('[data-slot=detail-tabs] [role=tablist]');
     const title = page.locator('[data-slot=detail-pane] h3').first();
     await expect(title).toHaveText("回合 2");
+    const toggle = strip.locator('[data-slot=timeline-toggle]');
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle.locator('[data-slot=timeline-thumbnail]')).toBeVisible();
+    await expect(strip).toHaveCSS("height", "38px");
+    await expandDetailTimeline(page);
     const [headBox, stripBox, tabsBox, titleBox] = await Promise.all([header.boundingBox(), strip.boundingBox(), tabs.boundingBox(), title.boundingBox()]);
     expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(0, 0);
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
@@ -59,6 +64,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await mkdir(captures, { recursive: true });
     await page.mouse.move(0, 0); await page.screenshot({ path: `${captures}/overview-${theme}-${width}.png` });
     await tabs.getByRole("tab", { name: "会话", exact: true }).click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     // No header above the session: the transcript begins under the tab row, where
     // the session coverage control sits at the right end.
     const coverage = tabs.getByRole("button", { name: "会话内容", exact: true });
