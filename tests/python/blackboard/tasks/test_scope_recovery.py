@@ -132,7 +132,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def resolution_facts(self, board, run_id, conflict_id, request_id, reply):
         """Read the detailed facts from get and immutable records after a compact action reply."""
         self.assertFalse(set(reply) - {"runId", "state", "actions", "requestId",
-                                       "nextRequestId", "artifactId", "continuationId",
+                                       "nextRequestId", "artifactId", "turnId", "continuationId",
                                        "alreadyResponded", "resolutionState", "resolvedFingerprint", "continuationBlocked"})
         view = self.view(board, run_id)
         conflict = next(row for row in view["workspaceConflicts"] if row["conflictId"] == conflict_id)
@@ -608,7 +608,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         conflict = view["workspaceConflicts"][0]
         answer = {"note": "Preserve the changed excluded file", "input": "Resume after the site is clear"}
         first = self.resolve(board, view, conflict, "abandon", **answer)
-        self.assertEqual(first["resolutionState"], "open")
+        self.assertEqual(first["resolutionState"], "abandoned")
+        self.assertTrue(first["resolved"])
+        self.assertEqual(first["remainingPaths"], ["local-cache.txt"])
+        self.assertIsNone(first["activeRequest"])
+        self.assertEqual(first["reply"]["actions"], ["continue", "conclude", "get"])
+        self.assertEqual(first["reply"]["turnId"], view["currentTurn"]["turnId"])
         self.assertIsNotNone(first["artifactId"])
         self.assertTrue(first["reply"]["continuationBlocked"])
         self.assertNotIn("continuationId", first["reply"])
@@ -623,6 +628,128 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (submitted["runId"],)
             ).fetchone()[0], 0)
+
+    def test_continue_after_abandon_refreshes_changed_excluded_entries(self):
+        board, submitted, _, before, checkout = self.scoped_failure(excluded_change="local-cache.txt")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        abandoned = self.resolve(board, view, view["workspaceConflicts"][0], "abandon",
+                                 note="Discard the failed turn")
+        self.assertEqual(abandoned["remainingPaths"], ["local-cache.txt"])
+        self.assertFalse((checkout / "local-cache.txt").exists())
+        self.continue_run(board, abandoned, turnId=view["currentTurn"]["turnId"])
+        resumed = self.claim(board, run_id, request_id="resume-abandoned")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        after = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
+        self.assertNotEqual(after["manifestSha256"], before["manifestSha256"])
+        self.assertEqual(after["snapshot"]["excludedEntries"], {})
+        self.assertEqual(after["inputTree"], before["inputTree"])
+        sealed = workspace_module.seal(self.directory, after, run_id, resumed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, resumed, sealed)
+        self.assertEqual(self.view(board, run_id)["state"], "delivered")
+
+    def managed_failure_with_deleted_exclusion(self):
+        board = self.board()
+        submitted = self.micro_task_submit(board, kind="worktree")
+        run_id = submitted["runId"]
+        first = self.claim(board, run_id)
+        manifest = turn_manifest(self.directory, first["claim"]["turn"]["input"])
+        checkout = Path(manifest["path"])
+        sealed = workspace_module.seal(self.directory, manifest, run_id, first["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, first, sealed, disposition="attention")
+        # The Host adds local files after Turn 1. They are excluded from Turn 2's
+        # input tree, but their fingerprints are recorded when it is prepared.
+        for name in ("local-cache.txt", "kept-cache.txt"):
+            (checkout / name).write_text("Local cache\n", encoding="utf-8")
+        self.continue_run(board, submitted)
+        second = self.claim(board, run_id, request_id="claim-second")
+        self.assertIsNotNone(second["claim"], second)
+        manifest = turn_manifest(self.directory, second["claim"]["turn"]["input"])
+        self.assertEqual(sorted(manifest["snapshot"]["excludedEntries"]), ["kept-cache.txt", "local-cache.txt"])
+        (checkout / "local-cache.txt").unlink()
+        (checkout / "outside.txt").write_text("Unapproved change\n", encoding="utf-8")
+        attempt_id = second["claim"]["attempt"]["attemptId"]
+        with self.assertRaises(BoardError) as refused:
+            workspace_module.seal(self.directory, manifest, run_id, attempt_id)
+        self.assertEqual(refused.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+        self.scope_failure(board, second)
+        return board, self.view(board, run_id), manifest, checkout, attempt_id
+
+    def test_conclude_and_resume_reclamation_after_abandon_with_deleted_exclusion(self):
+        board, view, _, checkout, _ = self.managed_failure_with_deleted_exclusion()
+        run_id = view["runId"]
+        abandoned = self.resolve(board, view, view["workspaceConflicts"][0], "abandon",
+                                 note="Discard the failed turn")
+        self.assertTrue(abandoned["resolved"])
+        self.assertEqual(abandoned["remainingPaths"], ["local-cache.txt"])
+
+        def interrupt_removal(*args, **kwargs):
+            (checkout / "kept-cache.txt").unlink()
+            raise BoardError("WORKSPACE_IO_ERROR", "Interrupted during checkout removal")
+
+        # Conclude starts normal reclamation. The surviving checkout on resume
+        # has a new fingerprint and needs the full sealed-tree comparison.
+        with patch.object(workspace_module, "cleanup_remove", side_effect=interrupt_removal):
+            concluded = board.call("workflow_conclude", {"runId": run_id, "note": "End the stopped run"})
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertEqual(concluded["reclaim"]["reasons"], ["WORKSPACE_IO_ERROR"])
+        concluded = self.view(board, run_id)
+        self.assertEqual(concluded["cleanup"]["state"], "applying")
+        partial = self.resolution_record(board, concluded["hostConclusion"])
+        self.assertEqual(partial["snapshot"]["excludedChangedPaths"], ["local-cache.txt"])
+        self.assertTrue(board.store.workflow._reclaim_checkout(run_id=run_id)["removed"])
+        self.assertEqual(self.view(board, run_id)["cleanup"]["state"], "applied")
+        self.assertFalse(checkout.exists())
+
+    def test_conclude_after_abandon_refuses_new_out_of_scope_edits(self):
+        board, view, _, checkout, _ = self.managed_failure_with_deleted_exclusion()
+        self.resolve(board, view, view["workspaceConflicts"][0], "abandon", note="Discard the failed turn")
+        for name in ("outside.txt", "local-cache.txt", "kept-cache.txt"):
+            with self.subTest(path=name):
+                path = checkout / name
+                original = path.read_bytes() if path.exists() else None
+                path.write_text("New unapproved edit\n", encoding="utf-8")
+                with self.assertRaises(BoardError) as refused:
+                    board.call("workflow_conclude", {"runId": view["runId"], "note": "End the stopped run"})
+                self.assertEqual(refused.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+                self.assertEqual(refused.exception.details["paths"], [name])
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
+
+    def test_abandon_settles_previous_open_conflict_with_pinned_abandoned_site(self):
+        board, view, manifest, checkout, attempt_id = self.managed_failure_with_deleted_exclusion()
+        run_id = view["runId"]
+        conflict = view["workspaceConflicts"][0]
+        resolution_result = workspace_module._resolution_result
+
+        def previous_abandon(action, state, artifact, resolved, preserved, remaining, observed, after):
+            if action == "abandon" and remaining:
+                state = "open"
+            return resolution_result(action, state, artifact, resolved, preserved, remaining, observed, after)
+
+        with patch.object(workspace_module, "_resolution_result", side_effect=previous_abandon):
+            stuck = self.resolve(board, view, conflict, "abandon", note="Preserve the failed site")
+        self.assertEqual(stuck["resolutionState"], "open")
+        self.assertNotEqual(stuck["resolvedFingerprint"], conflict["observedFingerprint"])
+        _, paths = self.historical_record_paths(manifest, run_id, attempt_id, "abandoned")
+        before = [native_path(path).read_bytes() for path in paths]
+        shifted = self.view(board, run_id)
+        restored = self.resolve(board, shifted, shifted["workspaceConflicts"][0], "restore", paths=["local-cache.txt"])
+        self.assertEqual(restored["resolutionState"], "open")
+        self.assertEqual(restored["resolvedFingerprint"], stuck["resolvedFingerprint"])
+        self.assertEqual(restored["remainingPaths"], ["local-cache.txt"])
+        fresh = self.view(board, run_id)
+        settled = self.resolve(board, fresh, fresh["workspaceConflicts"][0], "abandon", note="Settle the remaining site")
+        self.assertEqual(settled["resolutionState"], "abandoned")
+        self.assertEqual(settled["artifactId"], stuck["artifactId"])
+        self.assertEqual(settled["remainingPaths"], ["local-cache.txt"])
+        self.assertEqual([native_path(path).read_bytes() for path in paths], before)
+        concluded = board.call("workflow_conclude", {"runId": run_id, "note": "End the recovered run"})
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertTrue(concluded["reclaim"]["removed"], concluded)
+        self.assertFalse(checkout.exists())
 
     def test_historical_resolution_replays_without_rewriting_sealed_bytes(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="historical-adopt")

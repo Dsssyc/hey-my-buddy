@@ -1449,7 +1449,8 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
     }
 
 
-def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, state_dir=None):
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None,
+                    allowed_excluded=(), state_dir=None):
     initial = _entries(root, manifest["inputCommit"])
     staged_tree = manifest["snapshot"]["stagedTree"]
     initial_index = (_entries(root, staged_tree)
@@ -1485,7 +1486,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     changed = sorted(path for path in initial.keys() | entries.keys() if initial.get(path) != entries.get(path))
     index_changes = {path for path in initial_index.keys() | observation["index"].keys()
                      if initial_index.get(path) != observation["index"].get(path)}
-    outside = {path for path in set(changed) | index_changes | excluded_changes
+    outside = {path for path in set(changed) | index_changes | (excluded_changes - set(allowed_excluded or ()))
                if not _in_scope(path, scope) and path not in allowed}
     if allow_outside_scope:
         # An explicitly adopted site promotes these exact paths; the record keeps
@@ -1532,7 +1533,7 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
 
 
 def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *, allowed_paths=(),
-              admission_check=None) -> dict:
+              allowed_excluded=(), admission_check=None) -> dict:
     """Seal the Host's own unsealed managed changes as an independent partial output.
 
     A Host conclusion must never overwrite the Worker's earlier fixed partial
@@ -1541,15 +1542,18 @@ def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
     ``allowed_paths`` names the exact paths an earlier Host decision (an adopted
     conflict site or a previous Host seal) already promoted; they are treated as
     authorized while any newly changed path outside the write scope still fails.
+    ``allowed_excluded`` names excluded paths left absent by a settled abandon.
     The caller's ``admission_check`` runs under the workspace lock before any
     output write, sharing the fence used to mark macro task deletion.
     """
     return _seal_output(state_dir, manifest, task_id, attempt_id, suffix="-host", kind="host-output",
-                        allowed_paths=tuple(allowed_paths or ()), admission_check=admission_check)
+                        allowed_paths=tuple(allowed_paths or ()), allowed_excluded=allowed_excluded,
+                        admission_check=admission_check)
 
 
 def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
-                 suffix: str, kind: str | None, allowed_paths: tuple = (), admission_check=None) -> dict:
+                 suffix: str, kind: str | None, allowed_paths: tuple = (), allowed_excluded=(),
+                 admission_check=None) -> dict:
     with _errors():
         _validate_manifest(manifest)
         workspace_id = manifest["workspaceId"]
@@ -1579,7 +1583,8 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             else:
                 try:
                     entries, changed, excluded_changes, _adopted = _output_entries(
-                        root, manifest, observation, allowed_paths=allowed_paths, state_dir=state_dir)
+                        root, manifest, observation, allowed_paths=allowed_paths,
+                        allowed_excluded=allowed_excluded, state_dir=state_dir)
                 except BoardError as error:
                     # The failed site keeps a durable record of exactly
                     # which managed paths diverged and from which authorized state.
@@ -1645,6 +1650,34 @@ def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> di
 
 
 # -- scope failure evidence and Host-directed recovery ------------------------
+def check_scope(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
+                allowed_paths=(), admission_check=None) -> None:
+    """Check a stopped attempt against its frozen scope before capturing recovery input."""
+    with _errors():
+        _validate_manifest(manifest)
+        workspace_dir = Path(state_dir).resolve() / "workspaces" / manifest["workspaceId"]
+        with _lock(workspace_dir):
+            if admission_check is not None:
+                admission_check()
+            if _record(workspace_dir / "manifest.json") != manifest:
+                raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
+            _verify(manifest, state_dir=state_dir, require_unchanged=False)
+            if manifest["access"] == "read":
+                return
+            root = Path(manifest["checkoutRoot"])
+            observation = _observe(root, **_observation_inputs(manifest), state_dir=state_dir,
+                                   capture=[*manifest["writeScope"], *allowed_paths])
+            try:
+                _output_entries(root, manifest, observation, allowed_paths=allowed_paths, state_dir=state_dir)
+            except BoardError as error:
+                if error.code == "WORKSPACE_SCOPE_VIOLATION" and isinstance(error.details.get("evidence"), dict):
+                    directory = workspace_dir / "outputs" / _sha(_json([task_id, attempt_id]))
+                    _mkdir(directory.parent)
+                    _mkdir(directory)
+                    _record_scope_evidence(directory, error.details["evidence"], task_id, attempt_id)
+                raise
+
+
 def _record_scope_evidence(directory, evidence, task_id, attempt_id):
     """Keep one failure-site record per observed workspace fingerprint."""
     record = dict(evidence, taskId=task_id, attemptId=attempt_id)
@@ -1899,7 +1932,7 @@ def _reset_site(root, manifest, observation, *, state_dir):
     # An excluded cache was never captured by content, so a modified one cannot be
     # returned mechanically; it is reported instead of being silently accepted.
     remaining = sorted(path for path, fingerprint in excluded.items()
-                       if observation["untracked"].get(path) != fingerprint)
+                       if after["untracked"].get(path) != fingerprint)
     return sorted(selected), remaining, after
 
 
@@ -2118,8 +2151,10 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                                              task_id=task_id, attempt_id=attempt_id, actor=actor,
                                              note=note, conflict_fingerprint=records[0]["observedFingerprint"], state_dir=state_dir)
                 reset, remaining, after = _reset_site(root, manifest, observation, state_dir=state_dir)
+                excluded_keys = set(manifest["snapshot"]["excludedEntries"]) if manifest["kind"] == "existing" else set()
                 remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after, state_dir=state_dir)))
-                return _resolution_result("abandon", "abandoned" if not remaining else "open", evidence,
+                non_excluded_remaining = set(remaining) - excluded_keys
+                return _resolution_result("abandon", "open" if non_excluded_remaining else "abandoned", evidence,
                                           reset, [], remaining, observation["fingerprint"], after["fingerprint"])
             selected = selected_paths or blocking
             unknown = [path for path in selected if path not in entries]
@@ -2902,7 +2937,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
                           - sealed_entries.keys())
             removed_excluded = {path for path in candidates if not _path_present(checkout_root / path)}
         entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
-                                                                           allowed_paths=(*allowed, *removed_excluded))
+                                                                           allowed_paths=(*allowed, *removed_excluded),
+                                                                           allowed_excluded=tuple(snapshot.get("excludedChangedPaths") or ()))
         unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
                           if entries_now.get(path) != sealed_entries.get(path))
         remaining_excluded = set(excluded_changes) - removed_excluded
