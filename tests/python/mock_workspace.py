@@ -164,6 +164,12 @@ class MockWorkspace:
     def submission_preparation(self, state_dir, request_id, intent, *, shared_locks=None, before_prepare=None):
         yield {"manifest": self.prepare(state_dir, request_id, intent), "newAllocation": False}
 
+    def check_scope(self, state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
+                    allowed_paths=(), admission_check=None) -> None:
+        if admission_check is not None:
+            admission_check()
+        self.verify(manifest, state_dir=state_dir, require_unchanged=manifest["access"] == "read")
+
     def scope_conflicts(self, state_dir, manifest, task_id, attempt_id):
         return []
 
@@ -294,7 +300,8 @@ class MockWorkspace:
     def adopted_paths(self, state_dir, manifest):
         return []
 
-    def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=(), admission_check=None):
+    def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=(),
+                  allowed_excluded=(), admission_check=None):
         if admission_check is not None:
             admission_check()
         return self.seal(state_dir, manifest, task_id, attempt_id)

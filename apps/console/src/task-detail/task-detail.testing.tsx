@@ -6,10 +6,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { MacroTaskTimeline } from "../macro-task-types";
 import { TaskDetail } from "./TaskDetail";
 import type { TaskDetailClient } from "./client";
+import type { DetailTab } from "./location";
 import { at, client, timeline } from "./task-detail.fixtures";
 import type { Replies } from "./task-detail.fixtures";
 
-export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; active?: boolean; client?: TaskDetailClient };
+export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; tab?: DetailTab; active?: boolean; client?: TaskDetailClient };
 
 /** Lets a test move the address's step the way the page would. */
 export type StepHandle = { set: (step: number | null) => void };
@@ -17,7 +18,7 @@ export type StepHandle = { set: (step: number | null) => void };
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
 function Harness({ options, steps, onStep, onBack, onOpenRun }: { options: Options; steps: StepHandle; onStep: (step: number, item?: string) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
-  const [tab, setTab] = useState<"overview" | "session">("overview");
+  const [tab, setTab] = useState<DetailTab>(options.tab ?? "overview");
   const [origin, setOrigin] = useState(options.origin ?? null);
   useEffect(() => setOrigin(options.origin ?? null), [options.origin]);
   steps.set = setStep;
@@ -40,6 +41,7 @@ export function open(options: Options = {}) {
 
 /** The steps strip along the top of the detail: the micro task's own row of the macro task. */
 export const strip = () => screen.getByRole("group", { name: "微任务步骤" });
+export const timelineToggle = () => strip().querySelector<HTMLButtonElement>('[data-slot="timeline-toggle"]')!;
 export const stripSlice = (key: string) => strip().querySelector(`[data-key="${key}"]`) as SVGElement | null;
 /** What the chosen step calls itself in the pane below the strip. */
 export const chosenStep = () => (pane().querySelector("h3") ?? pane()).textContent!;

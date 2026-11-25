@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, expectWholeAndApart, open, settle, test } from "./preview";
+import { expandDetailTimeline, expectNoSidewaysScroll, expectWholeAndApart, open, settle, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -27,6 +27,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await page.screenshot({ path: testInfo.outputPath(`batch3-after-macro-${width}-${theme}.png`) });
 
       await name.click();
+      await expandDetailTimeline(page);
       const strip = page.locator('[data-slot=detail-strip]');
       await expect(strip).toBeVisible();
       const controls = strip.locator("[data-slot=step-bar]");

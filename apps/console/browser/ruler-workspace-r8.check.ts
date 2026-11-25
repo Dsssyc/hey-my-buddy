@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -77,6 +77,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     expect(await page.evaluate(() => window.visualViewport!.scale)).toBe(1);
     await ruler(page).press("0");
     await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]').click();
+    await expandDetailTimeline(page);
     const strip = page.locator('[data-slot=detail-strip]'), detailView = strip.locator('[data-slot=detail-strip-scroll]');
     await expect(strip.locator('[data-slot=detail-timeline] > [data-slot=scroll-area]')).toBeVisible();
     expect(await strip.locator('[data-slot=timeline-zoom]').count()).toBe(0);

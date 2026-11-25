@@ -125,6 +125,10 @@ class RolePromptTests(unittest.TestCase):
             ),
             "router": (
                 "The blackboard calls you", "Routing uses protocol 20", "one legal buddy or abstain",
+                "missing cells or zero samples are never negative evidence",
+                "missing usage on an unsampled candidate is not evidence of higher cost",
+                "Exploration exists to gather real evidence",
+                "prefer the fewest-sample candidate",
                 "Fast routing uses only the frozen query tools", "read-only inspection of the frozen checkout",
                 "Maintenance uses query_batch", "Model profiling uses web search and fetch",
                 "Do not ask questions", "change files", "checkout-relative path without a :line suffix",

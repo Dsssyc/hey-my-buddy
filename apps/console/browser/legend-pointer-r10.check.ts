@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const captures = fileURLToPath(new URL("../../../tmp/readability-r10", import.meta.url));
@@ -54,6 +54,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "detail");
     expect(await retained.evaluate(node => node.isConnected)).toBe(true);
     expect((await status.boundingBox())!.height).toBe(statusBox.height);
+    await expandDetailTimeline(page);
     await ruler(page).press("+");
     await fitGeometry(page);
     await trigger.focus(); await page.keyboard.press("Enter");

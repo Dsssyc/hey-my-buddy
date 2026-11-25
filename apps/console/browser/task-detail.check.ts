@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
+import { expandDetailTimeline, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 // The detail of a micro task on the synthetic preview. Macro task A holds a1 (accepted, two turns, a change
 // of buddy, an answered inquiry and one that could not be delivered), a2 (waiting for its Host), a3 (running,
@@ -129,6 +129,7 @@ for (const { locale } of languages) for (const theme of ["dark", "light"]) for (
     test("keeps the selected slice in view through arrows, navigation buttons and clicks after zooming", async ({ page }, testInfo) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${A}/preview-run-a1/1`);
+      await expandDetailTimeline(page);
       await expect(chosen(page)).toHaveAttribute("data-key", "delegation");
       const ruler = strip(page).locator('[data-slot=zoom-ruler]:visible');
       const track = strip(page).locator('[data-slot=timeline-track]');
@@ -192,7 +193,9 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await span.click();
         await expect(detail(page)).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
+        await expandDetailTimeline(page);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
+        await expectSelectedInView(page);
         // The macro task's own header stays; the lanes give way to the detail, and the list beside it holds the rows.
         await expect(page.locator("[data-slot=macro-overview-header] h2")).toBeVisible();
         if (width > 760) await expect(page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]')).toBeVisible();
@@ -203,6 +206,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page)).toHaveCount(0);
         await page.goForward();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
+        await expandDetailTimeline(page);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
         // Choosing a step replaces the address it is on: back leaves the detail, not the step.
         await step(page, delegate).click();
@@ -223,6 +227,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "已恢复" : "Restored");
         // No step in the address: the detail settles on the last turn and writes it into the address.
         await go(page, `#tasks/${A}/preview-run-a1`);
+        await expandDetailTimeline(page);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         // A step that does not exist is replaced by the first choice.
@@ -240,6 +245,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
       test("hangs the steps along the top while the pane below scrolls on its own", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
         await expect(detail(page)).toBeVisible();
+        await expandDetailTimeline(page);
         await expect(strip(page)).toBeVisible();
         const [headerBox, stripBox, paneBox, namesBox] = [
           (await detail(page).locator("[data-slot=detail-header]").boundingBox())!,
@@ -268,6 +274,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page).getByRole("heading", { name: delegate })).toBeVisible();
         await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toHaveCount(0);
         await expect(pane(page).getByText("↩")).toBeVisible();
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
       });
 
@@ -278,6 +285,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(band).toContainText("dsh / deepseek-official / deepseek-flash / max");
         await expect(band).toContainText(mode);
         await expect(pane(page)).toContainText("deepseek-flash");
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
       });
 
@@ -290,6 +298,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(thread).toContainText(unavailable);
         await expect(pane(page).locator("[data-slot=detail-band]")).toContainText("Worker");
         // The seal opens to its evidence.
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
         // Continuation input belongs to its own step; a later turn retains its result and seal.
         await step(page, turn(2)).click();
@@ -309,6 +318,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
       test("an inquiry that names no attempt is shown in the turn that came after it", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
         await expect(pane(page)).toContainText(ask);
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, turn(1)).click();
         await expect(pane(page)).not.toContainText(ask);
@@ -320,6 +330,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         const title = pane(page).locator("h3").first().locator("..");
         await expect(title).toContainText(unsure);
         await expect(title).not.toContainText(locale === "zh-CN" ? "已结束" : "Ended");
+        await expandDetailTimeline(page);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "停止未确认" : "Stop unconfirmed"));
         const mark = await chosen(page).locator("[data-slot=execution-status-outline]").evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(mark).toBe("3 2");
@@ -328,6 +339,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("a running turn that is silent: its warnings, its inquiry and the row at the bottom", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a3`);
+        await expandDetailTimeline(page);
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(1)));
         const title = pane(page).locator("h3").first().locator("..");
         await expect(title).toContainText(running);
@@ -362,6 +374,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page).getByText(waitingHost).first()).toBeVisible();
         const dashed = await strip(page).locator("[data-slot=host-wait]").last().evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(dashed).toBe("5 4");
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
         // The resolution and its continuation have the same recorded instant.
         await go(page, `#tasks/${A}/preview-run-a2/5`);
@@ -382,6 +395,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await toggle.click();
         await expect(pane(page)).toContainText("docs/reference/console.md");
         await expect(pane(page)).toContainText("refs/heads/synthetic-preview");
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
       });
 
@@ -390,6 +404,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page)).toBeVisible();
         await expect(detail(page).locator("[data-slot=detail-header]")).toContainText(failed);
         await expect(pane(page)).toContainText("synthetic preview: harness quota exhausted before completion");
+        await expandDetailTimeline(page);
         await step(page, locale === "zh-CN" ? "结论" : "Conclusion").click();
         const section = pane(page).getByRole("group", { name: conclusion });
         await expect(section).toContainText(notCounted);
@@ -400,6 +415,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
       test("a quota rejection names the earlier buddy and the reroute, while the completed task succeeds", async ({ page }, testInfo) => {
         await open(page, `#tasks/${B}/preview-run-b9`);
         await expect(detail(page).locator("[data-slot=detail-status]")).toHaveText(locale === "zh-CN" ? "已验收" : "Accepted");
+        await expandDetailTimeline(page);
         await step(page, turn(1)).click();
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "模型开始前被拒绝" : "Rejected before the model started");
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");
@@ -418,6 +434,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "冷却中的候选 2 个" : "Cooling down: 2");
         await expect(pane(page)).toContainText("dsh");
         await page.screenshot({ path: testInfo.outputPath(`task-cooling-${locale}-${width}-light.png`) });
+        await expandDetailTimeline(page);
         await expectDetailWhole(page, { skipTitle: true });
       });
 
@@ -454,6 +471,7 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await expect(strip(page)).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await settle(page);
+    await expandDetailTimeline(page);
     const texts = page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text");
     const count = await texts.count();
     expect(count, "detail text to check").toBeGreaterThan(0);
@@ -494,6 +512,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
       await expectNoSidewaysScroll(page);
       await expectTextUncut(pane(page).getByText(label, { exact: false }));
       await page.evaluate(() => { window.location.hash = "#tasks/macro-22222222-2222-4222-8222-222222222222/preview-run-b9"; });
+      await expandDetailTimeline(page);
       await page.locator("[data-slot=detail-strip] [data-key='span:execution:att-b9-1']").click();
       await expect(pane(page)).toContainText(label);
       await expect(pane(page)).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");

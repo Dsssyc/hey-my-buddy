@@ -47,7 +47,7 @@
 6. **所有冻结查询接口逐页有界、可续页、无损遍历。** 每次调用均强制单次批量 ID 上限与序列化后 UTF-8 字节上限，所有会随规模增长的集合与长文本均提供显式分页游标或字符偏移（按 Unicode 码点偏移避免切裂多字节中文）：
    - **路由面查询工具**：
      - `query_domains(parentId?, search?, cursor?, limit?)`：按父节点分层浏览或关键词检索冻结活跃领域树，返回 `nodeId`、`name`、`definition`、`parentId`、`childCount` 与 `nextCursor`。
-     - `query_compare(domainNodeId?, taskType?, cursor?, limit?)`：分页返回合法候选精简对比表，含 `buddyId`、四元组、`billing`、冻结时刻 `load`（`active`、`limit`、`queued`、`wait`）、用户偏好（`mode` 与短预览及是否有长备注）、以及 `domainNodeId × taskType`、`domainNodeId` 汇总与整体三层核心统计（不再计算或输出每格重复的 Wilson 区间与实时 `resultTime`），并标明 `hasSummary`、`hasProfile` 与 `nextCursor`。
+     - `query_compare(domainNodeId?, taskType?, cursor?, limit?)`：分页返回合法候选精简对比表，含 `buddyId`、四元组、`billing`、冻结时刻 `load`（`active`、`limit`、`queued`、`wait`）、用户偏好（`mode` 与短预览及是否有长备注）、以及 `domainNodeId × taskType`、`domainNodeId` 汇总与整体三层核心统计（不再计算或输出每格重复的 Wilson 区间与实时 `resultTime`），并标明 `hasSummary`、`hasProfile`、`profilePositioning`（已构建画像时的一句话定位，未构建时为 `null`）与 `nextCursor`。
      - `query_explore(domainNodeId?, cursor?, limit?)`（仅本请求带探索名额时暴露）：基于冻结领域树与统计，分页返回对应第一层领域（未归类时看整体）下各同型 buddy 组的样本数排序及组内候选列表，带 `nextCursor`。
      - `query_details(buddyIds[], include?, cursor?, limit?)`：分页读取入围候选的 `contextWindow`、`capabilities`、`modelId` / `modelDisplayName` / `modelNames`、`infrastructureFailures`、完整模型画像、维护面归纳与完整偏好理由（单条超页字段支持游标续读）。
      - `query_task(offset?, limit?)`：按码点偏移分页读取完整任务正文。

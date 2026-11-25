@@ -1830,7 +1830,11 @@ class WorkflowCoordinator:
                 result.update(requestId=active["request_id"])
         elif run["state"] == "delivered" and run["final_artifact_id"] is not None:
             result.setdefault("artifactId",run["final_artifact_id"])
-        elif (run["state"] in ("failed","cancelled") or self._queued_lead_wakeup(connection,run)) and run["current_turn_id"] is not None:
+        elif "continue" in actions and run["state"] in ("awaiting-host", "failed", "cancelled"):
+            origin = self._stopped_continuation_origin(connection, run)
+            if origin is not None:
+                result.setdefault(*origin)
+        elif run["current_turn_id"] is not None and self._queued_lead_wakeup(connection, run):
             fixed = connection.execute("SELECT artifact_id FROM workflow_artifacts WHERE run_id=? AND turn_id=? AND kind IN ('output','partial-output','resolved-output','result') ORDER BY rowid DESC LIMIT 1",
                                        (run["run_id"],run["current_turn_id"])).fetchone()
             result.setdefault("artifactId" if fixed else "turnId",fixed[0] if fixed else run["current_turn_id"])
@@ -1854,9 +1858,37 @@ class WorkflowCoordinator:
             return ["continue", "await", "inquire", "cancel", "conclude", "get"]
         if state == "delivered":
             return ["accept", "continue", "conclude", "get"]
-        if state in ("failed", "cancelled"):
-            return (["continue"] if run["current_turn_id"] is not None else []) + ["conclude", "get"]
+        if state in ("awaiting-host", "failed", "cancelled") and conflict is None:
+            actions = ["continue"] if self._stopped_continuation_origin(connection, run) is not None else []
+            if state == "awaiting-host" and self._tree_has_stoppable_work(connection, run["run_id"]):
+                actions.extend(["await", "inquire", "cancel"])
+            return actions + ["conclude", "get"]
         return ["await", "inquire", "cancel", "conclude", "get"]
+
+    @staticmethod
+    def _stopped_continuation_origin(connection, run) -> tuple[str, str] | None:
+        turn_id = run["current_turn_id"]
+        if turn_id is None:
+            return None
+        key = (run["run_id"], turn_id)
+        fixed = connection.execute(
+            "SELECT artifact_id, response_kind FROM workflow_artifacts WHERE run_id=? AND turn_id=?"
+            " AND kind IN ('output','partial-output','resolved-output','result')"
+            " ORDER BY response_kind IS NOT NULL, rowid DESC LIMIT 1", key,
+        ).fetchone()
+        if fixed is not None and fixed["response_kind"] is None:
+            return "artifactId", fixed["artifact_id"]
+        if fixed is None and connection.execute(
+            "SELECT 1 FROM workflow_turns WHERE run_id=? AND turn_id=? AND response_kind IS NULL"
+            " AND (? IN ('failed','cancelled') OR state IN ('failed','interrupted'))",
+            (*key, run["state"]),
+        ).fetchone() is not None:
+            return "turnId", turn_id
+        abandoned = connection.execute(
+            "SELECT artifact_id FROM workflow_artifacts WHERE run_id=? AND turn_id=?"
+            " AND kind='abandoned-site' AND response_kind IS NULL ORDER BY rowid DESC LIMIT 1", key,
+        ).fetchone()
+        return ("artifactId", abandoned["artifact_id"]) if abandoned is not None else None
 
     @staticmethod
     def _queued_lead_wakeup(connection,run):
@@ -2258,8 +2290,8 @@ class WorkflowCoordinator:
         if table == "workflow_requests":
             self._require_open_request(connection,run,row)
         elif table == "workflow_artifacts":
-            if row["kind"] not in ("output","resolved-output","partial-output","result"):
-                raise BoardError("CONFLICT", "A continuation must answer a fixed result of the current turn")
+            if row["kind"] not in ("output","resolved-output","partial-output","result","abandoned-site"):
+                raise BoardError("CONFLICT", "A continuation must answer a fixed result or abandoned site of the current turn")
             if run["state"] == "delivered":
                 current = row["artifact_id"] == run["final_artifact_id"]
             else:
@@ -3530,6 +3562,20 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             return self._adopted_board_paths(connection, run_id, manifest)
 
+    @staticmethod
+    def _abandoned_excluded_paths(connection, run_id: str, manifest: dict) -> list[str]:
+        if manifest["kind"] != "existing":
+            return []
+        excluded = manifest["snapshot"]["excludedEntries"].keys()
+        rows = connection.execute(
+            "SELECT c.conflicting_paths_json FROM workflow_workspace_conflicts c"
+            " JOIN workflow_artifacts a ON a.artifact_id=c.artifact_id"
+            " WHERE c.run_id=? AND c.state='abandoned' AND a.kind='abandoned-site'"
+            " AND a.output_manifest_sha256=?",
+            (run_id, manifest["manifestSha256"]),
+        )
+        return sorted({path for row in rows for path in json.loads(row["conflicting_paths_json"])} & excluded)
+
     def conclude(self,params,*,console_authority=None):
         from ...protocol.requests import parse_request,dump_request
         params=dump_request(parse_request("conclude",params,audience="service"))
@@ -3664,10 +3710,11 @@ class WorkflowCoordinator:
     def _seal_conclusion(self, run_id: str, work) -> dict | None:
         if work is None:
             return None
-        manifest, allowed, attempt_id = work
+        manifest, allowed, abandoned_excluded, attempt_id = work
         try:
             sealed = workspace_module().host_seal(
                 self.board.directory, manifest, run_id, attempt_id, allowed_paths=allowed,
+                allowed_excluded=abandoned_excluded,
                 admission_check=lambda: self._workspace_admission_check(run_id))
             with self.db.read() as connection:
                 original = self._initial_input_commit(connection, run_id)
@@ -3734,7 +3781,8 @@ class WorkflowCoordinator:
             # submitted existing checkout can skip this seal.
             return None
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
-        return manifest, allowed, task["selected_attempt_id"]
+        abandoned_excluded = self._abandoned_excluded_paths(connection, run_row["run_id"], manifest)
+        return manifest, allowed, abandoned_excluded, task["selected_attempt_id"]
 
     def _conclude_record(self, connection, *, run_row, task, actor: dict, now: str, note: str | None,
                          sealed_record: dict | None, reason: dict | None = None) -> dict:
@@ -4106,8 +4154,9 @@ class WorkflowCoordinator:
                                (result["state"],params["resolution"],canonical_json(result["resolvedPaths"]),canonical_json(result["remainingPaths"]),artifact_id,
                                 actor["role"],actor.get("id"),params.get("note"),canonical_json(delivery) if delivery else None,now,conflict_id))
             resolved={"conflictId":conflict_id,"artifactId":artifact_id,"state":result["state"],"resolvedFingerprint":result["resolvedFingerprint"]}
-            remaining=connection.execute("SELECT conflict_id FROM workflow_workspace_conflicts WHERE run_id=? AND state='open' ORDER BY created_at,conflict_id",(run_id,)).fetchall()
-            if "input" in params and not remaining:
+            open_remaining=connection.execute("SELECT conflict_id FROM workflow_workspace_conflicts WHERE run_id=? AND state='open' ORDER BY created_at,conflict_id",(run_id,)).fetchall()
+            continuation_blocked = bool(open_remaining or (params["resolution"] == "abandon" and result["remainingPaths"]))
+            if "input" in params and not continuation_blocked:
                 # The resolution and its continuation become durable together; preparation can recover the queued intent.
                 response = self._record_continuation(
                     connection, run, ("workflow_requests", request, "request_id"), params,
@@ -4123,10 +4172,10 @@ class WorkflowCoordinator:
                     connection.execute("UPDATE tasks SET queue_reason=NULL,updated_at=? WHERE task_id=?",(now,run_id))
                 elif proof is not None:
                     self._record_request(connection,run,proof["turnRow"],proof["turn"],now)
-                if remaining:
+                if open_remaining:
                     self._record_system_request(
                         connection, self._run_row(connection, run_id),
-                        make_reason("workspace-scope-violation", conflictIds=[r[0] for r in remaining]),
+                        make_reason("workspace-scope-violation", conflictIds=[r[0] for r in open_remaining]),
                         {}, now, allow_terminal_ancestor=ancestor is not None,
                     )
                 elif ancestor is not None:
@@ -4157,6 +4206,7 @@ class WorkflowCoordinator:
         saved=json.loads(request["resolution_json"])
         if saved["parameters"]!={k:v for k,v in params.items() if k not in ("runId","requestId")}:
             raise BoardError("CONFLICT","The recorded resolution has different action parameters; get again")
+        # An answer of kind resolution with input records a blocked continuation.
         return self._action_view(connection,run,requestId=request["request_id"],artifactId=saved["result"]["artifactId"],alreadyResponded=True,
                                  resolutionState=saved["result"]["state"],resolvedFingerprint=saved["result"]["resolvedFingerprint"],
                                  **({"continuationBlocked": True} if "input" in saved["parameters"] else {}))
@@ -5208,13 +5258,14 @@ class WorkflowCoordinator:
                 )
         sealed = self._latest_handoff(connection, run_row, manifest)
         if recovered_attempt is not None:
-            # A failed site without a resolution is captured explicitly from the
-            # stopped worktree; its out-of-scope paths were already rejected above.
+            # Preparation checks the stopped worktree against the recovered
+            # attempt's scope before capturing its unsealed changes.
             sealed = None
         choice = json.loads(run_row["execution_workspace_json"])
         changed_access = choice["access"] != manifest["access"]
         if sealed is None and recovered_attempt is None and not changed_access:
-            return None, None
+            if not self._abandoned_excluded_paths(connection, run_row["run_id"], manifest):
+                return None, None
         # A permission-only continuation before any seal keeps the original
         # explicit untracked input selectors when it re-prepares the allocation.
         selection = ({"kind": "recovery"} if recovered_attempt is not None else
@@ -5304,6 +5355,13 @@ class WorkflowCoordinator:
                 try:
                     recovered_attempt = self._failed_turn_input(connection, run, row)
                     intent, output = self._continuation_intent(connection, run, row, recovered_attempt=recovered_attempt)
+                    if recovered_attempt is not None:
+                        recovered_turn = connection.execute(
+                            "SELECT * FROM workflow_turns WHERE run_id=? AND attempt_id=?",
+                            (row["run_id"], recovered_attempt),
+                        ).fetchone()
+                        recovered_manifest = turn_manifest(self.board.directory, json.loads(recovered_turn["input_json"]))
+                        recovered_allowed = self._adopted_board_paths(connection, row["run_id"], recovered_manifest)
                     if intent is not None and intent["executionSelection"]["kind"] == "seal":
                         seal_ref = intent["executionSelection"]["seal"]
                         artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",
@@ -5325,6 +5383,7 @@ class WorkflowCoordinator:
                     # claim error: record the attention request and keep the site.
                     problem = {"code": error.code, "message": _head(str(error), 2000),
                                **({"details": error.details} if error.details else {})}
+            recovery_scope_violation = False
             if problem is None:
                 try:
                     if before[-1] is not None:
@@ -5334,6 +5393,16 @@ class WorkflowCoordinator:
                         replayed = True
                     else:
                         self._cleanup_fence(intent.get("cwd"))
+                        if recovered_attempt is not None:
+                            try:
+                                workspace_module().check_scope(
+                                    self.board.directory, recovered_manifest, row["run_id"], recovered_attempt,
+                                    allowed_paths=recovered_allowed,
+                                    admission_check=lambda: self._workspace_admission_check(row["run_id"]),
+                                )
+                            except BoardError as error:
+                                recovery_scope_violation = error.code == "WORKSPACE_SCOPE_VIOLATION"
+                                raise
                         preparation = {}
                         manifest = workspace_module().prepare(
                             self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent,
@@ -5375,14 +5444,21 @@ class WorkflowCoordinator:
                     continue
                 now = self.now()
                 if problem is not None:
-                    request_id = f"prep-{row['continuation_id']}"
-                    self._record_system_request(
-                        connection, run, make_reason("workspace.continuation-prepare-failed", continuationId=row["continuation_id"]),
-                        {"preparationError": problem}, now, request_id=request_id,
-                    )
                     connection.execute("UPDATE workflow_continuations SET state='invalidated' WHERE continuation_id=?", (row["continuation_id"],))
-                    kind = "workflow.workspace_preparation_failed"
-                    event = {"continuationId": row["continuation_id"], "requestId": request_id, "errorCode": problem["code"]}
+                    if recovery_scope_violation:
+                        attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (recovered_attempt,)).fetchone()
+                        conflict_ids = self._record_scope_conflicts(connection, run, recovered_turn, attempt_row, now)
+                        self._record_scope_attention(connection, run, recovered_turn, attempt_row, conflict_ids, now)
+                    else:
+                        request_id = f"prep-{row['continuation_id']}"
+                        self._record_system_request(
+                            connection, run, make_reason("workspace.continuation-prepare-failed", continuationId=row["continuation_id"]),
+                            {"preparationError": problem}, now, request_id=request_id,
+                        )
+                        self.board._append_event(
+                            connection, "workflow.workspace_preparation_failed", task_id=row["run_id"], revision=None,
+                            payload={"continuationId": row["continuation_id"], "requestId": request_id, "errorCode": problem["code"]},
+                        )
                 else:
                     role, workspace_kind, root, repository, input_commit, staged_commit = workspace_facts(connection, manifest)
                     connection.execute(
@@ -5397,12 +5473,10 @@ class WorkflowCoordinator:
                         " WHERE holder_task_id=? AND checkout_root=? AND state='held'",
                         (manifest["workspaceId"], manifest["manifestSha256"], "read" if manifest["access"] == "read" else "write", row["run_id"], manifest["checkoutRoot"]),
                     )
-                    kind = "workflow.workspace_prepared"
                     event = {"continuationId": row["continuation_id"], "manifestSha256": manifest["manifestSha256"], "checkoutRoot": manifest["checkoutRoot"]}
                     if recovered_attempt is not None:
                         event["recoveredAttemptId"] = recovered_attempt
-                self.board._append_event(connection, kind, task_id=row["run_id"], revision=None, payload=event)
-                if problem is None:
+                    self.board._append_event(connection, "workflow.workspace_prepared", task_id=row["run_id"], revision=None, payload=event)
                     if row["buddy_selection_json"] is not None and json.loads(row["buddy_selection_json"]) == "route":
                         # A prepared continuation that routes continues existing
                         # work; it is not an exploration-eligible micro task.

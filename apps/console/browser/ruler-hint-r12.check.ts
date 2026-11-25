@@ -1,7 +1,7 @@
 import { expect, type Locator } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const hint = "滚轮或 + / − 缩放，Shift+滚轮平移，双击或按 0 适应宽度。";
@@ -14,6 +14,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
     await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
     await page.clock.install({ time: new Date("2026-10-19T12:00:00Z") });
     await open(page, `#tasks/${macro}${detail ? "/preview-run-a1/3" : ""}`);
+    if (detail) await expandDetailTimeline(page);
     const ruler = page.locator('[data-slot=zoom-ruler]:visible');
     await expect(ruler).toBeVisible();
     await ruler.press("+"); await ruler.press("+");

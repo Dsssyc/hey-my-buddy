@@ -75,7 +75,7 @@ _ROUTING_TOOLS = {
     tool["name"]: tool for tool in (
         _tool("query_domains", "Browse the children of a domain, or search domain names and definitions. "
               "Omit both filters for top-level domains.", _DOMAIN_FILTERS),
-        _tool("query_compare", "Compare legal candidates using frozen load, preferences and statistics. "
+        _tool("query_compare", "Compare legal candidates using frozen load, preferences, profile positioning and statistics. "
               "A domain selects its aggregate; a domain and task type select a cell.",
               {"domainNodeId": _string(nullable=True), "taskType": {"type": "string", "enum": list(TASK_TYPES)}}),
         _tool("query_explore", "List same-kind candidate groups in ascending sample count at the selected "
@@ -376,10 +376,12 @@ class SnapshotQuery:
                 note = preference["note"] or ""
                 preference = {"mode": preference["mode"], "notePreview": note[:160], "hasLongNote": len(note) > 160}
             statistics = buddy["statistics"]
+            profile = buddy["modelProfile"]
             yield _Record({"buddyId": buddy_id}, {
                 **{key: buddy[key] for key in _IDENTITY}, "billing": buddy["billing"],
                 "load": buddy["load"], "preference": preference, "hasSummary": buddy["summary"] is not None,
-                "hasProfile": buddy["modelProfile"] is not None,
+                "hasProfile": profile is not None,
+                "profilePositioning": profile["positioning"] if profile is not None else None,
                 "statistics": {
                     "overall": statistics["overall"], "domain": statistics["byDomain"].get(domain),
                     "cell": statistics["byDomainTaskType"].get(domain, {}).get(task_type),

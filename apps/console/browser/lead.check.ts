@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle } from "./preview";
+import { expandDetailTimeline, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle } from "./preview";
 
 const caseIds = new WeakMap<Page, string>();
 test.beforeEach(async ({ page }) => {
@@ -94,6 +94,7 @@ for (const { locale, language, tasks } of [
       // Enter opens the micro task on the decision it waits for: the Lead's, with the request as recorded.
       const detail = page.locator("[data-slot=task-detail]");
       await expect(detail).toBeVisible();
+      await expandDetailTimeline(page);
       await expect(page.locator("[data-slot=detail-strip] [aria-pressed=true]")).toHaveAccessibleName(new RegExp(zh ? "等待 Lead" : "Waiting for Lead"));
       const request = detail.locator("[data-slot=detail-pane]");
       await expect(request).toContainText("需要 Lead 决定路径样例的核对范围");

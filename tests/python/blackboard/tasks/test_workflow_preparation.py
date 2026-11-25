@@ -92,7 +92,7 @@ class PreparationTests(WorkflowTestCase):
         return resolve_manifest(self.directory, {"workspaceId": row["workspace_id"],
                                                  "manifestSha256": row["workspace_manifest_sha256"]})
 
-    def failed_worktree(self, *, unvalidated_seal=False):
+    def failed_worktree(self, *, unvalidated_seal=False, outside=False):
         (self.repo / ".gitignore").write_text("tests/.env\ntests/cache/\n", encoding="utf-8", newline="\n")
         self.git(self.repo, "add", ".gitignore")
         self.git(self.repo, "commit", "-qm", "exclude private runtime files")
@@ -108,7 +108,8 @@ class PreparationTests(WorkflowTestCase):
         (checkout / "tests" / ".env").write_text("private fixture data\n", encoding="utf-8", newline="\n")
         (checkout / "tests" / "cache").mkdir()
         (checkout / "tests" / "cache" / "state.json").write_text("{}\n", encoding="utf-8", newline="\n")
-        (checkout / "outside.txt").write_text("outside the authorized write scope\n", encoding="utf-8", newline="\n")
+        if outside:
+            (checkout / "outside.txt").write_text("outside the authorized write scope\n", encoding="utf-8", newline="\n")
         self.finish_turn(board, failed, runner_status="failed", exit_code=1, seal=False,
                          result_mutator=(lambda report: report.update(workspaceSeal={"claim": "unvalidated"})) if unvalidated_seal else None)
         return board, run_id, failed, checkout
@@ -244,6 +245,100 @@ class PreparationTests(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE attempt_id=? AND kind='output'", (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], 0)
         self.assertEqual({"head": self.git(checkout, "rev-parse", "HEAD"), "index": self.git(checkout, "ls-files", "--stage"),
                           "status": self.git(checkout, "status", "--porcelain=v1", "--untracked-files=all")}, before)
+
+    def test_recovery_scope_violation_opens_the_failed_turn_for_restore(self):
+        board, run_id, failed, checkout = self.failed_worktree(outside=True)
+        board.call("workflow_cancel", {"runId": run_id})
+        view = board.call("workflow_get", {"runId": run_id})
+        queued = self.continue_run(board, view)
+        blocked = self.claim(board, run_id=run_id, claim_request_id="blocked-recovery")
+        self.assertIsNone(blocked["claim"], blocked)
+
+        view = board.call("workflow_get", {"runId": run_id})
+        request = view["activeRequest"]
+        self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["currentTurn"]["turnId"], failed["claim"]["turn"]["input"]["turnId"])
+        self.assertEqual(request["reason"]["code"], "workspace-scope-violation", request)
+        conflict, = view["workspaceConflicts"]
+        self.assertEqual(conflict["state"], "open")
+        self.assertEqual(conflict["blockingPaths"], ["outside.txt"])
+        _, _, continuation, _ = self.rows(board, run_id, queued["continuationId"])
+        self.assertEqual(continuation["state"], "invalidated")
+        self.assertIsNone(continuation["workspace_id"])
+        self.assertTrue((checkout / "outside.txt").exists())
+
+        resolved = board.call("workflow_continue", {
+            "runId": run_id, "requestId": request["requestId"], "resolution": "restore",
+            "observedFingerprint": conflict["observedFingerprint"], "input": "Finish the partial tests",
+        })
+        self.assertEqual(resolved["resolutionState"], "restored")
+        self.assertFalse((checkout / "outside.txt").exists())
+        resumed = self.claim(board, run_id=run_id, claim_request_id="restored-recovery")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        turn = resumed["claim"]["turn"]["input"]
+        self.assertEqual(turn["context"]["turnIndex"], 2)
+        self.assertEqual(turn["context"]["latestHandoff"]["kind"], "resolved-output")
+        manifest = turn_manifest(self.directory, turn)
+        self.assertEqual(manifest["path"], str(checkout))
+        self.assertEqual(manifest["snapshot"]["excludedEntries"], {})
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["tests/test_math_ops.py"])
+        self.assertIn("test_partial", self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"))
+        self.assertTrue((checkout / "tests" / ".env").is_file())
+        self.assertTrue((checkout / "tests" / "cache" / "state.json").is_file())
+        self.finish_turn(board, resumed)
+        self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "delivered")
+
+    def test_abandoned_recovery_continues_from_the_site_when_the_turn_was_answered(self):
+        board, run_id, failed, checkout = self.failed_worktree(outside=True)
+        turn_id = failed["claim"]["turn"]["input"]["turnId"]
+        board.call("workflow_cancel", {"runId": run_id})
+        self.continue_run(board, {"runId": run_id}, turnId=turn_id, input="First try")
+        blocked = self.claim(board, run_id=run_id, claim_request_id="blocked-recovery")
+        self.assertIsNone(blocked["claim"], blocked)
+
+        view = board.call("workflow_get", {"runId": run_id})
+        request = view["activeRequest"]
+        self.assertEqual(request["reason"]["code"], "workspace-scope-violation")
+        conflict, = view["workspaceConflicts"]
+        abandoned = board.call("workflow_continue", {
+            "runId": run_id, "requestId": request["requestId"], "resolution": "abandon",
+            "observedFingerprint": conflict["observedFingerprint"], "note": "Discard the refused recovery site",
+        })
+        self.assertEqual(abandoned["resolutionState"], "abandoned")
+        self.assertEqual(abandoned["state"], "awaiting-host")
+        artifact_id = abandoned["artifactId"]
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertIsNone(view["activeRequest"])
+        self.assertEqual(view["workspaceConflicts"][0]["artifactId"], artifact_id)
+        self.assertEqual(next(item["kind"] for item in view["artifacts"]
+                              if item["artifactId"] == artifact_id), "abandoned-site")
+        self.assertFalse((checkout / "outside.txt").exists())
+        self.assertFalse((checkout / "tests" / "test_math_ops.py").exists())
+        self.assertNotIn("turnId", abandoned)
+        self.assertIn("continue", abandoned["actions"])
+        self.assertIn("continue", view["actions"])
+
+        with self.assertRaisesRegex(BoardError, "No sealed output artifact") as refused:
+            board.call("workflow_accept", {
+                "runId": run_id, "artifactId": artifact_id, "note": "Review the abandoned site",
+                "target": {"path": str(self.repo), "ref": "HEAD"},
+            })
+        self.assertEqual(refused.exception.code, "NOT_FOUND")
+        params = {"runId": run_id, "artifactId": artifact_id, "input": "Fresh try"}
+        continued = board.call("workflow_continue", params)
+        self.assertEqual(continued["state"], "executing")
+        replay = board.call("workflow_continue", params)
+        self.assertEqual(replay["continuationId"], continued["continuationId"])
+        self.assertTrue(replay["alreadyResponded"])
+        resumed = self.claim(board, run_id=run_id, claim_request_id="abandoned-recovery")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        turn = resumed["claim"]["turn"]["input"]
+        self.assertEqual(turn["context"]["turnIndex"], 2)
+        manifest = turn_manifest(self.directory, turn)
+        self.assertEqual(manifest["path"], str(checkout))
+        self.assertEqual(manifest["snapshot"]["excludedEntries"], {})
+        self.finish_turn(board, resumed)
+        self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "delivered")
 
     def test_released_worktree_cannot_reclaim_another_writers_checkout(self):
         self.reclaim_conflict("write")
@@ -655,7 +750,7 @@ class PreparationTests(WorkflowTestCase):
         request = json.loads((self.directory / "workspaces" / manifest["workspaceId"] / "request.json").read_text())
         self.assertEqual(request["intent"]["executionSelection"], {"kind": "recovery"})
         self.assertNotIn("includeUntracked", request["intent"])
-        for path in ("outside.txt", "tests/.env", "tests/cache/state.json"):
+        for path in ("tests/.env", "tests/cache/state.json"):
             self.assertNotIn(path, workspace.input_untracked_paths(manifest))
 
     def test_changed_output_ref_allows_preparation_without_reading_it_but_blocks_cleanup(self):
@@ -804,7 +899,6 @@ class RestartPreparationTests(WorkflowTestCase):
         self.assertEqual(workspace.input_untracked_paths(manifest), ["tests/test_math_ops.py"])
         self.assertIn("test_partial", self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"))
         self.assertNotIn("outside.txt", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
-        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "outside the authorized write scope\n")
         rows = self.rows(board, run_id, continuation["continuationId"])
         self.assertEqual(rows[3]["state"], "held")
         with board.store.db.read() as connection:

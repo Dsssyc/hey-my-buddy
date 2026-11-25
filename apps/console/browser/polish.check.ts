@@ -1,5 +1,5 @@
 import { expect, type Locator } from "@playwright/test";
-import { screenshots as shots, expectNoSidewaysScroll, open, test } from "./preview";
+import { expandDetailTimeline, screenshots as shots, expectNoSidewaysScroll, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 
@@ -137,6 +137,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await inquiry.click();
     const highlighted = page.locator('[data-item-key="inquiry:inq-a3-1"][data-highlighted=true]');
     await expect(highlighted).toBeInViewport();
+    await expandDetailTimeline(page);
     await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/问询/);
     await page.screenshot({ path: `${shots}/inquiry-${theme}-${width}.png` });
     await expectNoSidewaysScroll(page);

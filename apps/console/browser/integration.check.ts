@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { expandDetailTimeline, screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 mkdirSync(shots, { recursive: true });
@@ -113,6 +113,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(choices.nth(1)).toBeFocused();
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}/preview-run-a2/5$`));
+      await expandDetailTimeline(page);
       await expect(page.locator('[data-slot="detail-strip"] [data-slot="event-cluster"][aria-pressed="true"]')).toHaveCount(1);
       const pane = page.locator('[data-slot="detail-pane"]');
       await expect(pane.getByRole("heading", { name: locale === "zh-CN" ? "决定" : "Decision", exact: true })).toBeVisible();

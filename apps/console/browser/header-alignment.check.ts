@@ -1,6 +1,6 @@
 import { expect, type Locator } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
-import { open, settle, test } from "./preview";
+import { expandDetailTimeline, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const goals = [
@@ -145,6 +145,7 @@ for (const width of [1440, 390]) test(`shared identifiers in header and turn, se
   expect(Math.abs(turnId.iconOffset)).toBeLessThanOrEqual(1);
   expect(Math.abs(turnId.labelBaseline! - turnId.valueBaseline)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("turn.png") });
+  await expandDetailTimeline(page);
   await page.locator('[data-slot="detail-strip"]').getByRole("button", { name: /^已验收(?: ·|$)/ }).click();
   const pane = page.locator('[data-slot="detail-pane"]');
   // Acceptance now exposes the seal's artifact identity rather than a snapshot commit control.

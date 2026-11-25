@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test } from "./preview";
+import { expandDetailTimeline, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -13,6 +13,7 @@ for (const { locale, previous, next, copy, failed } of [
 
     test("keeps real bar lengths with generous hit areas and navigates from the left controls", async ({ page }) => {
       await page.goto(`#tasks/${A}/preview-run-a1/1`);
+      await expandDetailTimeline(page);
       const strip = page.locator('[data-slot="detail-strip"]');
       const back = strip.getByRole("button", { name: previous });
       const forward = strip.getByRole("button", { name: next });

@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { contrastOf, expectNoSidewaysScroll, expectTextUncut, open, test } from "./preview";
+import { expandDetailTimeline, contrastOf, expectNoSidewaysScroll, expectTextUncut, open, test } from "./preview";
 
 test.use({ headless: true });
 
@@ -25,6 +25,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
           await route.fulfill({ response, json: value });
         });
         await open(page, `#tasks/${macro}/${run}`);
+        await expandDetailTimeline(page);
         await page.locator('[data-slot=detail-strip] [data-key="span:execution:att-a3-1"]').click();
         const pane = page.locator('[data-slot=detail-pane]');
         const issues = pane.getByRole("group", { name: locale === "zh-CN" ? "执行问题" : "Execution issues" });

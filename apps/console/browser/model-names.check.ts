@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
 import type { Snapshot } from "../src/types";
-import { open, test } from "./preview";
+import { expandDetailTimeline, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const run = "preview-run-a1";
@@ -41,6 +41,7 @@ for (const theme of ["dark", "light"] as const) for (const aliased of [false, tr
       await name.click();
       const detail = page.locator('[data-slot=task-detail]');
       await expect(detail).toBeVisible();
+      await expandDetailTimeline(page);
       const turn = detail.locator(`[data-slot=detail-strip] [role=button][aria-label*="codex / openai / gpt-5-codex / high"]`).first();
       await expect(turn).toBeAttached();
       const readout = (await turn.getAttribute("aria-label"))!;
