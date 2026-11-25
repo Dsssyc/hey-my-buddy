@@ -11,7 +11,7 @@ Create a macro task, submit a bounded micro task, await it, answer any boundary 
 You need [uv](https://docs.astral.sh/uv/) and a working local DSH, ZCode, Codex or Claude Code CLI with its own provider credentials. The runtime uses Python 3.12; uv can install it. The blackboard uses the user's harness configuration and login.
 
 ```sh
-uvx hey-my-buddy@0.78.0 install
+uvx hey-my-buddy@0.78.3 install
 HMB="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
 ```
 

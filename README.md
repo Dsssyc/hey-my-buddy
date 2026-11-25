@@ -60,7 +60,7 @@ The details are in [workflow](docs/reference/workflow.md) and [architecture](doc
 It needs [uv](https://docs.astral.sh/uv/), and Git 2.40 or later for work in a Git repository.
 
 ```sh
-uvx hey-my-buddy@0.78.0 install
+uvx hey-my-buddy@0.78.3 install
 ```
 
 This installs one agent skill at `~/.agents/skills/hey-my-buddy`, which carries its own launcher, and a private service under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). Where Claude Code or Antigravity is installed, it also links the skill where that harness looks for skills: `~/.claude/skills/hey-my-buddy` and `~/.gemini/config/skills/hey-my-buddy`. It never changes your `PATH`, shell or agent settings.
